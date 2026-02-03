@@ -43,6 +43,10 @@ function runScalarSimulation(params::ParamDictType)::Union{AbstractSimData, Noth
         elseif eq_name == "burgers2d"
             dimension = 2
             eq = BurgersEquation2D()
+        elseif eq_name == "testU3"
+            a = get(run_params,"PDE_params", 0.)
+            dimension = 1
+            eq = TestU3Equation(a)
         else
             error("Scalar PDE '$eq_name' is not implemented.")
         end

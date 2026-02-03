@@ -8,6 +8,7 @@ git-filer-repo
 *.txt
 *.csv
 *.svg
+*.toml
 # 2. Now, un-ignore .csv and .svg files ANYWHERE inside
 #    numericalExperiments. The '**/' pattern is recursive.
 !numericalExperiments/**/*.csv

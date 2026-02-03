@@ -1,6 +1,6 @@
 module HyperbolicPDEs
 
-export ScalarHyperbolicPDE, LinearAdvection, BurgersEquation, BurgersEquation2D,
+export ScalarHyperbolicPDE, LinearAdvection, BurgersEquation, BurgersEquation2D, TestU3Equation,
        velocity, flux, HyperbolicPDESystem, Euler1D, Euler2D, pressure_from_euler_conserved,
        HyperbolicPDE, n_dimensions, DiagonalHyperbolicSystem
 
@@ -87,6 +87,8 @@ BurgersEquation(a::Float64) = BurgersEquation{a}()
 # This allows you to call BurgersEquation() and get the classic behavior (A=0.0)
 BurgersEquation() = BurgersEquation{0.0}()
 
+
+
 # 3. Define the Physics using the Type Parameter
 # We extract 'A' from the type using the 'where {A}' syntax.
 
@@ -99,7 +101,22 @@ end
 @inline function flux(::BurgersEquation{a}, u::Float64) where {a}
     # Classic case (A=0): returns 0.5 * u^2
     # Generalized case: returns 0.5 * (1-A) * u^2
-    return 0.5 * (1.0 - a) * u^2
+    return .5 * (1.0 - a) * u^2
+end
+struct TestU3Equation{a} <: ScalarHyperbolicPDE{1} end
+
+TestU3Equation(a::Float64) = TestU3Equation{a}()
+
+@inline function velocity(::TestU3Equation{a}, u::Float64) where {a}
+    # Classic case (A=0): returns u
+    # Generalized case: returns (1-A) * u
+    return (1.0 - a) * u^2
+end
+
+@inline function flux(::TestU3Equation{a}, u::Float64) where {a}
+    # Classic case (A=0): returns 0.5 * u^2
+    # Generalized case: returns 0.5 * (1-A) * u^2
+    return 0.33333 * (1.0 - a) * u^3
 end
 
 #--------------------------------#

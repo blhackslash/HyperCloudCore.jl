@@ -389,6 +389,17 @@ function (ic::Riemann)(x::Real, t::Real, eq::BurgersEquation, pg::ParticleGrid1D
     end
 end
 
+function (ic::Riemann)(x::Real, t::Real, eq::TestU3Equation, pg::ParticleGrid1D)
+    if t <= 1e-12; return ic(x); end
+    if ic.uL > ic.uR # Shock
+        s = (ic.uL^2 + ic.uL * ic.uR + ic.uR^2) / 3.0
+        shock_pos = ic.p0 + s * t
+        return x < shock_pos ? ic.uL : ic.uR
+    else # Rarefaction
+        error("uL < uR not implemented yet!")
+    end
+end
+
 # --- Analytical Solution for SRiemann (delegates to sharp Riemann) ---
 function (ic::SRiemann)(x::Real, t::Real, eq::BurgersEquation, pg::ParticleGrid1D)
     # Construct an equivalent sharp Riemann problem to get the "Real" solution

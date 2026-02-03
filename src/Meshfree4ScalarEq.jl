@@ -55,9 +55,6 @@ using .ImplicitSolvers
 include("TimeIntegration.jl")
 using .TimeIntegration
 
-include("ParticleGridStability.jl")
-using .ParticleGridStability
-
 using IPlotPDESols
 
 include("../SimulationFunctions/runScalarSimulation.jl")

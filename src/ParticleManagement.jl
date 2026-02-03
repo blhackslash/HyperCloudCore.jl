@@ -70,7 +70,7 @@ function manage_particles!(pg::ParticleGrid)
         updateNeighbors!(pg)
     end
 
-    _merge_particles!(pg)
+    _merge_particles_conservative!(pg)
 
     # =========================================================================
     # PHASE 3: BOUNDARY UPDATE (Cleanup)
@@ -172,66 +172,261 @@ function _merge_particles!(pg::ParticleGrid1D)
     pg.N = write_idx
     return nothing
 end
-# function _merge_particles!(pg::ParticleGrid1D)
-#     # =========================================================================
-#     # PHASE 2: MERGE (Coarsen)
-#     # =========================================================================
-    
-#     safe_resize!(pg.merged_buffer, pg.N)
-#     fill!(view(pg.merged_buffer, 1:pg.N), false)
-#     merged = pg.merged_buffer
 
-#     write_idx = 0 
-    
-#     pos    = pg.positions
-#     rhos   = pg.rhos
-    
-#     for i in 1:pg.N
-#         if merged[i]; continue; end
+# For Burgers: f(u) = u^2/2
+a_burgers(u, v) = (u + v) / 2.0
 
-#         write_idx += 1
+# For Test Case: f(u) = u^3/3
+# Form derived from: [u*f'(u) - f(u)] / [f'(v) - f'(u)]
+function a_cubic(u, v)
+    if abs(u + v) < 1e-12
+        return (u^2 + v^2) / 3.0 # Limit case for symmetry
+    end
+    return (2.0/3.0) * (u^2 + u*v + v^2) / (u + v)
+end
+
+function _merge_particles_conservative!(pg::ParticleGrid1D)
+    safe_resize!(pg.merged_buffer, pg.N)
+    fill!(view(pg.merged_buffer, 1:pg.N), false)
+    merged = pg.merged_buffer
+
+    write_idx = 0 
+    
+    pos    = pg.positions
+    rhos   = pg.rhos
+    vols   = pg.volumes
+    
+    # We iterate 1 to N. Since list is sorted, neighbors are i-1 and i+1.
+    for i in 1:pg.N
+        if merged[i]; continue; end
+
+        write_idx += 1
         
-#         # Accumulators
-#         sum_x = pos[i]
-#         sum_rho = rhos[i]
-#         count = 1.0
+        # Check if we should merge with the NEXT particle (i+1)
+        # We handle periodicity for the 'next' index
+        j = (i == pg.N) ? 1 : i + 1
         
-#         start_ptr = pg.neighbor_pointers[i]
-#         n_count   = pg.num_neighbors[i]
+        did_merge = false
         
-#         if n_count > 0
-#             end_ptr = start_ptr + n_count - 1
-#             for k in start_ptr:end_ptr
-#                 j = pg.neighbor_indices[k]
+        # Criteria:
+        # 1. j is not processed
+        # 2. distance is small
+        # 3. i and j are actually neighbors in the sorted list (index check)
+        
+        if !merged[j]
+            # Calculate distance respecting periodicity
+            dist_ij = getDistance(pg, i, j)
+            
+            if abs(dist_ij) < pg.min_dist
                 
-#                 if j > i && !merged[j]
-#                     dist = abs(pg.neighbor_xdistance[k]) 
+                # --- IDENTIFY 4-POINT STENCIL (1, 2, 3, 4) ---
+                # P2 = i, P3 = j
+                
+                # Find P1 (Left of i)
+                idx_1 = (i == 1) ? pg.N : i - 1
+                
+                # Find P4 (Right of j)
+                idx_4 = (j == pg.N) ? 1 : j + 1
+                
+                # Check Validity of Stencil
+                # In non-periodic, we can't do this at the very edges.
+                valid_stencil = true
+                if pg.bc != :periodic
+                    if i == 1 || j == pg.N; valid_stencil = false; end
+                end
+                
+                if valid_stencil
+                    # --- AREA PRESERVING MERGE ---
                     
-#                     if dist < pg.min_dist
-#                         sum_x += pos[j]
-#                         sum_rho += rhos[j]
-#                         println("sum = ", sum_rho,"; rho_j = ",rhos[j],"; j = ", j )
-#                         count += 1.0
-#                         merged[j] = true
-#                     end
-#                 end
-#             end
-#         end
+                    # Gather Values
+                    u1, u2 = rhos[idx_1], rhos[i]
+                    u3, u4 = rhos[j], rhos[idx_4]
+                    
+                    # Gather Distances (always positive lengths for area calc)
+                    # We use getDistance to handle periodicity, then abs()
+                    d12 = abs(getDistance(pg, idx_1, i))
+                    d23 = abs(dist_ij)
+                    d34 = abs(getDistance(pg, j, idx_4))
+                    
+                    # New Midpoint Geometry
+                    d1_new = d12 + 0.5 * d23  # Dist from 1 to New
+                    dnew_4 = 0.5 * d23 + d34  # Dist from New to 4
+                    d14    = d12 + d23 + d34  # Total span
+                    
+                    # # 1. Calculate Old Area (Trapezoidal Rule)
+                    # # A = 0.5 * (uL + uR) * dx
+                    # area_old = 0.5 * ((u1+u2)*d12 + (u2+u3)*d23 + (u3+u4)*d34)
+                    
+                    # # 2. Solve for u_new
+                    # # The formula simplifies to:
+                    # # u_new = (2*Area - u1*d1_new - u4*dnew_4) / d14
+                    
+                    # u_new = (2.0 * area_old - u1 * d1_new - u4 * dnew_4) / d14
+                    # #u_new = clamp(u_new, min(u2, u3), max(u2, u3))
+                    # # 3. Update Position
+                    # # Conservative position update (volume weighted) is usually still best
+                    # # but you specifically asked for the midpoint:
+                    
+                    # # If you want EXACT midpoint relative to neighbors:
+                    # # pos[write_idx] = pos[i] + 0.5 * (signed distance i->j)
+                    # pos[write_idx] = pos[i] + 0.5 * dist_ij
+                    
+                    # rhos[write_idx] = u_new
+                    # 1. Calculate target Area (K = 1.5 * Area_old)
+                    # a_cubic(u, v) = (2/3) * (u^2 + uv + v^2) / (u + v)
+                    a_func(u, v) = abs(u + v) < 1e-10 ? (u^2 + v^2)/3.0 : (2.0/3.0)*(u^2 + u*v + v^2)/(u + v)
+
+                    Area_old = a_func(u1, u2)*d12 + a_func(u2, u3)*d23 + a_func(u3, u4)*d34
+
+                    # 2. Define the Residual Function
+                    # We want to find u such that: New_Area(u) - Area_old == 0
+                    target_res(u) = a_func(u1, u)*d1_new + a_func(u, u4)*dnew_4 - Area_old
+
+                    # 3. Physically Bounded Bisection
+                    # The merged value MUST be between the minimum and maximum of the stencil
+                    u_min = min(u1, u2, u3, u4)
+                    u_max = max(u1, u2, u3, u4)
+
+                    # We add a tiny epsilon to the bounds to ensure we don't start exactly on 
+                    # a point where target_res might be zero or singular.
+                    low = u_min - 0.1 * abs(u_min + 1e-6)
+                    high = u_max + 0.1 * abs(u_max + 1e-6)
+
+                    # Check if a root actually exists in this range (Bolzano's Theorem)
+                    # If not, the stencil is likely too distorted; fallback to linear.
+                    if target_res(low) * target_res(high) > 0
+                        # Fallback to linear area-preserving u_new (Burgers-style)
+                        # This is the "Burgers-equivalent" area-preserving value
+                        u_new = (2.0 * 0.5 * ((u1+u2)/2*d12 + (u2+u3)/2*d23 + (u3+u4)/2*d34) - u1*d1_new - u4*dnew_4) / d14
+                    else
+                        # Perform Bisection
+                        for _ in 1:40
+                            mid = 0.5 * (low + high)
+                            if target_res(low) * target_res(mid) < 0
+                                high = mid
+                            else
+                                low = mid
+                            end
+                        end
+                        u_new = 0.5 * (low + high)
+                    end
+
+                    # 4. Final Sanity Clamp
+                    u_new = clamp(u_new, u_min, u_max)
+                else
+                    # --- FALLBACK: Volume Weighted (Edges) ---
+                    v_i, v_j = vols[i], vols[j]
+                    sum_v = v_i + v_j
+                    rhos[write_idx] = (rhos[i]*v_i + rhos[j]*v_j) / sum_v
+                    pos[write_idx]  = pos[i] + (dist_ij * v_j) / sum_v
+                end
+                
+                # Periodic Wrap for Position
+                if pg.bc == :periodic
+                    L = pg.xmax - pg.xmin
+                    if pos[write_idx] > pg.xmax; pos[write_idx] -= L; end
+                    if pos[write_idx] < pg.xmin; pos[write_idx] += L; end
+                end
+
+                merged[j] = true
+                did_merge = true
+            end
+        end
         
-#         # Write compacted result
-#         if count > 1.0
-#             pos[write_idx]   = sum_x / count
-#             rhos[write_idx]  = sum_rho / count
-#         else
-#             if i != write_idx
-#                 pos[write_idx]  = pos[i]
-#                 rhos[write_idx] = rhos[i]
-#             end
-#         end
-#     end
-#     pg.N = write_idx
-#     return nothing
-# end
+        if !did_merge
+            if i != write_idx
+                pos[write_idx]  = pos[i]
+                rhos[write_idx] = rhos[i]
+            end
+        end
+    end
+    
+    pg.N = write_idx
+    return
+end
+
+function _merge_particles_flux_conserving!(pg::ParticleGrid1D)
+# =========================================================================
+    # PHASE 2: MERGE (Coarsen) - ALE CONSISTENT CONSERVATION
+    # =========================================================================
+    
+    safe_resize!(pg.merged_buffer, pg.N)
+    fill!(view(pg.merged_buffer, 1:pg.N), false)
+    merged = pg.merged_buffer
+
+    write_idx = 0 
+    pos  = pg.positions
+    rhos = pg.rhos
+    vols = pg.volumes
+    
+    for i in 1:pg.N
+        if merged[i]; continue; end
+
+        write_idx += 1
+        j = (i == pg.N) ? 1 : i + 1 # Sorted neighbor
+        
+        did_merge = false
+        if !merged[j]
+            dist_ij = getDistance(pg, i, j)
+            
+            if abs(dist_ij) < pg.min_dist
+                # --- Neighbors of the merging pair ---
+                idx_L = (i == 1) ? pg.N : i - 1
+                idx_R = (j == pg.N) ? 1 : j + 1
+                
+                # 1. New Position: Arithmetic midpoint (or volume weighted)
+                new_pos = pos[i] + 0.5 * dist_ij
+                if pg.bc == :periodic
+                    L_dom = pg.xmax - pg.xmin
+                    if new_pos > pg.xmax; new_pos -= L_dom; end
+                    if new_pos < pg.xmin; new_pos += L_dom; end
+                end
+
+                # 2. Conservation Logic:
+                # We need to preserve Total Mass = sum(u_k * V_k)
+                # Before merge: m_old = u_L*V_L + u_i*V_i + u_j*V_j + u_R*V_R
+                # After merge:  m_new = u_L*V_L_new + u_new*V_new + u_R*V_R_new
+                
+                # Calculate old masses of the affected 4-particle stencil
+                m_stencil_old = (rhos[idx_L]*vols[idx_L] + 
+                                 rhos[i]*vols[i] + 
+                                 rhos[j]*vols[j] + 
+                                 rhos[idx_R]*vols[idx_R])
+
+                # 3. Calculate New Volumes for neighbors and the merged particle
+                # V_k = (x_{k+1} - x_{k-1}) / 2
+                
+                # New Midpoints
+                mid_L_new = getDistance(pg, idx_L, i) * 0.5 + pos[idx_L] # Approximation
+                # Better: use the actual formula for V_k in your determineVolumes!
+                # V_i = 0.5 * (pos[i+1] - pos[i-1])
+                
+                v_L_new = abs(getDistance(pg, (idx_L==1 ? pg.N : idx_L-1), write_idx)) * 0.5
+                v_R_new = abs(getDistance(pg, write_idx, (idx_R==pg.N ? 1 : idx_R+1))) * 0.5
+                v_new   = abs(getDistance(pg, idx_L, idx_R)) * 0.5
+                
+                # 4. Determine u_new to satisfy conservation
+                # u_new = (m_stencil_old - u_L*v_L_new - u_R*v_R_new) / v_new
+                u_new = (m_stencil_old - rhos[idx_L]*v_L_new - rhos[idx_R]*v_R_new) / v_new
+
+                pos[write_idx] = new_pos
+                rhos[write_idx] = u_new
+                
+                merged[j] = true
+                did_merge = true
+            end
+        end
+        
+        if !did_merge
+            if i != write_idx
+                pos[write_idx]  = pos[i]
+                rhos[write_idx] = rhos[i]
+            end
+        end
+    end
+    pg.N = write_idx
+end
+
 using Random # Ensure Random is available for rand(Bool)
 
 function _merge_particles_pairwise!(pg::ParticleGrid1D)

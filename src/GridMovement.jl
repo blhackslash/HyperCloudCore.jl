@@ -49,6 +49,18 @@ function (gm::PhysicalGridMover{BurgersEquation{a}})(pg::ParticleGrid1D, dt::Rea
     return    
 end
 
+function (gm::PhysicalGridMover{TestU3Equation{a}})(pg::ParticleGrid1D, dt::Real) where {a}
+    rhos = pg.rhos
+    positions = pg.positions
+    for p_idx = 1:pg.N
+        positions[p_idx] += a * (rhos[p_idx])^2 * dt
+    end
+    sort_1d_particles!(pg)
+    updateNeighbors!(pg)
+    manage_particles!(pg)  
+    return    
+end
+
 # General grid movement based on predetermined velocities
 function (gm::GridMover)(pgs::ParticleGridSystem{N_grids,1}, dt::Real) where {N_grids}
     N_test = pgs[1].N
@@ -74,34 +86,6 @@ function (gm::PhysicalGridMover{LinearAdvection{1}})(pg::ParticleGrid1D, dt::Rea
     updateNeighbors!(pg)
     manage_particles!(pg)  
     return    
-end
-
-function moveGrid!(::BurgersEquation{a}, pg::ParticleGrid1D, dt::Float64) where {a}
-    positions = pg.positions
-    rhos = pg.rhos
-
-    for (p_idx, rho) = enumerate(rhos)
-        positions[p_idx] += a * 1/2 * dt
-    end
-    sort_1d_particles!(pg)
-    updateNeighbors!(pg)
-    return
-end
-
-function moveGrid!(::LinearAdvection{a}, pg::ParticleGrid1D, dt::Float64) where {a}
-    positions = pg.positions
-    pg.xmax += a * dt
-    pg.xmin += a * dt
-    for p_idx = eachindex(positions)
-        positions[p_idx] += a * dt
-    end
-    updateNeighbors!(pg)
-    return
-end
-
-
-function moveGrid!(::BurgersEquation{0.0}, pg::ParticleGrid1D, dt::Float64)
-    return
 end
 
 # In GridMovement.jl or MeshfreeSystemTimeSteppers.jl
@@ -135,6 +119,10 @@ function update_grid_velocities!(pgs::ParticleGridSystem{1, N_grids}, system_eqs
         # C. Store in buffer
         grid_vels[i] = u_grid
     end
+end
+
+function update_grid_velocities!(pgs::ParticleGridSystem, ::NoGridMover)
+    return
 end
 """
     update_grid_velocities!(pgs::ParticleGridSystem, system_eqs)

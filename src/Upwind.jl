@@ -8,7 +8,7 @@ abstract type DecompositionAlgorithm <: UpwindAlgorithm end
 
 abstract type UpwindWorkspace end
 
-using InteractiveUtils
+#using InteractiveUtils
 
 """
     sortFlux(flux_ij::Real, flux_ji::Real, deltaX::Real)::Tuple{<:Real, <:Real}

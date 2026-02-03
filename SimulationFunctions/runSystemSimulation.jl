@@ -41,6 +41,7 @@ function runSystemSimulation(params::ParamDictType)::Union{AbstractSimData, Noth
         init_params = run_params["init_params"]
         timestepper_name::String = run_params["timestepper"]
         snapshots::Int = run_params["snapshots"]
+        grid_mover_name = get(run_params, "grid_mover", nothing)
         
         # --- 2. Determine Dimension and System Physics ---
         local dimension::Int
@@ -61,13 +62,24 @@ function runSystemSimulation(params::ParamDictType)::Union{AbstractSimData, Noth
         
         # --- REFACTORED: Handle Analytic Solution Case Early ---
         IC = getInitialCondition(initFunc_name, init_params)
+        if grid_mover_name == "physical"
+            grid_mover = PhysicalGridMover(eq)
+        elseif grid_mover_name == "custom"
+            func = run_params["grid_mover_func"]
+            ps = run_params["grid_mover_params"]
+            grid_mover = CustomGridMover(func,ps)
+        elseif isnothing(grid_mover_name) || (grid_mover_name == "none")
+            grid_mover = NoGridMover()
+        else
+            error("Only physical, custom or none grid movers supported!")
+        end
         if timestepper_name == "Analytic"
             @info "  Computing analytical solution..."
             # Setup a temporary grid to sample the solution
             grid_analytic = if dimension == 1
-                ParticleGrid1D(xmin, xmax, run_params["N"], bc, bc != :periodic)
+                ParticleGrid1D(xmin, xmax, run_params["N"], bc, rng=MersenneTwister(1), bc != :periodic)
             else
-                ParticleGrid2D(xmin, xmax, run_params["ymin"], run_params["ymax"], run_params["Nx"], run_params["Ny"], bc, bc != :periodic)
+                ParticleGrid2D(xmin, xmax, run_params["ymin"], run_params["ymax"], run_params["Nx"], run_params["Ny"], bc, rng=rng=MersenneTwister(1), bc != :periodic)
             end
             
             dt_analytic = tmax / snapshots
@@ -272,16 +284,16 @@ function runSystemSimulation(params::ParamDictType)::Union{AbstractSimData, Noth
         implicit_solver = LinearizedRelaxationImplicitSolver()
         N_total_particles = particleGrid_template.N
         
-        system_method = if timestepper_name == "ARS233"; ARS233(MainGrad, FallbackGrad, mood_fun, implicit_solver, source_term)
-                        elseif timestepper_name == "PRSSP3"; PareschiRussoIMEXSSP3(MainGrad, FallbackGrad, mood_fun, implicit_solver, source_term)
-                        elseif timestepper_name == "ARS222"; ARS222(MainGrad, FallbackGrad, mood_fun, implicit_solver, source_term)
-                        elseif timestepper_name == "ARS232"; ARS232(MainGrad, FallbackGrad, mood_fun, implicit_solver, source_term)
+        system_method = if timestepper_name == "ARS233"; ARS233(MainGrad, FallbackGrad, mood_fun, implicit_solver, source_term, grid_mover)
+                        elseif timestepper_name == "PRSSP3"; PareschiRussoIMEXSSP3(MainGrad, FallbackGrad, mood_fun, implicit_solver, source_term, grid_mover)
+                        elseif timestepper_name == "ARS222"; ARS222(MainGrad, FallbackGrad, mood_fun, implicit_solver, source_term, grid_mover)
+                        elseif timestepper_name == "ARS232"; ARS232(MainGrad, FallbackGrad, mood_fun, implicit_solver, source_term, grid_mover)
                         elseif timestepper_name == "SimpleSplitting"; SimpleSplitting(RalstonRK2(MainGrad; fallbackInterpolator=FallbackGrad, mood=mood_fun), source_term)
                         else error("Unknown TimeStepper name for system: '$timestepper_name'") end
         
         # Convert to tuples for performance before passing to the integrator
         kinetic_eqs = Tuple(kinetic_eqs_vec)
-        particleGrids = Tuple(particleGrids_vec)
+        particleGrids = ParticleGridSystem(Tuple(particleGrids_vec),collect(1:1))
 
         elapsed_time, xs_data, sys_us_kinetic, ts = mainTimeIntegrator!(system_method, kinetic_eqs, particleGrids, settings; snapshots = snapshots, remove_ghosts = remove_ghosts)
         @info "System integration (D=$dimension) finished in $(round(elapsed_time, digits=2)) seconds."

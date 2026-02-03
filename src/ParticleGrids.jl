@@ -6,11 +6,8 @@ export ParticleGrid, ParticleGrid1D, ParticleGrid2D, getPeriodicDistance, saveGr
        determineVolumes!, getDistance, apply_boundary_conditions!, ParticleGridSystem, set_df!, getNBSlice, reorder_particles_for_locality!,
        manage_particles!
 
-using Plots
 using Random
-using Printf
-using LaTeXStrings
-using Statistics
+#using Statistics
 using LinearAlgebra
 using CellListMap
 using StaticArrays

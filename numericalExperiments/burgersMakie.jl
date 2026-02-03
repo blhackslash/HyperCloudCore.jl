@@ -9,18 +9,18 @@ end
 sim_config_burgers = SimulationConfig(
     runScalarSimulation,
     ParamDict(
-        "tmax" => 5., "N" => 500, "xmin" => -5.0, "xmax" => 5.0,
-        "dt" => .001, "snapshots" => 20, "interp_alpha" => 1.0,
+        "tmax" => 10., "N" => 200, "xmin" => -5.0, "xmax" => 5.0,
+        "dt" => .01, "snapshots" => 25, "interp_alpha" => 1.0,
         "interp_range" => 3.5, "remove_ghosts" => false,
         "init_func" => "riemann",
         #"init_params" => (1., 0., 1.),
         #"init_params" => (0.0, 1.0, -2., 2.),#(0., 1., -2.,2.),#(0., 1., -4., -2.), #(0.,1.,-2,2.),
-        "init_params" => (2., 0., -2.),
+        "init_params" => (1., 0., -2.),
         #"init_params" => (2., 0., -2., .1),
         "randomness_factor" => 0.,
         "SEED" => 10, "sim_function" => (:const, "runScalarSimulation"),
         "bc" => :fixed_dirichlet, "weight_function" => "exponential",
-        "order" => 1, "PDE" => "burgers", "PDE_params" => .5, "merge_factor" => .7,
+        "order" => 1, "PDE" => "testU3", "PDE_params" => 1., "merge_factor" => .3,
         "grid_mover" => "physical", # "grid_mover_func" => grid_velocity, "grid_mover_params" => Tuple([]),
     ),
 
@@ -352,8 +352,7 @@ sim_config_burgers = SimulationConfig(
             "timestepper" => "EulerUpwind",
             "main_gradient" => "Upwind",
             "main_flux" => "Rusanov",
-            "order" => 1, "grid_mover" => "physical",
-        ),
+            "order" => 1,),
         "EulerUpwindNoMovement" => ParamDict(
             "timestepper" => "EulerUpwind",
             "main_gradient" => "Upwind",
@@ -575,11 +574,11 @@ sim_config_burgers = SimulationConfig(
 scene_options = Dict{String, Any}()
 scene_options = Dict{String, Any}("t" => 10.,"component" => 1, "x_key" => "SEED", "y_key" => "l2error")
 # Pass this config to your IPlotPDESols functions
-#show1DSolutionFig(sim_config_burgers; calc_stats = false, ui_options = :default, scene_options = scene_options);
+show1DSolutionFig(sim_config_burgers; calc_stats = false, ui_options = :default, scene_options = scene_options);
 #showDynamicDependence(sim_config_burgers; ui_options = :publication, scene_options = scene_options)
 #showConvergencePlot(sim_config_burgers, "merge_factor", .1:.05:.9 ; calc_stats = false, force_int_param = false)
-#showConvergencePlot(sim_config_burgers, "PDE_params", .1:.05:1. ; calc_stats = false, force_int_param = false)
-show2DConvergencePlot(sim_config_burgers, "PDE_params", .1:.05:1. ,"merge_factor", .1:.05:.9; calc_stats = false)
+#showConvergencePlot(sim_config_burgers, "PDE_params", .0:.025:1. ; calc_stats = false, force_int_param = false)
+#show2DConvergencePlot(sim_config_burgers, "PDE_params", .1:.01:1. ,"merge_factor", .05:.01:.9; calc_stats = false)
 #calculateConvergenceData(sim_config_burgers, "N", 10. .^(1:.25:2); calc_stats = false, force_int_param = true)
 #showConvergencePlot(sim_config_burgers, "N", 10. .^(1.5:.125:4.); calc_stats = false, force_int_param = true, initial_calc = true, ui_options = :publication, scene_options = scene_options)
 #showConvergencePlot(sim_config_burgers, "delta_relax", (0.:10^-51:10^-50); force_int_param = false, initial_calc = true, ui_options = :publication)
