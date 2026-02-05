@@ -88,6 +88,11 @@ function manage_particles!(pg::ParticleGrid)
     updateNeighbors!(pg)
     if pg isa ParticleGrid1D; determineVolumes!(pg) end
 end
+function manage_particles!(pgs::ParticleGridSystem)
+    for pg in pgs
+        manage_particles!(pg)
+    end
+end
 function _merge_particles!(pg::ParticleGrid1D)
     # =========================================================================
     # PHASE 2: MERGE (Coarsen)
@@ -253,66 +258,66 @@ function _merge_particles_conservative!(pg::ParticleGrid1D)
                     dnew_4 = 0.5 * d23 + d34  # Dist from New to 4
                     d14    = d12 + d23 + d34  # Total span
                     
-                    # # 1. Calculate Old Area (Trapezoidal Rule)
-                    # # A = 0.5 * (uL + uR) * dx
-                    # area_old = 0.5 * ((u1+u2)*d12 + (u2+u3)*d23 + (u3+u4)*d34)
+                    # 1. Calculate Old Area (Trapezoidal Rule)
+                    # A = 0.5 * (uL + uR) * dx
+                    area_old = 0.5 * ((u1+u2)*d12 + (u2+u3)*d23 + (u3+u4)*d34)
                     
-                    # # 2. Solve for u_new
-                    # # The formula simplifies to:
-                    # # u_new = (2*Area - u1*d1_new - u4*dnew_4) / d14
+                    # 2. Solve for u_new
+                    # The formula simplifies to:
+                    # u_new = (2*Area - u1*d1_new - u4*dnew_4) / d14
                     
-                    # u_new = (2.0 * area_old - u1 * d1_new - u4 * dnew_4) / d14
-                    # #u_new = clamp(u_new, min(u2, u3), max(u2, u3))
-                    # # 3. Update Position
-                    # # Conservative position update (volume weighted) is usually still best
-                    # # but you specifically asked for the midpoint:
+                    u_new = (2.0 * area_old - u1 * d1_new - u4 * dnew_4) / d14
+                    #u_new = clamp(u_new, min(u2, u3), max(u2, u3))
+                    # 3. Update Position
+                    # Conservative position update (volume weighted) is usually still best
+                    # but you specifically asked for the midpoint:
                     
-                    # # If you want EXACT midpoint relative to neighbors:
-                    # # pos[write_idx] = pos[i] + 0.5 * (signed distance i->j)
-                    # pos[write_idx] = pos[i] + 0.5 * dist_ij
+                    # If you want EXACT midpoint relative to neighbors:
+                    # pos[write_idx] = pos[i] + 0.5 * (signed distance i->j)
+                    pos[write_idx] = pos[i] + 0.5 * dist_ij
                     
-                    # rhos[write_idx] = u_new
+                    rhos[write_idx] = u_new
                     # 1. Calculate target Area (K = 1.5 * Area_old)
                     # a_cubic(u, v) = (2/3) * (u^2 + uv + v^2) / (u + v)
-                    a_func(u, v) = abs(u + v) < 1e-10 ? (u^2 + v^2)/3.0 : (2.0/3.0)*(u^2 + u*v + v^2)/(u + v)
+                    # a_func(u, v) = abs(u + v) < 1e-10 ? (u^2 + v^2)/3.0 : (2.0/3.0)*(u^2 + u*v + v^2)/(u + v)
 
-                    Area_old = a_func(u1, u2)*d12 + a_func(u2, u3)*d23 + a_func(u3, u4)*d34
+                    # Area_old = a_func(u1, u2)*d12 + a_func(u2, u3)*d23 + a_func(u3, u4)*d34
 
-                    # 2. Define the Residual Function
-                    # We want to find u such that: New_Area(u) - Area_old == 0
-                    target_res(u) = a_func(u1, u)*d1_new + a_func(u, u4)*dnew_4 - Area_old
+                    # # 2. Define the Residual Function
+                    # # We want to find u such that: New_Area(u) - Area_old == 0
+                    # target_res(u) = a_func(u1, u)*d1_new + a_func(u, u4)*dnew_4 - Area_old
 
-                    # 3. Physically Bounded Bisection
-                    # The merged value MUST be between the minimum and maximum of the stencil
-                    u_min = min(u1, u2, u3, u4)
-                    u_max = max(u1, u2, u3, u4)
+                    # # 3. Physically Bounded Bisection
+                    # # The merged value MUST be between the minimum and maximum of the stencil
+                    # u_min = min(u1, u2, u3, u4)
+                    # u_max = max(u1, u2, u3, u4)
 
-                    # We add a tiny epsilon to the bounds to ensure we don't start exactly on 
-                    # a point where target_res might be zero or singular.
-                    low = u_min - 0.1 * abs(u_min + 1e-6)
-                    high = u_max + 0.1 * abs(u_max + 1e-6)
+                    # # We add a tiny epsilon to the bounds to ensure we don't start exactly on 
+                    # # a point where target_res might be zero or singular.
+                    # low = u_min - 0.1 * abs(u_min + 1e-6)
+                    # high = u_max + 0.1 * abs(u_max + 1e-6)
 
-                    # Check if a root actually exists in this range (Bolzano's Theorem)
-                    # If not, the stencil is likely too distorted; fallback to linear.
-                    if target_res(low) * target_res(high) > 0
-                        # Fallback to linear area-preserving u_new (Burgers-style)
-                        # This is the "Burgers-equivalent" area-preserving value
-                        u_new = (2.0 * 0.5 * ((u1+u2)/2*d12 + (u2+u3)/2*d23 + (u3+u4)/2*d34) - u1*d1_new - u4*dnew_4) / d14
-                    else
-                        # Perform Bisection
-                        for _ in 1:40
-                            mid = 0.5 * (low + high)
-                            if target_res(low) * target_res(mid) < 0
-                                high = mid
-                            else
-                                low = mid
-                            end
-                        end
-                        u_new = 0.5 * (low + high)
-                    end
+                    # # Check if a root actually exists in this range (Bolzano's Theorem)
+                    # # If not, the stencil is likely too distorted; fallback to linear.
+                    # if target_res(low) * target_res(high) > 0
+                    #     # Fallback to linear area-preserving u_new (Burgers-style)
+                    #     # This is the "Burgers-equivalent" area-preserving value
+                    #     u_new = (2.0 * 0.5 * ((u1+u2)/2*d12 + (u2+u3)/2*d23 + (u3+u4)/2*d34) - u1*d1_new - u4*dnew_4) / d14
+                    # else
+                    #     # Perform Bisection
+                    #     for _ in 1:40
+                    #         mid = 0.5 * (low + high)
+                    #         if target_res(low) * target_res(mid) < 0
+                    #             high = mid
+                    #         else
+                    #             low = mid
+                    #         end
+                    #     end
+                    #     u_new = 0.5 * (low + high)
+                    # end
 
-                    # 4. Final Sanity Clamp
-                    u_new = clamp(u_new, u_min, u_max)
+                    # # 4. Final Sanity Clamp
+                    # u_new = clamp(u_new, u_min, u_max)
                 else
                     # --- FALLBACK: Volume Weighted (Edges) ---
                     v_i, v_j = vols[i], vols[j]

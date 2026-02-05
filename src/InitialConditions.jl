@@ -201,6 +201,20 @@ function (ic::EulerShockTube)(x::Real)
     E_val = p_val / (GAS_GAMMA_EULER - 1.0) + 0.5 * rho_val * u_val^2
     return (rho_val, m_val, E_val)
 end
+function (ic::EulerShockTube)(xi::Real)
+    # In Lagrangian, we usually initialize based on mass coordinate xi
+    rho_val, u_val, p_val = xi < ic.x0 ? ic.stateL : ic.stateR
+    
+    rho_val = max(rho_val, 1e-6)
+    p_val = max(p_val, 1e-6)
+    
+    V_val = 1.0 / rho_val
+    u_val = u_val
+    # Total specific energy e = internal + kinetic
+    e_val = p_val * V_val / (GAS_GAMMA_EULER - 1.0) + 0.5 * u_val^2
+    
+    return (V_val, u_val, e_val)
+end
 
 # --- 2. IC Functors
 # --- Functors for t=0 ---
@@ -584,6 +598,79 @@ function (ic::EulerShockTube)(x::Real, t::Real, eq::Euler1D, pg::ParticleGrid1D)
     return (rho_final, m_final, E_final)
 end
 
+function (ic::EulerShockTube)(xi::Real, t::Real, eq::LagrangianEuler1D)
+    if t <= 1e-9; return ic(xi); end
+
+    gamma = GAS_GAMMA_EULER
+    rho_L, u_L, p_L = ic.stateL
+    rho_R, u_R, p_R = ic.stateR
+    V_L, V_R = 1.0/rho_L, 1.0/rho_R
+
+    # --- 1. Solve for p_star and u_star (Identical to Eulerian) ---
+    # [Insert your existing Newton-Raphson logic here to find p_star and u_star]
+    # ... (skipping for brevity, it remains the same) ...
+
+    # --- 2. Calculate Lagrangian Wave Speeds (Mass Speeds) ---
+    # Lagrangian sound speed: C = sqrt(gamma * p / V) = rho * c_eulerian
+    C_L = sqrt(gamma * p_L / V_L)
+    C_R = sqrt(gamma * p_R / V_R)
+
+    local W_L, W_R # Mass speeds of the waves
+    
+    if p_star > p_L # Left Shock
+        W_L = C_L * sqrt((gamma + 1)/(2*gamma) * (p_star/p_L) + (gamma - 1)/(2*gamma))
+    else # Left Rarefaction
+        # Rarefactions in Lagrangian have a head and tail mass speed
+        W_head_L = C_L
+        W_tail_L = C_L * (p_star/p_L)^((gamma + 1)/(2*gamma)) 
+    end
+
+    if p_star > p_R # Right Shock
+        W_R = C_R * sqrt((gamma + 1)/(2*gamma) * (p_star/p_R) + (gamma - 1)/(2*gamma))
+    else # Right Rarefaction
+        W_head_R = C_R
+        W_tail_R = C_R * (p_star/p_R)^((gamma + 1)/(2*gamma))
+    end
+
+    # --- 3. Find Solution at (xi, t) ---
+    # The "contact" in Lagrangian is always at the initial interface xi0 
+    # because the coordinate system moves WITH the contact.
+    s_query = (xi - ic.x0) / t 
+    local V_f, u_f, p_f
+
+    if s_query <= 0 # Left of interface
+        if p_star > p_L # Left Shock
+            V_f, u_f, p_f = s_query <= -W_L ? (V_L, u_L, p_L) : (V_L*( (gamma-1)/(gamma+1) + p_star/p_L ) / ( 1 + (gamma-1)/(gamma+1)*p_star/p_L ), u_star, p_star)
+        else # Left Rarefaction
+            if s_query <= -W_head_L
+                V_f, u_f, p_f = V_L, u_L, p_L
+            elseif s_query >= -W_tail_L
+                V_f, u_f, p_f = V_L*(p_star/p_L)^(-1/gamma), u_star, p_star
+            else # Inside fan (isentropic)
+                # In Lagrangian, the fan is linear in mass-speed space
+                p_f = p_L * (-s_query / C_L)^(2*gamma / (gamma+1))
+                V_f = V_L * (p_f / p_L)^(-1/gamma)
+                u_f = u_L + (2*C_L*V_L/(gamma-1)) * (1 - (p_f/p_L)^((gamma-1)/(2*gamma)))
+            end
+        end
+    else # Right of interface
+        if p_star > p_R # Right Shock
+            V_f, u_f, p_f = s_query >= W_R ? (V_R, u_R, p_R) : (V_R*( (gamma-1)/(gamma+1) + p_star/p_R ) / ( 1 + (gamma-1)/(gamma+1)*p_star/p_R ), u_star, p_star)
+        else # Right Rarefaction
+            if s_query >= W_head_R
+                V_f, u_f, p_f = V_R, u_R, p_R
+            elseif s_query <= W_tail_R
+                V_f, u_f, p_f = V_R*(p_star/p_R)^(-1/gamma), u_star, p_star
+            else # Inside fan
+                p_f = p_R * (s_query / C_R)^(2*gamma / (gamma+1))
+                V_f = V_R * (p_f / p_R)^(-1/gamma)
+                u_f = u_R - (2*C_R*V_R/(gamma-1)) * (1 - (p_f/p_R)^((gamma-1)/(2*gamma)))
+            end
+        end
+    end
+
+    return (V_f, u_f, p_f / ((gamma - 1) / V_f) + 0.5 * u_f^2) # (V, u, e)
+end
 
 # --- 4. Factory Function (SIMPLIFIED) ---
 function getInitialCondition(name::String, params::Tuple)

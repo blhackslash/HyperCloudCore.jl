@@ -50,12 +50,15 @@ function runSystemSimulation(params::ParamDictType)::Union{AbstractSimData, Noth
 
         if system_name == "euler1d"
             dimension = 1
-            system_eq = Euler1D()
+            pde_params = get(run_params, "PDE_params", nothing)
+            system_eq = pde_params == :Lagrange ? LagrangianEuler1D() : Euler1D()
             N_macro_vars = 3 # rho, m, E
+            vel_var = 2
         elseif system_name == "euler2d"
             dimension = 2
             system_eq = Euler2D()
             N_macro_vars = 4 # rho, mx, my, E
+            vel_var = (2,3)
         else
             error("System '$system_name' is not implemented.")
         end
@@ -63,7 +66,7 @@ function runSystemSimulation(params::ParamDictType)::Union{AbstractSimData, Noth
         # --- REFACTORED: Handle Analytic Solution Case Early ---
         IC = getInitialCondition(initFunc_name, init_params)
         if grid_mover_name == "physical"
-            grid_mover = PhysicalGridMover(eq)
+            grid_mover = PhysicalGridMover(system_eq)
         elseif grid_mover_name == "custom"
             func = run_params["grid_mover_func"]
             ps = run_params["grid_mover_params"]
@@ -113,6 +116,7 @@ function runSystemSimulation(params::ParamDictType)::Union{AbstractSimData, Noth
         weight_func_name = run_params["weight_function"]
         save_relax = run_params["save_relax"]
         remove_ghosts = get(run_params,"remove_ghosts",true)
+        merge_factor = get(run_params, "merge_factor", 0.)
 
         @assert (isnothing(lim) || order == 2 || lim == "none") "Only 2nd order supported with limiter!"
         
@@ -193,7 +197,7 @@ function runSystemSimulation(params::ParamDictType)::Union{AbstractSimData, Noth
                       elseif !isnothing(weight_func_name) error("Weight function not implemented yet!") end
         local particleGrid_template
         if dimension == 1
-            particleGrid_template = ParticleGrid1D(xmin, xmax, Nx, bc, interp_range_factor; rng=rng, randomness=randomness, weight_func = weight_func)
+            particleGrid_template = ParticleGrid1D(xmin, xmax, Nx, bc, interp_range_factor; rng=rng, merge_factor = merge_factor, randomness=randomness, weight_func = weight_func)
         else
             particleGrid_template = ParticleGrid2D(xmin, xmax, ymin, ymax, Nx, Ny, bc, interp_range_factor; weight_func = weight_func, rng=rng, randomness=randomness)
         end        
@@ -282,7 +286,6 @@ function runSystemSimulation(params::ParamDictType)::Union{AbstractSimData, Noth
                         elseif isnothing(fallback_grad_name) NoFallbackGrad()
                        else error("Only Upwind implemented as Fallback!") end
         implicit_solver = LinearizedRelaxationImplicitSolver()
-        N_total_particles = particleGrid_template.N
         
         system_method = if timestepper_name == "ARS233"; ARS233(MainGrad, FallbackGrad, mood_fun, implicit_solver, source_term, grid_mover)
                         elseif timestepper_name == "PRSSP3"; PareschiRussoIMEXSSP3(MainGrad, FallbackGrad, mood_fun, implicit_solver, source_term, grid_mover)
@@ -293,7 +296,7 @@ function runSystemSimulation(params::ParamDictType)::Union{AbstractSimData, Noth
         
         # Convert to tuples for performance before passing to the integrator
         kinetic_eqs = Tuple(kinetic_eqs_vec)
-        particleGrids = ParticleGridSystem(Tuple(particleGrids_vec),collect(1:1))
+        particleGrids = ParticleGridSystem(Tuple(particleGrids_vec),kinetic_to_macro_map)
 
         elapsed_time, xs_data, sys_us_kinetic, ts = mainTimeIntegrator!(system_method, kinetic_eqs, particleGrids, settings; snapshots = snapshots, remove_ghosts = remove_ghosts)
         @info "System integration (D=$dimension) finished in $(round(elapsed_time, digits=2)) seconds."

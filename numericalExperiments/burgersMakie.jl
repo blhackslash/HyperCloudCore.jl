@@ -393,12 +393,12 @@ sim_config_burgers = SimulationConfig(
             "fallback_gradient" => "Upwind", "fallback_flux" => "Rusanov",
         ),
         "ARS233Upwind" => ParamDict(
-            "timestepper" => "ARS233",
+            "timestepper" => "ARS222",
             "main_gradient" => "Upwind",
             "main_flux" => "Upwind",
             "order" => 1,
             "save_relax" => false,
-            "relax_velocities" => [[2.,-2.]],
+            "relax_velocities" => [[1.,-1.]],
             "relax_epsilon" => 10. ^ -8,
             "MOOD" => "none",
         ),
@@ -564,10 +564,10 @@ sim_config_burgers = SimulationConfig(
     #["EulerUpwind","Analytical Solution","RK2MUSCL2(VKLimiter)","RK2MUSCL2(superbee)","RK2MUSCL2", "RK2MUSCL2MOOD", "ARS233MUSCL2MOOD"]
     #["LW(uniform grid)", "ARS233MUSCL2", "ARS233MUSCL5", "EulerUpwind", "LLF(uniform grid)", "RK2MUSCL2", "RK4MUSCL5"]
     #["RK2MUSCL2Smooth", "Analytical Solution"]
-    ["EulerUpwind", "Analytical Solution"]
+    #["EulerUpwind", "Analytical Solution"]
     #["EulerUpwind","Analytical Solution","RK2MUSCL2(VK)","RK2MUSCL2"]
     #["Analytical Solution", "ARS233MUSCL2","ARS233MUSCL2MOOD", "ARS233MUSCL2(VK)", "ARS233Upwind"]
-    #"ARS233Upwind"
+    ["ARS233Upwind","Analytical Solution"]
     #"RK2WENO"
     #["RK2MUSCL2", "RK2Upwind", "RK2MUSCL2MOOD", "RK2MUSCL2(minmod)", "RK2MUSCL2(VK)"]
 );

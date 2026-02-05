@@ -22,11 +22,11 @@ sod_euler_params = ( # Sod shock tube for 1D Euler
     # Note: Your plotting range and tmax should be suitable for Sod's problem evolution.
     # Typical Sod domain [-0.5, 0.5], tmax ~ 0.2
 )
-sod_euler_params = (
-    (0.001, 0.0, 1.6665e-3),       # rho_L, u_L, p_L
-    (1/8 * 1e-3, 0.0, 1.6666e-4),  # rho_R, u_R, p_R
-    0.0                            # Discontinuity position x0
-)
+# sod_euler_params = (
+#     (0.001, 0.0, 1.6665e-3),       # rho_L, u_L, p_L
+#     (1/8 * 1e-3, 0.0, 1.6666e-4),  # rho_R, u_R, p_R
+#     0.0                            # Discontinuity position x0
+# )
 SEED_value = 10
 as1 = collect(0.05:0.05:3.)
 as = [as1; -as1]
@@ -36,18 +36,18 @@ function main()
     sim_config_euler1d_system = SimulationConfig(
         runSystemSimulation,
         ParamDict(
-            "tmax" => 0.2, "N" => 300, "bc" => :fixed_dirichlet,
+            "tmax" => 0.2, "N" => 100, "bc" => :fixed_dirichlet,
             "xmin" => -0.5, "xmax" => .5, 
-            "CFL" => 0.5, "snapshots" => 11, 
-            "interp_alpha" => 1.0, "interp_range" => 4.5, # Factor for dx
+            "CFL" => 0.1, "snapshots" => 21, 
+            "interp_alpha" => 1.0, "interp_range" => 3.5, # Factor for dx
             "init_func" => "eulerShockTube",
-            "PDE" => "euler1d", "sim_function" => "runSystemSimulation",
+            "PDE" => "euler1d", "sim_function" => "runSystemSimulation", "PDE_params" => :Lagrange,
             #"init_params" => euler_smooth_params, 
             "init_params" => sod_euler_params, 
-            "randomness_factor" => 0., 
+            "randomness_factor" => 0., "grid_mover" => "physical", "merge_factor" => .5,
             "SEED" => SEED_value, "save_relax" => false, "weight_function" => "exponential",
             #"relax_velocities" => [as, as, as]
-            "relax_velocities" => [ [3.0, -3.0, 4., -4.], [3.0, -3.0, 4., -4.], [3.0, -3.0, 4., -4.] ], # Pairs for rho, m, E kinetic components
+            "relax_velocities" => [ [1.0, -1.0], [1.0, -1.0], [1.0, -1.0] ], # Pairs for rho, m, E kinetic components
         ),
         MethodDict( 
             "ARS222MUSCL2(minmod)" => ParamDict(
@@ -214,7 +214,7 @@ function main()
             )
         ),
         #"Analytical Solution"
-        #"ARS222MUSCL2"
+        #"ARS222Upwind"
         ["ARS222MUSCL2MOOD","Analytical Solution","ARS222MUSCL2","ARS222Upwind"]
         #["ARS233MUSCL2","ARS233MUSCL3","ARS233MUSCL4"]
         #["ARS222MUSCL2MOOD2","ARS222MUSCL2(VK)", "SSMUSCL4MOOD","SSP3MUSCL2MOOD", "ARS222Upwind","Analytical Solution", "SSMUSCL2MOOD","ARS222MUSCL2", "ARS222MUSCL2(minmod)", "ARS222MUSCL2MOOD"]
