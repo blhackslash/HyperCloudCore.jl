@@ -18,18 +18,31 @@ function __init__()
 end
 # ---------------------------------------------------------
 
-# Include submodules
+# No internal Dependencies
 include("HyperbolicPDEs.jl")
 using .HyperbolicPDEs
 
-include("FluxFunctions.jl")
-using .FluxFunctions
+include("InterpolationUtils.jl")
+using .InterpolationUtils
 
 include("MLSWeightFunctions.jl")
 using .MLSWeightFunctions
 
 include("SimSettings.jl")
 using .SimSettings
+
+# Minimal internal Dependencies (HyperbolicPDEs)
+
+include("SourceTerms.jl")
+using .SourceTerms
+
+include("ImplicitSolvers.jl")
+using .ImplicitSolvers
+
+include("FluxFunctions.jl")
+using .FluxFunctions
+
+# Needs Particle Grids
 
 include("ParticleGrids.jl")
 using .ParticleGrids
@@ -43,14 +56,10 @@ using .MOOD
 include("GridMovement.jl")
 using .GridMovement
 
+# Significant internal Dependencies
+
 include("Interpolations.jl")
 using .Interpolations
-
-include("SourceTerms.jl")
-using .SourceTerms
-
-include("ImplicitSolvers.jl")
-using .ImplicitSolvers
 
 include("TimeIntegration.jl")
 using .TimeIntegration

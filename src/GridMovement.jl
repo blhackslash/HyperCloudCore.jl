@@ -2,8 +2,9 @@ module GridMovement
 
 using ..ParticleGrids
 using ..HyperbolicPDEs
+using ..InterpolationUtils
 
-export GridMover, NoGridMover, CustomGridMover, PhysicalGridMover, get_effective_vel, update_grid_velocities!
+export GridMover, NoGridMover, CustomGridMover, PhysicalGridMover, get_effective_vel, update_grid_velocities!, get_Lagrange_Correction
 
 abstract type GridMover end
 
@@ -14,8 +15,9 @@ struct CustomGridMover <: GridMover
     params::Tuple
 end
 
-struct PhysicalGridMover{E} <: GridMover
+struct PhysicalGridMover{E,I} <: GridMover
     pde::E
+    interpolator::I
 end
 
 # Default function, no grid move
@@ -37,7 +39,7 @@ function (gm::CustomGridMover)(pg::ParticleGrid, dt::Real);
     return
 end 
 
-function (gm::PhysicalGridMover{BurgersEquation{a}})(pg::ParticleGrid1D, dt::Real) where {a}
+function (gm::PhysicalGridMover{BurgersEquation{a},I})(pg::ParticleGrid1D, dt::Real) where {a,I}
     rhos = pg.rhos
     positions = pg.positions
     for p_idx = 1:pg.N
@@ -49,7 +51,7 @@ function (gm::PhysicalGridMover{BurgersEquation{a}})(pg::ParticleGrid1D, dt::Rea
     return    
 end
 
-function (gm::PhysicalGridMover{TestU3Equation{a}})(pg::ParticleGrid1D, dt::Real) where {a}
+function (gm::PhysicalGridMover{TestU3Equation{a},I})(pg::ParticleGrid1D, dt::Real) where {a,I}
     rhos = pg.rhos
     positions = pg.positions
     for p_idx = 1:pg.N
@@ -79,7 +81,7 @@ function (gm::GridMover)(pgs::ParticleGridSystem{N_grids,1}, dt::Real; managed =
     end
 end 
 
-function (gm::PhysicalGridMover{LinearAdvection{1}})(pg::ParticleGrid1D, dt::Real)
+function (gm::PhysicalGridMover{LinearAdvection{1},I})(pg::ParticleGrid1D, dt::Real) where {I}
     positions = pg.positions
     for p_idx = 1:pg.N
         positions[p_idx] += 1. * dt
@@ -129,7 +131,7 @@ end
 Calculates the grid velocity for every particle based on the densities of the 
 species specified in `pgs.velocity_indices`.
 """
-function update_grid_velocities!(pgs::ParticleGridSystem{N_grids, 1}, ::PhysicalGridMover{Euler1D}) where {N_grids}
+function update_grid_velocities!(pgs::ParticleGridSystem{N_grids, 1}, ::PhysicalGridMover{Euler1D,I}) where {N_grids,I}
     # 1. Access the buffer and grids
     grid_vels = pgs.grid_velocities
     N = pgs.grids[1].N
@@ -147,39 +149,12 @@ function update_grid_velocities!(pgs::ParticleGridSystem{N_grids, 1}, ::Physical
         for k in pgs.kinetic_indices[2]
             mom_sum += pgs.grids[k].rhos[i]
         end
-        # B. Calculate u_grid based on your physics (e.g., Burgers-like)
-        # Note: You can customize this logic or dispatch based on system_eqs
-        # For this example, we assume u_grid = rho_sum (like Burgers)
+        # B. Calculate u_grid based on specific physics
+
         u_grid = mom_sum / rho_sum
-        
+        #u_grid = mom_sum
         # C. Store in buffer
         grid_vels[i] = u_grid
-    end
-end
-
-"""
-    update_grid_velocities!(pgs::ParticleGridSystem, system_eqs)
-
-Calculates the grid velocity for every particle based on the densities of the 
-species specified in `pgs.velocity_indices`.
-"""
-function update_grid_velocities!(pgs::ParticleGridSystem{N_grids, 1}, ::PhysicalGridMover{LagrangianEuler1D}) where {N_grids}
-    # 1. Access the buffer and grids
-    grid_vels = pgs.grid_velocities
-    N = pgs.grids[1].N
-    if length(grid_vels) < N
-        resize!(grid_vels, Int(ceil(N * 1.2)))
-    end
-    # 2. Loop over particles (Thread-safe here)
-    Threads.@threads for i in 1:N
-        # A. Calculate total rho for the "driving" species
-        vel_sum = 0.0
-        for k in pgs.kinetic_indices[2]
-            vel_sum += pgs.grids[k].rhos[i]
-        end
-        
-        # C. Store in buffer
-        grid_vels[i] = vel_sum
     end
 end
 
@@ -192,7 +167,7 @@ end
 Calculates the grid velocity for every particle based on the densities of the 
 species specified in `pgs.kinetic_indices`.
 """
-function update_grid_velocities!(pgs::ParticleGridSystem{N_grids,1},::PhysicalGridMover{BurgersEquation{a}}) where {N_grids,a}
+function update_grid_velocities!(pgs::ParticleGridSystem{N_grids,1},::PhysicalGridMover{BurgersEquation{a},I}) where {I,N_grids,a}
     # 1. Access the buffer and grids
     grid_vels = pgs.grid_velocities
     N = pgs.grids[1].N
@@ -215,6 +190,17 @@ function update_grid_velocities!(pgs::ParticleGridSystem{N_grids,1},::PhysicalGr
         # C. Store in buffer
         grid_vels[i] = u_grid
     end
+end
+
+function get_Lagrange_Correction(gm::PhysicalGridMover{E,Interpolator{1,1,1}}, vel::Real, pg::ParticleGrid1D, nb_slice::UnitRange, dfVec::AbstractVector ) where {E}
+    dw = pg.neighbor_weights
+    dx = pg.neighbor_xdistance
+    res = gm.interpolator(nb_slice,dx,dw,dfVec;scale = pg.dx)
+    #print(res[1],":")
+    return res[1] * vel
+end
+function get_Lagrange_Correction(gm::NoGridMover, kwargs...)
+    return 0.
 end
 
 @inline function get_effective_vel(eq::ScalarHyperbolicPDE{1},vel::Real)

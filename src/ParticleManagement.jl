@@ -70,7 +70,7 @@ function manage_particles!(pg::ParticleGrid)
         updateNeighbors!(pg)
     end
 
-    _merge_particles_conservative!(pg)
+    _merge_particles_pairwise!(pg)
 
     # =========================================================================
     # PHASE 3: BOUNDARY UPDATE (Cleanup)

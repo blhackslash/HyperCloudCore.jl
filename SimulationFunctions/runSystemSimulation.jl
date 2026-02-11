@@ -50,8 +50,7 @@ function runSystemSimulation(params::ParamDictType)::Union{AbstractSimData, Noth
 
         if system_name == "euler1d"
             dimension = 1
-            pde_params = get(run_params, "PDE_params", nothing)
-            system_eq = pde_params == :Lagrange ? LagrangianEuler1D() : Euler1D()
+            system_eq = Euler1D()
             N_macro_vars = 3 # rho, m, E
             vel_var = 2
         elseif system_name == "euler2d"
@@ -66,7 +65,7 @@ function runSystemSimulation(params::ParamDictType)::Union{AbstractSimData, Noth
         # --- REFACTORED: Handle Analytic Solution Case Early ---
         IC = getInitialCondition(initFunc_name, init_params)
         if grid_mover_name == "physical"
-            grid_mover = PhysicalGridMover(system_eq)
+            grid_mover = PhysicalGridMover(system_eq,Interpolator{dimension,1,1}())
         elseif grid_mover_name == "custom"
             func = run_params["grid_mover_func"]
             ps = run_params["grid_mover_params"]

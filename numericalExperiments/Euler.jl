@@ -38,16 +38,16 @@ function main()
         ParamDict(
             "tmax" => 0.2, "N" => 100, "bc" => :fixed_dirichlet,
             "xmin" => -0.5, "xmax" => .5, 
-            "CFL" => 0.1, "snapshots" => 21, 
+            "dt" => 0.0001, "snapshots" => 21, 
             "interp_alpha" => 1.0, "interp_range" => 3.5, # Factor for dx
             "init_func" => "eulerShockTube",
-            "PDE" => "euler1d", "sim_function" => "runSystemSimulation", "PDE_params" => :Lagrange,
+            "PDE" => "euler1d", "sim_function" => "runSystemSimulation",
             #"init_params" => euler_smooth_params, 
             "init_params" => sod_euler_params, 
             "randomness_factor" => 0., "grid_mover" => "physical", "merge_factor" => .5,
             "SEED" => SEED_value, "save_relax" => false, "weight_function" => "exponential",
             #"relax_velocities" => [as, as, as]
-            "relax_velocities" => [ [1.0, -1.0], [1.0, -1.0], [1.0, -1.0] ], # Pairs for rho, m, E kinetic components
+            "relax_velocities" => [ [2.0, -2.0], [2.0, -2.0], [2.0, -2.0] ], # Pairs for rho, m, E kinetic components
         ),
         MethodDict( 
             "ARS222MUSCL2(minmod)" => ParamDict(

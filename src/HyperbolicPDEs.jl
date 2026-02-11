@@ -2,7 +2,7 @@ module HyperbolicPDEs
 
 export ScalarHyperbolicPDE, LinearAdvection, BurgersEquation, BurgersEquation2D, TestU3Equation,
        velocity, flux, HyperbolicPDESystem, Euler1D, Euler2D, pressure_from_euler_conserved,
-       HyperbolicPDE, n_dimensions, DiagonalHyperbolicSystem, LagrangianEuler1D
+       HyperbolicPDE, n_dimensions, DiagonalHyperbolicSystem
 
 # A PDE in D dimensions with N variables.
 abstract type HyperbolicPDE{D, N} end
@@ -109,36 +109,6 @@ function flux(eq::Euler1D, U)::NTuple{3, Float64}
     return (m, m * ux + p, (E + p) * ux)
 end
 
-# --- 1D Lagrangian Euler Equations ---
-struct LagrangianEuler1D <: HyperbolicPDESystem{1, 3} end
-
-# Helper to get pressure from Lagrangian state
-function pressure_from_lagrangian(V::Float64, u::Float64, e::Float64)::Float64
-    # e is total specific energy: internal energy + kinetic energy
-    # e = i + 0.5 * u^2  => i = e - 0.5 * u^2
-    internal_energy = e - 0.5 * u^2
-    
-    if V < 1e-9; V = 1e-9; end
-    
-    # P = (gamma - 1) * rho * internal_energy = (gamma - 1) * i / V
-    pressure = (GAS_GAMMA_EULER - 1.0) * internal_energy / V
-    return max(pressure, 1e-9)
-end
-
-function flux(eq::LagrangianEuler1D, W)::NTuple{3, Float64}
-    # W is the state vector: (Specific Volume, Velocity, Total Specific Energy)
-    V, u, e = W
-    
-    p = pressure_from_lagrangian(V, u, e)
-    
-    # The flux vector in Lagrangian coordinates (d/dt W + d/dm F = 0):
-    # 1. dV/dt - du/dm = 0      => Flux is -u
-    # 2. du/dt + dp/dm = 0      => Flux is p
-    # 3. de/dt + d(p*u)/dm = 0  => Flux is p*u
-    
-    return (-u, p, p * u)
-end
-
 # --- 2D Euler Equations ---
 struct Euler2D <: HyperbolicPDESystem{2, 4} end
 
@@ -164,73 +134,5 @@ function flux(eq::Euler2D, U)::NTuple{2, NTuple{4, Float64}}
     return (F, G)
 end
 
-"""
-    sound_speed(rho, p)
-Calculates the local speed of sound.
-"""
-@inline function sound_speed(rho::Real, p::Real)
-    return sqrt(GAS_GAMMA_EULER * p / rho)
-end
-
-"""
-    velocity(eq::Euler1D, U)
-Returns the characteristic speeds (eigenvalues) for the 1D Euler system.
-These are used for wave speeds and numerical flux dissipation (e.g., Rusanov).
-"""
-function velocity(eq::Euler1D, U)::NTuple{3, Float64}
-    rho, m, E = U
-    if rho < 1e-9
-        return (0.0, 0.0, 0.0)
-    end
-    
-    p = pressure_from_euler_conserved(rho, m, E)
-    u = m / rho
-    c = sound_speed(rho, p)
-    
-    return (u - c, u, u + c)
-end
-
-"""
-    fluid_velocity(eq::Euler1D, U)
-Returns the macroscopic fluid velocity (u). 
-Useful for Lagrangian grid movement (v_grid = u).
-"""
-@inline function fluid_velocity(eq::Euler1D, U)
-    return U[2] / U[1] # m / rho
-end
-
-"""
-    velocity(eq::Euler2D, U)
-Returns the eigenvalues in the x and y coordinate directions.
-Format: ((λx1, λx2, λx3, λx4), (λy1, λy2, λy3, λy4))
-"""
-function velocity(eq::Euler2D, U)::NTuple{2, NTuple{4, Float64}}
-    rho, mx, my, E = U
-    if rho < 1e-9
-        zero_vec = (0.0, 0.0, 0.0, 0.0)
-        return (zero_vec, zero_vec)
-    end
-    
-    p = pressure_from_euler_conserved(U)
-    ux = mx / rho
-    uy = my / rho
-    c = sound_speed(rho, p)
-    
-    # Eigenvalues for the x-direction (F flux)
-    vals_x = (ux - c, ux, ux, ux + c)
-    
-    # Eigenvalues for the y-direction (G flux)
-    vals_y = (uy - c, uy, uy, uy + c)
-    
-    return (vals_x, vals_y)
-end
-
-"""
-    fluid_velocity(eq::Euler2D, U)
-Returns the macroscopic fluid velocity vector (ux, uy).
-"""
-@inline function fluid_velocity(eq::Euler2D, U)
-    return (U[2] / U[1], U[3] / U[1]) # (mx/rho, my/rho)
-end
 
 end # Module

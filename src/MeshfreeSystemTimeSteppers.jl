@@ -242,6 +242,9 @@ function (imex_ts::GeneralIMEXTimeStepper{G1, G2, M, IS, ST_OBJ, BT})(
     grid_mover = imex_ts.grid_mover
     manage_particles!(system_pg) # After that N fix for this timestep
     update_grid_velocities!(system_pg, grid_mover)
+    grid_vels = system_pg.grid_velocities
+    #println(grid_vels)
+    #sleep(3)
     N_particles = system_pg[1].N 
     fill!(imex_ts.mood_triggered, false)
     # --- Loop through stages i = 1 to s ---
@@ -351,42 +354,37 @@ function (imex_ts::GeneralIMEXTimeStepper{G1, G2, M, IS, ST_OBJ, BT})(
                 initGI!(imex_ts.fallbackInterpolator[k], p_idx, fi, grid_k, neighbor_fs, neighbor_dfs)
             end
         end
-      
+        #println(grid_vels)
         # 3. Threaded loop to calculate divergence
         Threads.@threads for p_idx in 1:N_particles
-            u_grid = system_pg.grid_velocities[p_idx]
+            grid_vel = grid_vels[p_idx]
             for k in 1:N
                 grid_k = system_pg[k]
                 if grid_k.is_boundary[p_idx]; continue; end
-                
-        # --- ALE MAGIC HERE ---
-                # Create a LOCAL equation instance on the stack.
-                # This is essentially free (no allocation) and thread-safe.
-                
-                # 1. Get the global equation type to extract constant A
-                # (Assuming your scalar_equations uses the new LinearAdvectionALE{A} type)
+
                 eq = scalar_equations[k] 
                 
-                # 2. Compute effective velocity: a - u_grid
-                #v_eff = get_effective_vel(global_eq,u_grid)
-                
-                # 3. Instantiate local equation
-                #eq_local = LinearAdvection(v_eff)
-
-                #eq_k = scalar_equations[k]
                 fi = current_Y_i_sys[p_idx,k]
                 nb_slice = getNBSlice(grid_k, p_idx)
                 neighbor_fs = @view imex_ts.all_neighbor_fs[:,k]
                 neighbor_dfs = @view imex_ts.all_neighbor_dfs[:,k]
 
+                # # 2. Compute effective velocity: a - u_grid
+                # v_eff = get_effective_vel(eq,grid_vel)
+                
+                # # 3. Instantiate local equation
+                # eq_local = LinearAdvection(v_eff)
+
                 interp = imex_ts.gradientInterpolator[k]
-                div_high = interp(eq, p_idx, fi, nb_slice, grid_k, neighbor_fs, neighbor_dfs)
+                div_high = interp(eq, p_idx, fi, nb_slice, grid_k, neighbor_fs, neighbor_dfs) 
+                         - get_Lagrange_Correction(grid_mover, grid_vel, grid_k, nb_slice, neighbor_dfs,)
                 
                 rho_candidate = fi - dt * div_high # Candidate for MOOD
                 
                 if !(imex_ts.fallbackInterpolator isa NoFallbackGrad) && imex_ts.mood(imex_ts.gradientInterpolator[k], p_idx, fi, nb_slice, rho_candidate, grid_k, neighbor_fs)
                     fallback = imex_ts.fallbackInterpolator[k]
                     div_fallback = fallback(eq, p_idx, fi, nb_slice, grid_k, neighbor_fs, neighbor_dfs)
+                                 - get_Lagrange_Correction(grid_mover, grid_vel, grid_k, nb_slice, neighbor_dfs,) # Could be lower interpolation if needed
                     imex_ts.K_E_stages_sys[i][p_idx, k] = -div_fallback
                     imex_ts.mood_triggered[p_idx,k,i] = true
                 else
@@ -394,7 +392,6 @@ function (imex_ts::GeneralIMEXTimeStepper{G1, G2, M, IS, ST_OBJ, BT})(
                 end
             end
         end # End of component loop for K_E    
-
     end # End of stages loop
     
     for i in 1:s
