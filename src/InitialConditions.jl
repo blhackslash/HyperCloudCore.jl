@@ -3,6 +3,7 @@ module InitialConditions
 # Import necessary types from your main module. Adjust the path as needed.
 using ..HyperbolicPDEs
 using ..ParticleGrids
+using ..SourceTerms
 using LinearAlgebra
 using StaticArrays
 
@@ -44,9 +45,10 @@ end
 
 function setInitialConditions!(
     particleGrids_vec::AbstractVector, # e.g., Vector{ParticleGrid}
-    M_funcs_vec::AbstractVector,     # e.g., Vector{MaxwellianFunctor}
+    st::RelaxationSourceTerm,     # e.g., Vector{MaxwellianFunctor}
     IC::InitialCondition                               # The initial condition functor, e.g., an instance of Gauss
 )
+    M_funcs_vec = st.maxwellians
     # The number of kinetic descriptions can be found from the input vectors
     N_total_kinetic = length(particleGrids_vec)
 
@@ -60,6 +62,66 @@ function setInitialConditions!(
     end
 
     return nothing
+end
+
+function setInitialConditions!(
+    system_pg::ParticleGridSystem{NK, D},
+    st::NonLocalRelaxationSourceTerm{D, N, NK, PDE},
+    IC::InitialCondition
+) where {NK, D, N, PDE <:HyperbolicPDE{D,N}}
+    N_particles = system_pg[1].N
+    
+    # 1. Evaluate IC to fill macroscopic buffer U0
+    U0 = Matrix{Float64}(undef, N_particles, N)
+    for p_idx in 1:N_particles
+        u_val = IC(system_pg[1].positions[p_idx]...) 
+        for m in 1:N
+            U0[p_idx, m] = u_val[m]
+        end
+    end
+
+    # 2. Compute initial potential T[U^0] using current U0 matrix
+    update_potential_from_matrix!(st, system_pg, U0)
+
+    # 3. Initialize Kinetic Grids (v_k = M_k[U, T])
+    Threads.@threads for k in 1:NK
+        pg_k = system_pg[k]
+        m_idx = st.kin2macro(k) # Overloaded range lookup
+        coeff = st.coefficients[m_idx]
+        speed = st.relax_speeds[k]
+        
+        for p_idx in 1:N_particles
+            u_m = U0[p_idx, m_idx]
+            t_m = st.T_potential[p_idx, m_idx]
+            
+            # Initialize each kinetic component to equilibrium
+            pg_k.rhos[p_idx] = coeff * (u_m + st.interior_factor * t_m / speed)
+        end
+    end
+end
+
+function update_potential_from_matrix!(st, system_pg, U_matrix)
+    N_particles = size(U_matrix, 1)
+    ensure_buffer_size!(st, N_particles)
+    N_macro = size(U_matrix, 2)
+
+    # Parallel path integration
+    Threads.@threads for i in 2:N_particles
+        uL = ntuple(m -> U_matrix[i-1, m], Val(N_macro))
+        uR = ntuple(m -> U_matrix[i, m],   Val(N_macro))
+        jump = path_integral(st.system_eq, uL, uR) # [cite: 108]
+        for k in 1:N_macro
+            st.T_potential[i, k] = jump[k]
+        end
+    end
+
+    # Serial accumulation
+    for k in 1:N_macro; st.T_potential[1, k] = 0.0; end
+    for i in 2:N_particles
+        for k in 1:N_macro
+            st.T_potential[i, k] += st.T_potential[i-1, k]
+        end
+    end
 end
 
 "Gaussian distribution for scalar or system states."
@@ -372,6 +434,82 @@ function (ic::Box)(x::Real, t::Real, eq::BurgersEquation, pg::ParticleGrid1D)
             end
         end
     end
+end
+
+"""
+Analytical solution for the 1D Shock Tube (Physical Euler) using primitive variables.
+This follows the iterative approach to find the star-region pressure p_star.
+"""
+function (ic::Riemann{Float64, NTuple{3, Float64}})(x::Real, t::Real, eq::LEuler1D, pg::ParticleGrid1D)
+    if t <= 1e-10; return ic(x); end
+
+    gamma = GAS_GAMMA_EULER
+    rho_L, u_L, p_L = ic.uL
+    rho_R, u_R, p_R = ic.uR
+    x0 = ic.p0
+
+    # 1. Iterative solve for Star-Region Pressure (p_star)
+    c_L = sqrt(gamma * p_L / rho_L)
+    c_R = sqrt(gamma * p_R / rho_R)
+
+    # Function to solve f(p_star) = 0
+    f_wave(p_s, p_k, rho_k, c_k) = p_s > p_k ? 
+        (p_s - p_k) * sqrt((2.0/((gamma+1)*rho_k)) / (p_s + p_k*(gamma-1)/(gamma+1))) : # Shock
+        (2c_k/(gamma-1)) * ((p_s/p_k)^((gamma-1)/(2gamma)) - 1.0)                      # Rarefaction
+
+    p_star = 0.5 * (p_L + p_R) # Initial guess
+    for _ in 1:50
+        f = f_wave(p_star, p_L, rho_L, c_L) + f_wave(p_star, p_R, rho_R, c_R) + (u_R - u_L)
+        if abs(f) < 1e-8; break; end
+        # Numerical derivative for Newton step
+        df = (f_wave(p_star * 1.01, p_L, rho_L, c_L) + f_wave(p_star * 1.01, p_R, rho_R, c_R) + (u_R - u_L) - f) / (0.01 * p_star)
+        p_star = max(1e-9, p_star - f/df)
+    end
+
+    # 2. Velocity in Star Region
+    u_star = 0.5 * (u_L + u_R) + 0.5 * (f_wave(p_star, p_R, rho_R, c_R) - f_wave(p_star, p_L, rho_L, c_L))
+
+    # 3. Sample the solution at (x, t)
+    s = (x - x0) / t
+    rho, u, p = 0.0, 0.0, 0.0
+
+    if s < u_star # Left of Contact Discontinuity
+        if p_star > p_L # Left Shock
+            s_shock = u_L - c_L * sqrt(((gamma+1)/(2gamma))*(p_star/p_L) + (gamma-1)/(2gamma))
+            if s < s_shock; (rho, u, p) = (rho_L, u_L, p_L)
+            else; (rho, u, p) = (rho_L * (p_star/p_L + (gamma-1)/(gamma+1)) / (1 + (p_star/p_L)*(gamma-1)/(gamma+1)), u_star, p_star); end
+        else # Left Rarefaction
+            s_head = u_L - c_L
+            s_tail = u_star - c_L * (p_star/p_L)^((gamma-1)/(2gamma))
+            if s < s_head; (rho, u, p) = (rho_L, u_L, p_L)
+            elseif s > s_tail; (rho, u, p) = (rho_L * (p_star/p_L)^(1/gamma), u_star, p_star)
+            else # Inside fan
+                u = (2.0/(gamma+1)) * (c_L + (gamma-1)/2.0 * u_L + s)
+                c = c_L - (gamma-1)/2.0 * (u - u_L)
+                rho = rho_L * (c/c_L)^(2.0/(gamma-1))
+                p = p_L * (rho/rho_L)^gamma
+            end
+        end
+    else # Right of Contact Discontinuity
+        if p_star > p_R # Right Shock
+            s_shock = u_R + c_R * sqrt(((gamma+1)/(2gamma))*(p_star/p_R) + (gamma-1)/(2gamma))
+            if s > s_shock; (rho, u, p) = (rho_R, u_R, p_R)
+            else; (rho, u, p) = (rho_R * (p_star/p_R + (gamma-1)/(gamma+1)) / (1 + (p_star/p_R)*(gamma-1)/(gamma+1)), u_star, p_star); end
+        else # Right Rarefaction
+            s_head = u_R + c_R
+            s_tail = u_star + c_R * (p_star/p_R)^((gamma-1)/(2gamma))
+            if s > s_head; (rho, u, p) = (rho_R, u_R, p_R)
+            elseif s < s_tail; (rho, u, p) = (rho_R * (p_star/p_R)^(1/gamma), u_star, p_star)
+            else # Inside fan
+                u = (2.0/(gamma+1)) * (-c_R + (gamma-1)/2.0 * u_R + s)
+                c = c_R + (gamma-1)/2.0 * (u - u_R)
+                rho = rho_R * (c/c_R)^(2.0/(gamma-1))
+                p = p_R * (rho/rho_R)^gamma
+            end
+        end
+    end
+
+    return (rho, u, p)
 end
 
 function (ic::Riemann)(x::Real, t::Real, eq::BurgersEquation, pg::ParticleGrid1D)

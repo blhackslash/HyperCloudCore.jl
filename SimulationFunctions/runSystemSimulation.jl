@@ -47,12 +47,19 @@ function runSystemSimulation(params::ParamDictType)::Union{AbstractSimData, Noth
         local dimension::Int
         local N_macro_vars::Int
         local system_eq::HyperbolicPDESystem
-
+        lagrange = false
         if system_name == "euler1d"
             dimension = 1
             system_eq = Euler1D()
             N_macro_vars = 3 # rho, m, E
             vel_var = 2
+        elseif system_name == "leuler1d"
+            @assert !isnothing(grid_mover_name) "Langrangian Euler simulation needs grid movement!"
+            dimension = 1
+            system_eq = LEuler1D()
+            N_macro_vars = 3 # rho, u, p
+            vel_var = 2
+            lagrange = true
         elseif system_name == "euler2d"
             dimension = 2
             system_eq = Euler2D()
@@ -131,44 +138,101 @@ function runSystemSimulation(params::ParamDictType)::Union{AbstractSimData, Noth
         
         # Set Maxwellian parameters based on dimension
         int_factor = dimension == 1 ? 1.0 :  2.
-
-        global_k_idx = 1
-        for i_macro in 1:N_macro_vars
-            coeff = 1 / num_kinetic_per_macro[i_macro]
-            for speed in relax_velocities_config[i_macro]
-                kinetic_eqs_vec[global_k_idx] = LinearAdvection(speed)
-                
-                # In runSystemSimulation.jl and runScalarSimulation.jl
-                local i_dim::Int, relax_speed::Float64
-
-                if dimension == 1
-                    i_dim = 1
-                    relax_speed = speed
-                else # dimension == 2
-                    abs_vx = abs(speed[1])
-                    abs_vy = abs(speed[2])
-
-                    if abs_vx > abs_vy
+        local source_term
+        if lagrange
+    # 1. Create the non-allocating Kinetic-to-Macro mapper
+            
+            # 2. Configure the Kinetic Equations (Linear Advection)
+            # Note: In the non-conservative relaxation system, these represent 
+            # the transport of the state U and the auxiliary variable V[cite: 124, 125, 333].
+            relax_speeds = Vector{Float64}(undef,N_total_kinetic)
+            global_k_idx = 1
+            for i_macro in 1:N_macro_vars
+            for speed in relax_velocities_config[i_macro] # Removed enumerate(i)
+                    kinetic_eqs_vec[global_k_idx] = LinearAdvection(speed)
+                    if dimension == 1
                         i_dim = 1
-                        relax_speed = speed[1]
-                    else
-                        i_dim = 2
-                        relax_speed = speed[2]
-                    end
-                    
-                    # Critical check to prevent division by zero
-                    if abs(relax_speed) < 1e-14
-                        # If speed is (0,0), relax_speed is 0. We must handle this.
-                        # Option 1: Error out
-                        error("Relaxation speed for 2D velocity $speed is zero.")
-                    end
-                end
+                        relax_speed = speed
+                    else # dimension == 2
+                        abs_vx = abs(speed[1])
+                        abs_vy = abs(speed[2])
 
-                M_funcs_vec[global_k_idx] = MaxwellianFunctor(system_eq, i_macro, i_dim, relax_speed, coeff, int_factor)
-                global_k_idx += 1
+                        if abs_vx > abs_vy
+                            i_dim = 1
+                            relax_speed = speed[1]
+                        else
+                            i_dim = 2
+                            relax_speed = speed[2]
+                        end
+                        
+                        # Critical check to prevent division by zero
+                        if abs(relax_speed) < 1e-14
+                            # If speed is (0,0), relax_speed is 0. We must handle this.
+                            # Option 1: Error out
+                            error("Relaxation speed for 2D velocity $speed is zero.")
+                        end
+                    end
+                    relax_speeds[global_k_idx] = relax_speed
+                    global_k_idx += 1
+                end
             end
+            summation = 1
+            edges = Vector{Int}(undef,N_macro_vars + 1)
+            edges[1] = 1
+            for (k,kk) = enumerate(num_kinetic_per_macro); summation += kk; edges[k+1] = summation end 
+            km = Kin2Macro(edges)
+            coeffs = Tuple(map(x -> 1/x,num_kinetic_per_macro))
+            # 3. Create the Non-Local Source Term
+            # Instead of MaxwellianFunctors, we pass the System PDE directly.
+            # The NonLocalRelaxationSourceTerm will use eq.path and path_integral 
+            # to calculate T_j[cite: 125, 249].
+            source_term = NonLocalRelaxationSourceTerm(
+                system_eq, 
+                relax_eps, 
+                km,
+                coeffs,
+                Tuple(relax_speeds),
+                int_factor
+            )
+        else
+            global_k_idx = 1
+            for i_macro in 1:N_macro_vars
+                coeff = 1 / num_kinetic_per_macro[i_macro]
+                for speed in relax_velocities_config[i_macro]
+                    kinetic_eqs_vec[global_k_idx] = LinearAdvection(speed)
+                    
+                    # In runSystemSimulation.jl and runScalarSimulation.jl
+                    local i_dim::Int, relax_speed::Float64
+
+                    if dimension == 1
+                        i_dim = 1
+                        relax_speed = speed
+                    else # dimension == 2
+                        abs_vx = abs(speed[1])
+                        abs_vy = abs(speed[2])
+
+                        if abs_vx > abs_vy
+                            i_dim = 1
+                            relax_speed = speed[1]
+                        else
+                            i_dim = 2
+                            relax_speed = speed[2]
+                        end
+                        
+                        # Critical check to prevent division by zero
+                        if abs(relax_speed) < 1e-14
+                            # If speed is (0,0), relax_speed is 0. We must handle this.
+                            # Option 1: Error out
+                            error("Relaxation speed for 2D velocity $speed is zero.")
+                        end
+                    end
+
+                    M_funcs_vec[global_k_idx] = MaxwellianFunctor(system_eq, i_macro, i_dim, relax_speed, coeff, int_factor)
+                    global_k_idx += 1
+                end
+            end
+            source_term = RelaxationSourceTerm(M_funcs_vec, relax_eps, kinetic_to_macro_map)
         end
-        source_term = RelaxationSourceTerm(M_funcs_vec, relax_eps, kinetic_to_macro_map)
         
         # --- 5. Grid & Initial Condition Setup (Dimension-Aware) ---
         N_ghost = bc == :periodic ? 0 : ceil(Int, interp_range_factor) + 1
@@ -206,11 +270,6 @@ function runSystemSimulation(params::ParamDictType)::Union{AbstractSimData, Noth
         #    This creates a vector of tuples, e.g., [(rho,m,E)_1, (rho,m,E)_2, ...].
         #macro_ic_at_points = [IC(pos...) for pos in particleGrid_template.positions]
 
-        # 2. Create the tuple of particle grids for each kinetic component.
-        PG = typeof(particleGrid_template)
-        particleGrids_vec::Vector{PG} = [deepcopy(particleGrid_template) for _ in 1:N_total_kinetic]
-
-        setInitialConditions!(particleGrids_vec, M_funcs_vec, IC)
         
         # --- 6. Time Step Calculation (Dimension-Aware) ---
         local dt::Float64
@@ -295,7 +354,13 @@ function runSystemSimulation(params::ParamDictType)::Union{AbstractSimData, Noth
         
         # Convert to tuples for performance before passing to the integrator
         kinetic_eqs = Tuple(kinetic_eqs_vec)
-        particleGrids = ParticleGridSystem(Tuple(particleGrids_vec),kinetic_to_macro_map)
+
+        # 2. Create the tuple of particle grids for each kinetic component.
+        PG = typeof(particleGrid_template)
+        particleGrids = Tuple([deepcopy(particleGrid_template) for _ in 1:N_total_kinetic])
+
+        particleGrids = ParticleGridSystem(particleGrids,kinetic_to_macro_map)
+        setInitialConditions!(particleGrids, source_term, IC)
 
         elapsed_time, xs_data, sys_us_kinetic, ts = mainTimeIntegrator!(system_method, kinetic_eqs, particleGrids, settings; snapshots = snapshots, remove_ghosts = remove_ghosts)
         @info "System integration (D=$dimension) finished in $(round(elapsed_time, digits=2)) seconds."

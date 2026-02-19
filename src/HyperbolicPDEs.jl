@@ -2,7 +2,14 @@ module HyperbolicPDEs
 
 export ScalarHyperbolicPDE, LinearAdvection, BurgersEquation, BurgersEquation2D, TestU3Equation,
        velocity, flux, HyperbolicPDESystem, Euler1D, Euler2D, pressure_from_euler_conserved,
-       HyperbolicPDE, n_dimensions, DiagonalHyperbolicSystem
+       HyperbolicPDE, n_dimensions, DiagonalHyperbolicSystem, path_integral, LEuler1D
+
+abstract type DifferentialOrder end
+struct Order0 <: DifferentialOrder end
+struct Order1 <: DifferentialOrder end
+
+const DO0 = Order0() 
+const DO1 = Order1()
 
 # A PDE in D dimensions with N variables.
 abstract type HyperbolicPDE{D, N} end
@@ -12,8 +19,24 @@ abstract type ScalarHyperbolicPDE{D} <: HyperbolicPDE{D, 1} end
 
 # A helper for systems of PDEs
 abstract type HyperbolicPDESystem{D, N} <: HyperbolicPDE{D, N} end
+abstract type NCHyperbolicPDESystem{D, N} <: HyperbolicPDESystem{D, N} end
 
 const DiagonalHyperbolicSystem{N, D} = NTuple{N, <:ScalarHyperbolicPDE{D}}
+
+abstract type AbstractPath{N} end
+
+struct LinePath{N} <: AbstractPath{N} end
+
+# Functor definition
+function (lp::LinePath{N})(s, ul, ur, ::Order0) where N
+    # ntuple(f, N) creates a tuple (f(1), f(2), ..., f(N))
+    return ntuple(i -> ul[i] + s * (ur[i] - ul[i]), Val(N))
+end
+
+function (lp::LinePath{N})(s, ul, ur, ::Order1) where N
+    # ntuple(f, N) creates a tuple (f(1), f(2), ..., f(N))
+    return ntuple(i -> ur[i] - ul[i], Val(N))
+end
 
 #----------------------------------#
 # --- Scalar Equation Examples --- #
@@ -53,8 +76,6 @@ BurgersEquation(a::Float64) = BurgersEquation{a}()
 
 # This allows you to call BurgersEquation() and get the classic behavior (A=0.0)
 BurgersEquation() = BurgersEquation{0.0}()
-
-
 
 # 3. Define the Physics using the Type Parameter
 # We extract 'A' from the type using the 'where {A}' syntax.
@@ -109,6 +130,7 @@ function flux(eq::Euler1D, U)::NTuple{3, Float64}
     return (m, m * ux + p, (E + p) * ux)
 end
 
+
 # --- 2D Euler Equations ---
 struct Euler2D <: HyperbolicPDESystem{2, 4} end
 
@@ -133,6 +155,75 @@ function flux(eq::Euler2D, U)::NTuple{2, NTuple{4, Float64}}
     G = (rho * uy, rho * ux * uy, rho * uy^2 + p, (E + p) * uy)
     return (F, G)
 end
+"""
+Lagrangian Euler implementation using primitive variables, i.e. 
+U = (ρ,u,p) and A(U) matrix: [[0,ρ,0],[0,0,1/ρ],[0,γp,0]]
+"""
+struct LEuler1D{P} <: HyperbolicPDESystem{1, 3}
+    path::P
+    function LEuler1D(;path::P = LinePath{3}()) where P <: AbstractPath{3}
+        new{P}(path)
+    end
+end
 
+# Abstract definition
+function path_integral(eq::HyperbolicPDE, u_left::Tuple, u_right::Tuple)
+    error("path_integral not implemented for $(typeof(eq))")
+end
+
+# --- Helper: Matrix-Vector Product for Non-Conservative Systems ---
+# To avoid heap-allocated matrices, we define A(U)*v directly as a Tuple.
+function A_matrix_times_vector(eq::HyperbolicPDE, U::Tuple, v::Tuple)
+    error("A_matrix_times_vector not implemented for $(typeof(eq))")
+end
+
+# Implementation for LEuler1D (Primitive Euler)
+# A(U) = [[0, rho, 0], [0, 0, 1/rho], [0, gamma*p, 0]]
+@inline function A_matrix_times_vector(::LEuler1D, U::Tuple, v::Tuple)
+    rho, u, p = U
+    v1, v2, v3 = v
+    # Result = [rho*v2, (1/rho)*v3, (gamma*p)*v2]
+    return (rho * v2, (1.0 / rho) * v3, GAS_GAMMA_EULER * p * v2)
+end
+
+# --- Numerical Integration: 5-point Gauss-Lobatto ---
+# Weights and nodes for [0, 1]
+@inline function gauss_lobatto_5()
+    # Nodes s_i
+    nodes = (0.0, (5.0 - sqrt(5.0)) / 10.0, 0.5, (5.0 + sqrt(5.0)) / 10.0, 1.0)
+    # Weights w_i
+    weights = (0.1, 25.0 / 60.0, 16.0 / 60.0, 25.0 / 60.0, 0.1)
+    return nodes, weights
+end
+
+"""
+Calculates the path integral ∫ A(Φ(s)) ∂sΦ ds numerically. [cite: 89, 249]
+This version is specialized for N-component systems to ensure zero allocation.
+"""
+@inline function path_integral(eq::HyperbolicPDE{D, N}, uL::NTuple{N, Float64}, uR::NTuple{N, Float64}) where {D, N}
+    nodes, weights = gauss_lobatto_5()
+    path = eq.path # Assumes path is stored in the PDE struct
+
+    # Initialize the integral tuple with zeros
+    integral = ntuple(_ -> 0.0, Val(N))
+
+    # Loop over 5 quadrature points
+    for i in 1:5
+        s = nodes[i]
+        w = weights[i]
+        
+        # Phi(s) and dPhi(s) [cite: 79]
+        U_s = path(s, uL, uR, DO0)
+        dU_s = path(s, uL, uR, DO1)
+        
+        # Compute A(U_s) * dU_s
+        term = A_matrix_times_vector(eq, U_s, dU_s)
+        
+        # Accumulate: integral += w * term
+        integral = ntuple(k -> integral[k] + w * term[k], Val(N))
+    end
+    
+    return integral
+end
 
 end # Module

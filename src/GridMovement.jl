@@ -141,17 +141,13 @@ function update_grid_velocities!(pgs::ParticleGridSystem{N_grids, 1}, ::Physical
     # 2. Loop over particles (Thread-safe here)
     Threads.@threads for i in 1:N
         # A. Calculate total rho for the "driving" species
-        rho_sum = 0.0
-        for k in pgs.kinetic_indices[1]
-            rho_sum += pgs.grids[k].rhos[i]
-        end
-        mom_sum = 0.0
+        vel_sum = 0.0
         for k in pgs.kinetic_indices[2]
-            mom_sum += pgs.grids[k].rhos[i]
+            vel_sum += pgs.grids[k].rhos[i]
         end
         # B. Calculate u_grid based on specific physics
 
-        u_grid = mom_sum / rho_sum
+        u_grid = vel_sum
         #u_grid = mom_sum
         # C. Store in buffer
         grid_vels[i] = u_grid
@@ -190,28 +186,6 @@ function update_grid_velocities!(pgs::ParticleGridSystem{N_grids,1},::PhysicalGr
         # C. Store in buffer
         grid_vels[i] = u_grid
     end
-end
-
-function get_Lagrange_Correction(gm::PhysicalGridMover{E,Interpolator{1,1,1}}, vel::Real, pg::ParticleGrid1D, nb_slice::UnitRange, dfVec::AbstractVector ) where {E}
-    dw = pg.neighbor_weights
-    dx = pg.neighbor_xdistance
-    res = gm.interpolator(nb_slice,dx,dw,dfVec;scale = pg.dx)
-    #print(res[1],":")
-    return res[1] * vel
-end
-function get_Lagrange_Correction(gm::NoGridMover, kwargs...)
-    return 0.
-end
-
-@inline function get_effective_vel(eq::ScalarHyperbolicPDE{1},vel::Real)
-    v = eq.vel[1]
-    return v - sign(v) * vel
-end
-
-@inline function get_effective_vel(eq::ScalarHyperbolicPDE{2},vel::NTuple{2,Float64})
-    vx = eq.vel[1]
-    vy = eq.vel[2]
-    return vx - sign(vx) *vel[1], vy - sign(vy) * vel[2]
 end
 
 end

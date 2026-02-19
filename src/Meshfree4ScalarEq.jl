@@ -12,7 +12,7 @@ using Logging
 function __init__()
     # This code will run once when the module is loaded.
     # It sets the logger for the entire application.
-    min_level_to_show = Logging.Warn
+    min_level_to_show = Logging.Info
     global_logger(ConsoleLogger(stderr, min_level_to_show))
     println("Logger initialized to show ",min_level_to_show,"-Level.")
 end
@@ -33,12 +33,6 @@ using .SimSettings
 
 # Minimal internal Dependencies (HyperbolicPDEs)
 
-include("SourceTerms.jl")
-using .SourceTerms
-
-include("ImplicitSolvers.jl")
-using .ImplicitSolvers
-
 include("FluxFunctions.jl")
 using .FluxFunctions
 
@@ -46,6 +40,12 @@ using .FluxFunctions
 
 include("ParticleGrids.jl")
 using .ParticleGrids
+
+include("SourceTerms.jl")
+using .SourceTerms
+
+include("ImplicitSolvers.jl")
+using .ImplicitSolvers
 
 include("InitialConditions.jl")
 using .InitialConditions

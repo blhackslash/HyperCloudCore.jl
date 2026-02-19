@@ -125,4 +125,33 @@ function solve!(
     return true 
 end
 
+# In ImplicitSolvers.jl
+
+# In ImplicitSolvers.jl
+
+function solve!(
+    ::LinearizedRelaxationImplicitSolver,
+    V_out::AbstractVector{Float64},         
+    dt_coeff::Float64,              
+    st::NonLocalRelaxationSourceTerm{D, N, NK},     
+    p_idx::Int, 
+    args...
+)::Bool where {D, N, NK}
+    epsilon = st.epsilon
+    coeff_sum_inv = 1.0 / (epsilon + dt_coeff)
+
+    @inbounds for k in 1:NK
+        v_star = V_out[k]
+        # Use overloaded functor to find the macro variable index
+        m_idx = st.kin2macro(k)
+        
+        # Access pre-computed potential T_j for macro variable m_idx 
+        T_val = st.T_potential[p_idx, m_idx]
+        
+        # Equation (40) update: V^{n+1} = (eps*V* + dt*T) / (eps + dt) [cite: 260]
+        V_out[k] = (epsilon * v_star + dt_coeff * T_val) * coeff_sum_inv
+    end
+    return true 
+end
+
 end # Module ImplicitSolvers

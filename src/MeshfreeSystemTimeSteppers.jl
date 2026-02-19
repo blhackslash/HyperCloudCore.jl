@@ -286,7 +286,11 @@ function (imex_ts::GeneralIMEXTimeStepper{G1, G2, M, IS, ST_OBJ, BT})(
                 current_Y_i_sys[p_idx, k] = y_particle_k
             end
         end
-        
+        if imex_ts.source_term_object isa NonLocalRelaxationSourceTerm
+            # Synchronize the potential buffer based on current stage values U [cite: 285, 471]
+            # system_pg contains the kinetic variables v_k that sum to macro U [cite: 492]
+            update_nonlocal_potential!(imex_ts.source_term_object, system_pg)
+        end
 # --- REFACTORED: Implicit Solve (Now Parallel) ---
         if abs(bt.A[i,i]) > 1e-14
             time_implicit = time_n + bt.c[i] * dt
@@ -305,7 +309,7 @@ function (imex_ts::GeneralIMEXTimeStepper{G1, G2, M, IS, ST_OBJ, BT})(
                 ImplicitSolvers.solve!(imex_ts.implicit_solver,
                     u_particle_view, # <-- Pass the view directly
                     dt * bt.A[i,i],
-                    imex_ts.source_term_object, 
+                    imex_ts.source_term_object, p_idx,
                     system_pg[1].positions[p_idx], 
                     time_implicit, N_components
                 )
@@ -322,7 +326,7 @@ function (imex_ts::GeneralIMEXTimeStepper{G1, G2, M, IS, ST_OBJ, BT})(
                 # term might apply to all particles (e.g., gravity)
                 imex_ts.source_term_object(
                     @view(imex_ts.K_I_stages_sys[i][p_idx, :]), 
-                    @view(current_Y_i_sys[p_idx, :]), 
+                    @view(current_Y_i_sys[p_idx, :]), p_idx,
                     system_pg[1].positions[p_idx], 
                     time_implicit_for_KI
                 )
@@ -377,14 +381,14 @@ function (imex_ts::GeneralIMEXTimeStepper{G1, G2, M, IS, ST_OBJ, BT})(
 
                 interp = imex_ts.gradientInterpolator[k]
                 div_high = interp(eq, p_idx, fi, nb_slice, grid_k, neighbor_fs, neighbor_dfs) 
-                         - get_Lagrange_Correction(grid_mover, grid_vel, grid_k, nb_slice, neighbor_dfs,)
+                         #- get_Lagrange_Correction(grid_mover, grid_vel, grid_k, nb_slice, neighbor_dfs,)
                 
                 rho_candidate = fi - dt * div_high # Candidate for MOOD
                 
                 if !(imex_ts.fallbackInterpolator isa NoFallbackGrad) && imex_ts.mood(imex_ts.gradientInterpolator[k], p_idx, fi, nb_slice, rho_candidate, grid_k, neighbor_fs)
                     fallback = imex_ts.fallbackInterpolator[k]
                     div_fallback = fallback(eq, p_idx, fi, nb_slice, grid_k, neighbor_fs, neighbor_dfs)
-                                 - get_Lagrange_Correction(grid_mover, grid_vel, grid_k, nb_slice, neighbor_dfs,) # Could be lower interpolation if needed
+                                 #- get_Lagrange_Correction(grid_mover, grid_vel, grid_k, nb_slice, neighbor_dfs,) # Could be lower interpolation if needed
                     imex_ts.K_E_stages_sys[i][p_idx, k] = -div_fallback
                     imex_ts.mood_triggered[p_idx,k,i] = true
                 else
