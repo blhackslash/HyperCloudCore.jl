@@ -91,6 +91,7 @@ function solve!(
     Y_out_particle::AbstractVector{Float64},         
     dt_coefficient_for_S::Float64,              
     source_term_object::RelaxationSourceTerm,     
+    p_idx::Int,
     particle_pos::Any,                      
     time_for_S_eval::Real,                      
     N_total_kinetic_components_arg::Int      
@@ -139,17 +140,17 @@ function solve!(
 )::Bool where {D, N, NK}
     epsilon = st.epsilon
     coeff_sum_inv = 1.0 / (epsilon + dt_coeff)
-
-    @inbounds for k in 1:NK
+    u_macro = st.kin2macro(V_out)
+@inbounds for k in 1:NK
         v_star = V_out[k]
-        # Use overloaded functor to find the macro variable index
         m_idx = st.kin2macro(k)
-        
-        # Access pre-computed potential T_j for macro variable m_idx 
         T_val = st.T_potential[p_idx, m_idx]
         
-        # Equation (40) update: V^{n+1} = (eps*V* + dt*T) / (eps + dt) [cite: 260]
-        V_out[k] = (epsilon * v_star + dt_coeff * T_val) * coeff_sum_inv
+        # The correct equilibrium: Mk = coeff * (U + factor * T / lambda)
+        Mk_val = st.coefficients[k] * (u_macro[m_idx] + st.interior_factor * T_val / st.relax_speeds[k])
+        
+        # Standard implicit relaxation update
+        V_out[k] = (epsilon * v_star + dt_coeff * Mk_val) * coeff_sum_inv
     end
     return true 
 end

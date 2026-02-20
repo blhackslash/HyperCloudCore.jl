@@ -246,6 +246,7 @@ function (imex_ts::GeneralIMEXTimeStepper{G1, G2, M, IS, ST_OBJ, BT})(
     #println(grid_vels)
     #sleep(3)
     N_particles = system_pg[1].N 
+    println(N_particles)
     fill!(imex_ts.mood_triggered, false)
     # --- Loop through stages i = 1 to s ---
     for i in 1:s
@@ -286,10 +287,10 @@ function (imex_ts::GeneralIMEXTimeStepper{G1, G2, M, IS, ST_OBJ, BT})(
                 current_Y_i_sys[p_idx, k] = y_particle_k
             end
         end
+
         if imex_ts.source_term_object isa NonLocalRelaxationSourceTerm
-            # Synchronize the potential buffer based on current stage values U [cite: 285, 471]
-            # system_pg contains the kinetic variables v_k that sum to macro U [cite: 492]
-            update_nonlocal_potential!(imex_ts.source_term_object, system_pg)
+            # Pass 'current_Y_i_sys' so we use the stage values for the potential
+            update_nonlocal_potential!(imex_ts.source_term_object, current_Y_i_sys, system_pg)
         end
 # --- REFACTORED: Implicit Solve (Now Parallel) ---
         if abs(bt.A[i,i]) > 1e-14

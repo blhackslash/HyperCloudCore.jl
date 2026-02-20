@@ -78,6 +78,7 @@ function (gm::GridMover)(pgs::ParticleGridSystem{N_grids,1}, dt::Real; managed =
             manage_particles!(pg) 
             updateNeighbors!(pg)
         end
+        #println(positions)
     end
 end 
 
@@ -111,7 +112,7 @@ function update_grid_velocities!(pgs::ParticleGridSystem{N_grids, 1}, ::Physical
     for i in 1:N
         # A. Calculate total rho for the "driving" species
         rho_sum = 0.0
-        for k in pgs.kinetic_indices[1]
+        for k in pgs.vel_vars
             rho_sum += pgs.grids[k].rhos[i]
         end
         
@@ -123,36 +124,39 @@ function update_grid_velocities!(pgs::ParticleGridSystem{N_grids, 1}, ::Physical
         # C. Store in buffer
         grid_vels[i] = u_grid
     end
+    println(grid_vels[1:N])
+    sleep(3)
 end
 
-"""
-    update_grid_velocities!(pgs::ParticleGridSystem, system_eqs)
+# """
+#     update_grid_velocities!(pgs::ParticleGridSystem, system_eqs)
 
-Calculates the grid velocity for every particle based on the densities of the 
-species specified in `pgs.velocity_indices`.
-"""
-function update_grid_velocities!(pgs::ParticleGridSystem{N_grids, 1}, ::PhysicalGridMover{Euler1D,I}) where {N_grids,I}
-    # 1. Access the buffer and grids
-    grid_vels = pgs.grid_velocities
-    N = pgs.grids[1].N
-    if length(grid_vels) < N
-        resize!(grid_vels, Int(ceil(N * 1.2)))
-    end
-    # 2. Loop over particles (Thread-safe here)
-    Threads.@threads for i in 1:N
-        # A. Calculate total rho for the "driving" species
-        vel_sum = 0.0
-        for k in pgs.kinetic_indices[2]
-            vel_sum += pgs.grids[k].rhos[i]
-        end
-        # B. Calculate u_grid based on specific physics
+# Calculates the grid velocity for every particle based on the densities of the 
+# species specified in `pgs.velocity_indices`.
+# """
+# function update_grid_velocities!(pgs::ParticleGridSystem{N_grids, 1}, ::PhysicalGridMover{LEuler1D{P},I}) where {P,N_grids,I}
+#     # 1. Access the buffer and grids
+#     grid_vels = pgs.grid_velocities
+#     N = pgs.grids[1].N
+#     if length(grid_vels) < N
+#         resize!(grid_vels, Int(ceil(N * 1.2)))
+#     end
+#     # 2. Loop over particles (Thread-safe here)
+#     Threads.@threads for i in 1:N
+#         # A. Calculate total rho for the "driving" species
+#         vel_sum = 0.0
+#         for k in pgs.vel_vars
+#             vel_sum += pgs.grids[k].rhos[i]
+#         end
+#         # B. Calculate u_grid based on specific physics
 
-        u_grid = vel_sum
-        #u_grid = mom_sum
-        # C. Store in buffer
-        grid_vels[i] = u_grid
-    end
-end
+#         u_grid = vel_sum
+#         #u_grid = mom_sum
+#         # C. Store in buffer
+#         grid_vels[i] = u_grid
+#     end
+#     println(grid_vels)
+# end
 
 function update_grid_velocities!(pgs::ParticleGridSystem{N_grids, 1}, ::NoGridMover) where {N_grids}
     return
@@ -174,7 +178,7 @@ function update_grid_velocities!(pgs::ParticleGridSystem{N_grids,1},::PhysicalGr
     Threads.@threads for i in 1:N
         # A. Calculate total rho for the "driving" species
         rho_sum = 0.0
-        for k in pgs.kinetic_indices[1]
+        for k in pgs.vel_vars
             rho_sum += pgs.grids[k].rhos[i]
         end
         

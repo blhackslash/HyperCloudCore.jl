@@ -38,7 +38,7 @@ function main()
         ParamDict(
             "tmax" => 0.2, "N" => 100, "bc" => :fixed_dirichlet,
             "xmin" => -0.5, "xmax" => .5, 
-            "dt" => 0.01, "snapshots" => 21, 
+            "dt" => 0.001, "snapshots" => 21, 
             "interp_alpha" => 1.0, "interp_range" => 3.5, # Factor for dx
             #"init_func" => "eulerShockTube",
             "init_func" => "riemann", 
@@ -215,8 +215,8 @@ function main()
             )
         ),
         #"Analytical Solution"
-        #"ARS222Upwind"
-        ["ARS222MUSCL2MOOD","Analytical Solution","ARS222MUSCL2","ARS222Upwind"]
+        "ARS222Upwind"
+        #["ARS222MUSCL2MOOD","Analytical Solution","ARS222MUSCL2","ARS222Upwind"]
         #["ARS233MUSCL2","ARS233MUSCL3","ARS233MUSCL4"]
         #["ARS222MUSCL2MOOD2","ARS222MUSCL2(VK)", "SSMUSCL4MOOD","SSP3MUSCL2MOOD", "ARS222Upwind","Analytical Solution", "SSMUSCL2MOOD","ARS222MUSCL2", "ARS222MUSCL2(minmod)", "ARS222MUSCL2MOOD"]
         #["ARS222Upwind(fixedGrid)", "ARS222MUSCL2limiter", "ARS233MUSCL5MOOD", "ARS222MUSCL2MOOD", "ARS222MUSCL5MOOD","ARS222MUSCL2"]
@@ -224,9 +224,9 @@ function main()
 
     params =
         ParamDict(
-            "tmax" => 0.2, "N" => 100, "bc" => :fixed_dirichlet,
+            "tmax" => 0.2, "N" => 50, "bc" => :fixed_dirichlet,
             "xmin" => -0.5, "xmax" => .5, 
-            "dt" => 0.01, "snapshots" => 21, 
+            "dt" => 0.001, "snapshots" => 21, 
             "interp_alpha" => 1.0, "interp_range" => 3.5, # Factor for dx
             #"init_func" => "eulerShockTube",
             "init_func" => "riemann", 

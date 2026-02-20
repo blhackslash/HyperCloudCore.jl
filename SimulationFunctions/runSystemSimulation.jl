@@ -138,6 +138,11 @@ function runSystemSimulation(params::ParamDictType)::Union{AbstractSimData, Noth
         
         # Set Maxwellian parameters based on dimension
         int_factor = dimension == 1 ? 1.0 :  2.
+        summation = 1
+        edges = Vector{Int}(undef,N_macro_vars + 1)
+        edges[1] = 1
+        for (k,kk) = enumerate(num_kinetic_per_macro); summation += kk; edges[k+1] = summation end 
+        km = Kin2Macro(edges)
         local source_term
         if lagrange
     # 1. Create the non-allocating Kinetic-to-Macro mapper
@@ -176,11 +181,7 @@ function runSystemSimulation(params::ParamDictType)::Union{AbstractSimData, Noth
                     global_k_idx += 1
                 end
             end
-            summation = 1
-            edges = Vector{Int}(undef,N_macro_vars + 1)
-            edges[1] = 1
-            for (k,kk) = enumerate(num_kinetic_per_macro); summation += kk; edges[k+1] = summation end 
-            km = Kin2Macro(edges)
+
             coeffs = Tuple(map(x -> 1/x,num_kinetic_per_macro))
             # 3. Create the Non-Local Source Term
             # Instead of MaxwellianFunctors, we pass the System PDE directly.
@@ -359,9 +360,8 @@ function runSystemSimulation(params::ParamDictType)::Union{AbstractSimData, Noth
         PG = typeof(particleGrid_template)
         particleGrids = Tuple([deepcopy(particleGrid_template) for _ in 1:N_total_kinetic])
 
-        particleGrids = ParticleGridSystem(particleGrids,kinetic_to_macro_map)
+        particleGrids = ParticleGridSystem(particleGrids,km[vel_var])
         setInitialConditions!(particleGrids, source_term, IC)
-
         elapsed_time, xs_data, sys_us_kinetic, ts = mainTimeIntegrator!(system_method, kinetic_eqs, particleGrids, settings; snapshots = snapshots, remove_ghosts = remove_ghosts)
         @info "System integration (D=$dimension) finished in $(round(elapsed_time, digits=2)) seconds."
 

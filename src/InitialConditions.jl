@@ -44,10 +44,10 @@ function setInitialConditions!(particleGrid::ParticleGrid{2}, IC::InitialConditi
 end
 
 function setInitialConditions!(
-    particleGrids_vec::AbstractVector, # e.g., Vector{ParticleGrid}
+    particleGrids_vec::ParticleGridSystem{NK, D}, # e.g., Vector{ParticleGrid}
     st::RelaxationSourceTerm,     # e.g., Vector{MaxwellianFunctor}
     IC::InitialCondition                               # The initial condition functor, e.g., an instance of Gauss
-)
+) where {NK,D}
     M_funcs_vec = st.maxwellians
     # The number of kinetic descriptions can be found from the input vectors
     N_total_kinetic = length(particleGrids_vec)

@@ -19,6 +19,12 @@ struct Kin2Macro{N}
     ranges::NTuple{N,UnitRange{Int}}
 end
 
+# Helper to support iteration/indexing like a Tuple (backward compatibility)
+Base.getindex(km::Kin2Macro, i::Int) = km.ranges[i]
+Base.length(km::Kin2Macro) = length(km.ranges)
+Base.iterate(km::Kin2Macro, state=1) = iterate(km.ranges, state)
+Base.eachindex(km::Kin2Macro) = eachindex(km.ranges)
+
 # Constructor from the original nested list logic
 function Kin2Macro(edges::Union{AbstractVector{Int},Tuple})
     N = length(edges) - 1
@@ -28,7 +34,7 @@ function Kin2Macro(edges::Union{AbstractVector{Int},Tuple})
 end
 
 # Functor 1: Reconstruct Macro Tuple (v_kinetic -> u_macro)
-@inline function (km::Kin2Macro{N})(v::Tuple) where {N}
+@inline function (km::Kin2Macro{N})(v::Union{Tuple,AbstractVector}) where {N}
     ntuple(i -> sum(v[km.ranges[i]]),Val(N))
     # return ntuple(Val(NM)) do i
     #     val = 0.0
@@ -268,6 +274,38 @@ function update_nonlocal_potential!(
         end
     end
     
+    # Phase 2: Serial accumulation to form the non-local potential T_j [cite: 281]
+    for k in 1:N
+        st.T_potential[1, k] = 0.0 
+    end
+
+    for i in 2:N_particles
+        for k in 1:N
+            st.T_potential[i, k] += st.T_potential[i-1, k]
+        end
+    end
+end
+
+# Overload to update potential from a Matrix (current stage values)
+function update_nonlocal_potential!(
+    st::NonLocalRelaxationSourceTerm{D,N,NK,PDE}, 
+    stage_data::AbstractMatrix{Float64},
+    system_pg::ParticleGridSystem
+) where {D,N,NK,PDE<:HyperbolicPDESystem{D,N}}
+    N_particles = system_pg[1].N
+    ensure_buffer_size!(st, N_particles)
+    
+    Threads.@threads for i in 2:N_particles
+        # Read from stage_data matrix instead of pgs.grids
+        v_L = ntuple(k -> stage_data[i-1, k], Val(NK))
+        v_R = ntuple(k -> stage_data[i, k],   Val(NK))
+        
+        u_L = st.kin2macro(v_L)
+        u_R = st.kin2macro(v_R)
+        
+        jump = path_integral(st.system_eq, u_L, u_R)
+        for k in 1:N; st.T_potential[i, k] = jump[k]; end
+    end
     # Phase 2: Serial accumulation to form the non-local potential T_j [cite: 281]
     for k in 1:N
         st.T_potential[1, k] = 0.0 

@@ -40,16 +40,16 @@ A container for a coupled system of particle grids.
 """
 struct ParticleGridSystem{N_grids, D}
     grids::NTuple{N_grids, ParticleGrid{D}}
-    kinetic_indices::Tuple
+    vel_vars::UnitRange{Int}
     grid_velocities::Vector{Float64} # For 1D (use Vector{SVector{2,Float64}} for 2D)
 
-    function ParticleGridSystem(grids::NTuple{N_grids, ParticleGrid{D}}, velocity_indices) where {N_grids,D}
+    function ParticleGridSystem(grids::NTuple{N_grids, ParticleGrid{D}}, velocity_indices::UnitRange{Int}) where {N_grids,D}
         N_particles = grids[1].N # Assuming all grids have same N (coupled)
         
         # Pre-allocate buffer for grid velocities
         grid_vels = zeros(Float64, N_particles)
         
-        new{N_grids, D}(grids, Tuple(velocity_indices), grid_vels)
+        new{N_grids, D}(grids, velocity_indices, grid_vels)
     end
 end
 
