@@ -2,7 +2,7 @@ module HyperbolicPDEs
 
 export ScalarHyperbolicPDE, LinearAdvection, BurgersEquation, BurgersEquation2D, TestU3Equation,
        velocity, flux, HyperbolicPDESystem, Euler1D, Euler2D, pressure_from_euler_conserved,
-       HyperbolicPDE, n_dimensions, DiagonalHyperbolicSystem, path_integral, LEuler1D
+       HyperbolicPDE, n_dimensions, DiagonalHyperbolicSystem, path_integral, LEuler1D, LinePath
 
 abstract type DifferentialOrder end
 struct Order0 <: DifferentialOrder end
@@ -185,14 +185,37 @@ end
     # Result = [rho*v2, (1/rho)*v3, (gamma*p)*v2]
     return (rho * v2, (1.0 / rho) * v3, GAS_GAMMA_EULER * p * v2)
 end
+# In HyperbolicPDEs.jl or your test script
 
-# --- Numerical Integration: 5-point Gauss-Lobatto ---
-# Weights and nodes for [0, 1]
 @inline function gauss_lobatto_5()
-    # Nodes s_i
-    nodes = (0.0, (5.0 - sqrt(5.0)) / 10.0, 0.5, (5.0 + sqrt(5.0)) / 10.0, 1.0)
-    # Weights w_i
-    weights = (0.1, 25.0 / 60.0, 16.0 / 60.0, 25.0 / 60.0, 0.1)
+    # Standard 5-point Lobatto nodes on [-1, 1] are: -1, -sqrt(3/7), 0, sqrt(3/7), 1
+    # Transformed to [0, 1] using s = (x + 1) / 2
+    s2_offset = 0.5 * sqrt(3/7)
+    nodes = (
+        0.0, 
+        0.5 - s2_offset, 
+        0.5, 
+        0.5 + s2_offset, 
+        1.0
+    )
+    
+    # Standard 5-point Lobatto weights on [-1, 1] are: 1/10, 49/90, 32/45, 49/90, 1/10
+    # Transformed to [0, 1] using W = w / 2
+    weights = (
+        1/20,      # 0.05
+        49/180,    # ~0.2722
+        16/45,     # ~0.3555
+        49/180, 
+        1/20
+    )
+    return nodes, weights
+end
+
+@inline function simpson_3_point()
+    # Nodes on [0, 1]
+    nodes = (0.0, 0.5, 1.0)
+    # Weights (must sum to 1.0)
+    weights = (1/6, 4/6, 1/6)
     return nodes, weights
 end
 
@@ -201,28 +224,29 @@ Calculates the path integral ∫ A(Φ(s)) ∂sΦ ds numerically. [cite: 89, 249]
 This version is specialized for N-component systems to ensure zero allocation.
 """
 @inline function path_integral(eq::HyperbolicPDE{D, N}, uL::NTuple{N, Float64}, uR::NTuple{N, Float64}) where {D, N}
-    nodes, weights = gauss_lobatto_5()
+    nodes, weights = simpson_3_point()
     path = eq.path # Assumes path is stored in the PDE struct
 
     # Initialize the integral tuple with zeros
     integral = ntuple(_ -> 0.0, Val(N))
 
     # Loop over 5 quadrature points
-    for i in 1:5
+    for i in eachindex(nodes)
         s = nodes[i]
         w = weights[i]
         
         # Phi(s) and dPhi(s) [cite: 79]
         U_s = path(s, uL, uR, DO0)
         dU_s = path(s, uL, uR, DO1)
-        
+        println("path values: ",U_s,dU_s,uL,uR)
         # Compute A(U_s) * dU_s
         term = A_matrix_times_vector(eq, U_s, dU_s)
-        
+        print("integrand:",term)
         # Accumulate: integral += w * term
         integral = ntuple(k -> integral[k] + w * term[k], Val(N))
     end
-    
+    #print(integral)
+    if maximum(integral) > 1000; error("Integral too large!") end
     return integral
 end
 

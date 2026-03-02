@@ -289,21 +289,23 @@ function (imex_ts::GeneralIMEXTimeStepper{G1, G2, M, IS, ST_OBJ, BT})(
         end
 
         if imex_ts.source_term_object isa NonLocalRelaxationSourceTerm
+            println("Matrix: " ,current_Y_i_sys)
             # Pass 'current_Y_i_sys' so we use the stage values for the potential
             update_nonlocal_potential!(imex_ts.source_term_object, current_Y_i_sys, system_pg)
+           
         end
 # --- REFACTORED: Implicit Solve (Now Parallel) ---
         if abs(bt.A[i,i]) > 1e-14
             time_implicit = time_n + bt.c[i] * dt
             
             # Use @threads over the chunks for good load balancing
-            Threads.@threads for p_idx in 1:N_particles
-                if system_pg[1].is_boundary[p_idx]; continue; end
+            for p_idx in 1:N_particles
+                #if system_pg[1].is_boundary[p_idx]; continue; end
 
                 # --- OPTIMIZED: Remove all copying ---
                 # 1. Get a direct view of the particle's state
                 u_particle_view = @view current_Y_i_sys[p_idx, :]
-
+                println("solve: ",u_particle_view)
                 # 3. Pass the *view* as the iteration buffer.
                 #    The solver will read from Y_base_buffer
                 #    and write/iterate directly into current_Y_i_sys[p_idx, :].
@@ -314,6 +316,7 @@ function (imex_ts::GeneralIMEXTimeStepper{G1, G2, M, IS, ST_OBJ, BT})(
                     system_pg[1].positions[p_idx], 
                     time_implicit, N_components
                 )
+                print("solve: " ,u_particle_view)
             end
         end
         # ==================================================================
@@ -322,15 +325,17 @@ function (imex_ts::GeneralIMEXTimeStepper{G1, G2, M, IS, ST_OBJ, BT})(
         # (This part is sequential and remains unchanged)
         time_implicit_for_KI = time_n + bt.c[i] * dt 
         
-        Threads.@threads for p_idx in 1:N_particles
+        for p_idx in 1:N_particles
                 # This loop CANNOT skip boundary particles, as the source
                 # term might apply to all particles (e.g., gravity)
+                println("source: ", @view(current_Y_i_sys[p_idx, :]))
                 imex_ts.source_term_object(
                     @view(imex_ts.K_I_stages_sys[i][p_idx, :]), 
                     @view(current_Y_i_sys[p_idx, :]), p_idx,
                     system_pg[1].positions[p_idx], 
                     time_implicit_for_KI
                 )
+                print("source: ", @view(current_Y_i_sys[p_idx, :]))
         end
         # ==================================================================
         # --- REFACTORED: Evaluate and store explicit tendency K_E ---
@@ -362,7 +367,6 @@ function (imex_ts::GeneralIMEXTimeStepper{G1, G2, M, IS, ST_OBJ, BT})(
         #println(grid_vels)
         # 3. Threaded loop to calculate divergence
         Threads.@threads for p_idx in 1:N_particles
-            grid_vel = grid_vels[p_idx]
             for k in 1:N
                 grid_k = system_pg[k]
                 if grid_k.is_boundary[p_idx]; continue; end
@@ -419,6 +423,7 @@ function (imex_ts::GeneralIMEXTimeStepper{G1, G2, M, IS, ST_OBJ, BT})(
                 rhos_vec[p_idx] += dt_bt * imex_ts.K_E_stages_sys[i][p_idx, k]
                 rhos_vec[p_idx] += dt_b * imex_ts.K_I_stages_sys[i][p_idx, k]
             end
+            println("Final: ",rhos_vec[p_idx])
         end
     end
 

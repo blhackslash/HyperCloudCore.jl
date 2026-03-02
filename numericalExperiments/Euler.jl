@@ -233,7 +233,7 @@ function main()
             "PDE" => "leuler1d", "sim_function" => "runSystemSimulation",
             #"init_params" => euler_smooth_params, 
             "init_params" => sod_euler_params, 
-            "randomness_factor" => 0., "grid_mover" => "physical", "merge_factor" => .5,
+            "randomness_factor" => 0., "grid_mover" => "none", "merge_factor" => .5,
             "SEED" => SEED_value, "save_relax" => false, "weight_function" => "exponential",
             #"relax_velocities" => [as, as, as]
             "relax_velocities" => [ [2.0, -2.0], [2.0, -2.0], [2.0, -2.0] ], # Pairs for rho, m, E kinetic components

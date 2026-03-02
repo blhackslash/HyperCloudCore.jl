@@ -256,12 +256,12 @@ function update_nonlocal_potential!(
     ensure_buffer_size!(st, N_particles)
     
     # Phase 1: Parallel jump calculation using ntuples (No Allocations)
-    Threads.@threads for i in 2:N_particles
+    for i in 2:N_particles
         # 1. Reconstruct kinetic state vectors as views or temporary arrays
         # Note: system_pg[k].rhos holds the k-th kinetic component [cite: 939, 1043]
         v_L = ntuple(k -> system_pg[k].rhos[i-1], Val(NK))
         v_R = ntuple(k -> system_pg[k].rhos[i],   Val(NK))
-        
+
         # 2. Map Kinetic -> Macro using our new struct
         u_L = st.kin2macro(v_L)
         u_R = st.kin2macro(v_R)
@@ -295,11 +295,11 @@ function update_nonlocal_potential!(
     N_particles = system_pg[1].N
     ensure_buffer_size!(st, N_particles)
     
-    Threads.@threads for i in 2:N_particles
+    for i in 2:N_particles
         # Read from stage_data matrix instead of pgs.grids
         v_L = ntuple(k -> stage_data[i-1, k], Val(NK))
         v_R = ntuple(k -> stage_data[i, k],   Val(NK))
-        
+        println("v_R",v_R)       
         u_L = st.kin2macro(v_L)
         u_R = st.kin2macro(v_R)
         
@@ -328,21 +328,64 @@ function ensure_buffer_size!(st::NonLocalRelaxationSourceTerm{D,N,NK,PDE}, N_par
     end
 end
 
+# In SourceTerms.jl
 
-"""
-Equation (36): Solves the implicit source term part (T_j - V) / epsilon[cite: 242, 260].
-"""
-function (st::NonLocalRelaxationSourceTerm)(
-    S_out::AbstractVector{Float64},
-    V_kinetic::AbstractVector{Float64}, 
-    p_idx::Int,
+function (st::NonLocalRelaxationSourceTerm{D, N, NK})(
+    S_out::AbstractVector{Float64}, 
+    V_kin::AbstractVector{Float64}, 
+    p_idx::Int, 
     particle_pos,
     time::Any = 0.0
-)
-    @inbounds for k in eachindex(S_out)
-        # T_potential[p_idx, k] now holds the fully accumulated sum T_j [cite: 249]
-        S_out[k] = (st.T_potential[p_idx, k] - V_kinetic[k]) * st.inv_epsilon
+) where {D, N, NK}
+    # V_kin is the kinetic state vector for the current particle at the current stage
+    
+    # 1. Reconstruct the Macroscopic State U for this particle
+    # We use the Kin2Macro ranges to sum components
+    u_macro = ntuple(Val(N)) do m
+        val = 0.0
+        for k_idx in st.kin2macro.ranges[m]
+            val += V_kin[k_idx]
+        end
+        val
+    end
+
+    # 2. Calculate the Source Term K_I = (M - V) / epsilon
+    @inbounds for k in 1:NK
+        # Determine which macro variable this kinetic component belongs to
+        m_idx = 1
+        for i in 1:N
+            if k in st.kin2macro.ranges[i]
+                m_idx = i
+                break
+            end
+        end
+        
+        T_val = st.T_potential[p_idx, m_idx]
+        
+        # The correct Maxwellian Equilibrium for non-conservative products:
+        # Mk = coeff * (U_macro + factor * T / lambda)
+        Mk_val = st.coefficients[k] * (u_macro[m_idx] + st.interior_factor * T_val / st.relax_speeds[k])
+        
+        # Compute the relaxation tendency
+        S_out[k] = (Mk_val - V_kin[k]) * st.inv_epsilon
     end
 end
+
+
+# """
+# Equation (36): Solves the implicit source term part (T_j - V) / epsilon[cite: 242, 260].
+# """
+# function (st::NonLocalRelaxationSourceTerm)(
+#     S_out::AbstractVector{Float64},
+#     V_kinetic::AbstractVector{Float64}, 
+#     p_idx::Int,
+#     particle_pos,
+#     time::Any = 0.0
+# )
+#     @inbounds for k in eachindex(S_out)
+#         # T_potential[p_idx, k] now holds the fully accumulated sum T_j [cite: 249]
+#         S_out[k] = (st.T_potential[p_idx, k] - V_kinetic[k]) * st.inv_epsilon
+#     end
+# end
 
 end # Module SourceTerms

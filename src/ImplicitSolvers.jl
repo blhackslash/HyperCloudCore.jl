@@ -134,20 +134,19 @@ function solve!(
     ::LinearizedRelaxationImplicitSolver,
     V_out::AbstractVector{Float64},         
     dt_coeff::Float64,              
-    st::NonLocalRelaxationSourceTerm{D, N, NK},     
+    st::NonLocalRelaxationSourceTerm{D, N, NK,  PDE},     
     p_idx::Int, 
     args...
-)::Bool where {D, N, NK}
+)::Bool where {D, N, NK, PDE}
     epsilon = st.epsilon
     coeff_sum_inv = 1.0 / (epsilon + dt_coeff)
     u_macro = st.kin2macro(V_out)
-@inbounds for k in 1:NK
-        v_star = V_out[k]
+    for k in 1:NK
+        v_star = V_out[NK]
         m_idx = st.kin2macro(k)
         T_val = st.T_potential[p_idx, m_idx]
-        
         # The correct equilibrium: Mk = coeff * (U + factor * T / lambda)
-        Mk_val = st.coefficients[k] * (u_macro[m_idx] + st.interior_factor * T_val / st.relax_speeds[k])
+        Mk_val = st.coefficients[m_idx] * (u_macro[m_idx] + st.interior_factor * T_val / st.relax_speeds[k])
         
         # Standard implicit relaxation update
         V_out[k] = (epsilon * v_star + dt_coeff * Mk_val) * coeff_sum_inv
