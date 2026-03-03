@@ -3,6 +3,7 @@ module SourceTerms
 
 using ..HyperbolicPDEs
 using ..ParticleGrids
+using ..CoreUtils
 
 export AbstractSourceTerm, RelaxationSourceTerm1D, RelaxationSourceTerm, MaxwellianFunctor, update_nonlocal_potential!, NonLocalRelaxationSourceTerm, Kin2Macro
 export ensure_buffer_size!
@@ -208,6 +209,7 @@ function (rs::RelaxationSourceTerm{MF,KI})(
         
         S_out_particle[k_global_comp] = (mk_of_U_macro - U_kinetic_particle[k_global_comp]) * rs.inv_epsilon
     end
+    @pebug "Source Term" S=@view(S_out[1:NK]) u_macro=macro_buffer 
 end
 
 # In SourceTerms.jl
@@ -268,6 +270,7 @@ function update_nonlocal_potential!(
         
         # 3. Path integral ∫ A(Φ(uL, uR)) ds [cite: 801, 803]
         jump = path_integral(st.system_eq, u_L, u_R)
+        @pebug i "Jump Integral" integral=jump group=:test
         
         for k in 1:N
             st.T_potential[i, k] = jump[k]
@@ -278,11 +281,12 @@ function update_nonlocal_potential!(
     for k in 1:N
         st.T_potential[1, k] = 0.0 
     end
-
+    @pebug 1 "Non-Local Potential" T=@view(st.T_potential[1,:])
     for i in 2:N_particles
         for k in 1:N
             st.T_potential[i, k] += st.T_potential[i-1, k]
         end
+        @pebug i "Non-Local Potential" T=@view(st.T_potential[i,:])
     end
 end
 
@@ -298,23 +302,24 @@ function update_nonlocal_potential!(
     for i in 2:N_particles
         # Read from stage_data matrix instead of pgs.grids
         v_L = ntuple(k -> stage_data[i-1, k], Val(NK))
-        v_R = ntuple(k -> stage_data[i, k],   Val(NK))
-        println("v_R",v_R)       
+        v_R = ntuple(k -> stage_data[i, k],   Val(NK))    
         u_L = st.kin2macro(v_L)
         u_R = st.kin2macro(v_R)
         
         jump = path_integral(st.system_eq, u_L, u_R)
+        @pebug i "Jump Integral" integral=jump
         for k in 1:N; st.T_potential[i, k] = jump[k]; end
     end
     # Phase 2: Serial accumulation to form the non-local potential T_j [cite: 281]
     for k in 1:N
         st.T_potential[1, k] = 0.0 
     end
-
+    @pebug 1 "Non-Local Potential" T=@view(st.T_potential[1,:])
     for i in 2:N_particles
         for k in 1:N
             st.T_potential[i, k] += st.T_potential[i-1, k]
         end
+        @pebug i "Non-Local Potential" T=@view(st.T_potential[i,:])
     end
 end
 
@@ -369,6 +374,7 @@ function (st::NonLocalRelaxationSourceTerm{D, N, NK})(
         # Compute the relaxation tendency
         S_out[k] = (Mk_val - V_kin[k]) * st.inv_epsilon
     end
+    @pebug "Source Term" S=@view(S_out[1:NK]) u_macro=u_macro
 end
 
 

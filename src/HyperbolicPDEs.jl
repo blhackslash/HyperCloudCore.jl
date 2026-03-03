@@ -1,4 +1,5 @@
 module HyperbolicPDEs
+using ..CoreUtils
 
 export ScalarHyperbolicPDE, LinearAdvection, BurgersEquation, BurgersEquation2D, TestU3Equation,
        velocity, flux, HyperbolicPDESystem, Euler1D, Euler2D, pressure_from_euler_conserved,
@@ -238,15 +239,13 @@ This version is specialized for N-component systems to ensure zero allocation.
         # Phi(s) and dPhi(s) [cite: 79]
         U_s = path(s, uL, uR, DO0)
         dU_s = path(s, uL, uR, DO1)
-        println("path values: ",U_s,dU_s,uL,uR)
         # Compute A(U_s) * dU_s
         term = A_matrix_times_vector(eq, U_s, dU_s)
-        print("integrand:",term)
         # Accumulate: integral += w * term
         integral = ntuple(k -> integral[k] + w * term[k], Val(N))
+        @debug "Integral Calculation" group=:quad node=i integrand=term integral=integral Φ=U_s Dϕ=dU_s
     end
-    #print(integral)
-    if maximum(integral) > 1000; error("Integral too large!") end
+    if maximum(abs.(integral)) > 1000; error("Integral too large!") end
     return integral
 end
 

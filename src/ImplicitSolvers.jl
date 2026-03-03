@@ -2,6 +2,7 @@
 module ImplicitSolvers
 
 using ..SourceTerms
+using ..CoreUtils
 
 # To use AbstractSourceTerm here, ensure it's accessible:
 # using ..SourceTerms # If SourceTerms.jl is at the same level or correctly pathed
@@ -123,6 +124,7 @@ function solve!(
         
         Y_out_particle[k_global_comp] = (epsilon * v_k_base_kinetic + dt_coefficient_for_S * Mk_val) * coeff_sum_inv
     end
+    @pebug "Implicit Solver" group=:implicit V=@view(Y_out_particle[1:NK]) u_macro=macro_buffer
     return true 
 end
 
@@ -151,6 +153,7 @@ function solve!(
         # Standard implicit relaxation update
         V_out[k] = (epsilon * v_star + dt_coeff * Mk_val) * coeff_sum_inv
     end
+    @pebug "Implicit Solver" group=:implicit V=@view(V_out[1:NK]) u_macro=u_macro
     return true 
 end
 

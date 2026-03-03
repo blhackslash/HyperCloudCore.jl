@@ -23,7 +23,6 @@ function initFs!(ts::MeshfreeSystemTimeStepper, i, f_is, fVecs, pgs::ParticleGri
             j = nb_indices[k]
             # ...and then get its value `f_j`. This is the slow part.
             f_j = fVec[j] 
-            #println(i,":",j)
             # 2. CALCULATE & STORE: Write to the pre-allocated buffers
             neighbor_fs[k]  = f_j
             neighbor_dfs[k] = f_j - f_i
@@ -242,11 +241,7 @@ function (imex_ts::GeneralIMEXTimeStepper{G1, G2, M, IS, ST_OBJ, BT})(
     grid_mover = imex_ts.grid_mover
     manage_particles!(system_pg) # After that N fix for this timestep
     update_grid_velocities!(system_pg, grid_mover)
-    grid_vels = system_pg.grid_velocities
-    #println(grid_vels)
-    #sleep(3)
     N_particles = system_pg[1].N 
-    println(N_particles)
     fill!(imex_ts.mood_triggered, false)
     # --- Loop through stages i = 1 to s ---
     for i in 1:s
@@ -260,7 +255,6 @@ function (imex_ts::GeneralIMEXTimeStepper{G1, G2, M, IS, ST_OBJ, BT})(
         initTSBuffer!(imex_ts, system_pg) # Resizes neighbor_fs/dfs        
         current_Y_i_sys = imex_ts.Y_stages_sys[i]
         Threads.@threads for p_idx in 1:N_particles
-                
             # Loop over each component (rho, rho_u, ...)
             for k in 1:N_components
                 grid_k = system_pg[k]
@@ -272,6 +266,7 @@ function (imex_ts::GeneralIMEXTimeStepper{G1, G2, M, IS, ST_OBJ, BT})(
                 # 2. Accumulate K terms (only for interior particles)
                 if !grid_k.is_boundary[p_idx]
                     for j in 1:(i-1)
+                        @pebug p_idx "Accumulating stage data" group=:stepper stage=j comp=k KE=imex_ts.K_E_stages_sys[j][p_idx, k] KI=imex_ts.K_I_stages_sys[j][p_idx, k]
                         if imex_ts.mood_triggered[p_idx,k,j]
                             y_particle_k += dt * (bt.ct[j+1] - bt.ct[j]) * imex_ts.K_E_stages_sys[j][p_idx, k]
                         else
@@ -281,6 +276,7 @@ function (imex_ts::GeneralIMEXTimeStepper{G1, G2, M, IS, ST_OBJ, BT})(
                             y_particle_k += dt * bt.A[i,j] * imex_ts.K_I_stages_sys[j][p_idx, k]
                         end
                     end
+                    # Inside the loop where j goes from 1 to i-1
                 end # (end boundary check)
                 
                 # 3. Write the final accumulated value for Y_i(p_idx, k)
@@ -289,10 +285,8 @@ function (imex_ts::GeneralIMEXTimeStepper{G1, G2, M, IS, ST_OBJ, BT})(
         end
 
         if imex_ts.source_term_object isa NonLocalRelaxationSourceTerm
-            println("Matrix: " ,current_Y_i_sys)
             # Pass 'current_Y_i_sys' so we use the stage values for the potential
-            update_nonlocal_potential!(imex_ts.source_term_object, current_Y_i_sys, system_pg)
-           
+            update_nonlocal_potential!(imex_ts.source_term_object, current_Y_i_sys, system_pg)  
         end
 # --- REFACTORED: Implicit Solve (Now Parallel) ---
         if abs(bt.A[i,i]) > 1e-14
@@ -305,7 +299,7 @@ function (imex_ts::GeneralIMEXTimeStepper{G1, G2, M, IS, ST_OBJ, BT})(
                 # --- OPTIMIZED: Remove all copying ---
                 # 1. Get a direct view of the particle's state
                 u_particle_view = @view current_Y_i_sys[p_idx, :]
-                println("solve: ",u_particle_view)
+                @pebug p_idx "Pre-solve stage value" group=:stepper stage=i Y_val=u_particle_view
                 # 3. Pass the *view* as the iteration buffer.
                 #    The solver will read from Y_base_buffer
                 #    and write/iterate directly into current_Y_i_sys[p_idx, :].
@@ -316,7 +310,6 @@ function (imex_ts::GeneralIMEXTimeStepper{G1, G2, M, IS, ST_OBJ, BT})(
                     system_pg[1].positions[p_idx], 
                     time_implicit, N_components
                 )
-                print("solve: " ,u_particle_view)
             end
         end
         # ==================================================================
@@ -328,14 +321,13 @@ function (imex_ts::GeneralIMEXTimeStepper{G1, G2, M, IS, ST_OBJ, BT})(
         for p_idx in 1:N_particles
                 # This loop CANNOT skip boundary particles, as the source
                 # term might apply to all particles (e.g., gravity)
-                println("source: ", @view(current_Y_i_sys[p_idx, :]))
+                @pebug p_idx "Pre-source stage values" group=:stepper stage=i Y_val=current_Y_i_sys[p_idx,:]
                 imex_ts.source_term_object(
                     @view(imex_ts.K_I_stages_sys[i][p_idx, :]), 
                     @view(current_Y_i_sys[p_idx, :]), p_idx,
                     system_pg[1].positions[p_idx], 
                     time_implicit_for_KI
                 )
-                print("source: ", @view(current_Y_i_sys[p_idx, :]))
         end
         # ==================================================================
         # --- REFACTORED: Evaluate and store explicit tendency K_E ---
@@ -360,11 +352,12 @@ function (imex_ts::GeneralIMEXTimeStepper{G1, G2, M, IS, ST_OBJ, BT})(
                 neighbor_fs = @view imex_ts.all_neighbor_fs[:,k]
                 neighbor_dfs = @view imex_ts.all_neighbor_dfs[:,k]
                 fi = current_Y_i_sys[p_idx, k]
+                nb_slice = getNBSlice(grid_k, p_idx)
+                @pebug p_idx "Gradient-init stage values" stage=i comp=k u=fi us=neighbor_fs[nb_slice] dus=neighbor_dfs[nb_slice]
                 initGI!(imex_ts.gradientInterpolator[k], p_idx, fi, grid_k, neighbor_fs, neighbor_dfs)
                 initGI!(imex_ts.fallbackInterpolator[k], p_idx, fi, grid_k, neighbor_fs, neighbor_dfs)
             end
         end
-        #println(grid_vels)
         # 3. Threaded loop to calculate divergence
         Threads.@threads for p_idx in 1:N_particles
             for k in 1:N
@@ -396,8 +389,10 @@ function (imex_ts::GeneralIMEXTimeStepper{G1, G2, M, IS, ST_OBJ, BT})(
                                  #- get_Lagrange_Correction(grid_mover, grid_vel, grid_k, nb_slice, neighbor_dfs,) # Could be lower interpolation if needed
                     imex_ts.K_E_stages_sys[i][p_idx, k] = -div_fallback
                     imex_ts.mood_triggered[p_idx,k,i] = true
+                    @pebug p_idx "Gradient stage values" group=:stepper div_high=div_high div_fallback=div_fallback mood=true
                 else
                     imex_ts.K_E_stages_sys[i][p_idx, k] = -div_high
+                    @pebug p_idx "Gradient stage values" group=:stepper div_high=div_high mood=false
                 end
             end
         end # End of component loop for K_E    
@@ -423,7 +418,7 @@ function (imex_ts::GeneralIMEXTimeStepper{G1, G2, M, IS, ST_OBJ, BT})(
                 rhos_vec[p_idx] += dt_bt * imex_ts.K_E_stages_sys[i][p_idx, k]
                 rhos_vec[p_idx] += dt_b * imex_ts.K_I_stages_sys[i][p_idx, k]
             end
-            println("Final: ",rhos_vec[p_idx])
+            @pebug p_idx "Final Stage values" group=:stepper stage=i rho=rhos_vec[p_idx]
         end
     end
 
