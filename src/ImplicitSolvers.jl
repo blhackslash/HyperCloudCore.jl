@@ -144,7 +144,7 @@ function solve!(
     coeff_sum_inv = 1.0 / (epsilon + dt_coeff)
     u_macro = st.kin2macro(V_out)
     for k in 1:NK
-        v_star = V_out[NK]
+        v_star = V_out[k]
         m_idx = st.kin2macro(k)
         T_val = st.T_potential[p_idx, m_idx]
         # The correct equilibrium: Mk = coeff * (U + factor * T / lambda)

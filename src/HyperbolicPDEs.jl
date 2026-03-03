@@ -225,7 +225,7 @@ Calculates the path integral ∫ A(Φ(s)) ∂sΦ ds numerically. [cite: 89, 249]
 This version is specialized for N-component systems to ensure zero allocation.
 """
 @inline function path_integral(eq::HyperbolicPDE{D, N}, uL::NTuple{N, Float64}, uR::NTuple{N, Float64}) where {D, N}
-    nodes, weights = simpson_3_point()
+    nodes, weights = gauss_lobatto_5()
     path = eq.path # Assumes path is stored in the PDE struct
 
     # Initialize the integral tuple with zeros

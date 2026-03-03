@@ -64,42 +64,88 @@ function setInitialConditions!(
     return nothing
 end
 
+# function setInitialConditions!(
+#     system_pg::ParticleGridSystem{NK, D},
+#     st::NonLocalRelaxationSourceTerm{D, N, NK, PDE},
+#     IC::InitialCondition
+# ) where {NK, D, N, PDE <:HyperbolicPDE{D,N}}
+#     N_particles = system_pg[1].N
+    
+#     # 1. Evaluate IC to fill macroscopic buffer U0
+#     U0 = Matrix{Float64}(undef, N_particles, N)
+#     for p_idx in 1:N_particles
+#         u_val = IC(system_pg[1].positions[p_idx]...) 
+#         for m in 1:N
+#             U0[p_idx, m] = u_val[m]
+#         end
+#     end
+
+#     # 2. Compute initial potential T[U^0] using current U0 matrix
+#     update_potential_from_matrix!(st, system_pg, U0)
+
+#     # 3. Initialize Kinetic Grids (v_k = M_k[U, T])
+#     Threads.@threads for k in 1:NK
+#         pg_k = system_pg[k]
+#         m_idx = st.kin2macro(k) # Overloaded range lookup
+#         coeff = st.coefficients[m_idx]
+#         speed = st.relax_speeds[k]
+        
+#         for p_idx in 1:N_particles
+#             u_m = U0[p_idx, m_idx]
+#             t_m = st.T_potential[p_idx, m_idx]
+            
+#             # Initialize each kinetic component to equilibrium
+#             pg_k.rhos[p_idx] = coeff * (u_m + st.interior_factor * t_m / speed)
+#         end
+#     end
+# end
+# In InitialConditions.jl
+
+"""
+Specialized Initialization for Non-Local Relaxation Systems.
+Ensures V_0 = M(U_0, T_0) so that K_I starts at strictly 0.0.
+"""
 function setInitialConditions!(
     system_pg::ParticleGridSystem{NK, D},
-    st::NonLocalRelaxationSourceTerm{D, N, NK, PDE},
+    st::NonLocalRelaxationSourceTerm{D, N, NK},
     IC::InitialCondition
-) where {NK, D, N, PDE <:HyperbolicPDE{D,N}}
+) where {NK, D, N}
     N_particles = system_pg[1].N
     
-    # 1. Evaluate IC to fill macroscopic buffer U0
-    U0 = Matrix{Float64}(undef, N_particles, N)
+    # 1. Initialize grids to LOCAL equilibrium (V = c_k * U)
     for p_idx in 1:N_particles
         u_val = IC(system_pg[1].positions[p_idx]...) 
-        for m in 1:N
-            U0[p_idx, m] = u_val[m]
+        for k in 1:NK
+            m_idx = st.kin2macro(k)
+            system_pg[k].rhos[p_idx] = st.coefficients[m_idx] * u_val[m_idx]
         end
     end
 
-    # 2. Compute initial potential T[U^0] using current U0 matrix
-    update_potential_from_matrix!(st, system_pg, U0)
+    # 2. Extract this local state into a temporary matrix for the potential solver
+    V_temp = Matrix{Float64}(undef, N_particles, NK)
+    for k in 1:NK
+        V_temp[:, k] .= system_pg[k].rhos
+    end
 
-    # 3. Initialize Kinetic Grids (v_k = M_k[U, T])
-    Threads.@threads for k in 1:NK
-        pg_k = system_pg[k]
-        m_idx = st.kin2macro(k) # Overloaded range lookup
-        coeff = st.coefficients[m_idx]
-        speed = st.relax_speeds[k]
-        
-        for p_idx in 1:N_particles
-            u_m = U0[p_idx, m_idx]
-            t_m = st.T_potential[p_idx, m_idx]
+    # 3. Compute the true initial potential T_0 across the domain
+    update_nonlocal_potential!(st, V_temp, system_pg)
+
+    # 4. Re-initialize kinetic grids to the NON-LOCAL equilibrium: V_0 = M(U_0, T_0)
+    for p_idx in 1:N_particles
+        u_val = IC(system_pg[1].positions[p_idx]...)
+        for k in 1:NK
+            m_idx = st.kin2macro(k)
+            T_val = st.T_potential[p_idx, m_idx]
             
-            # Initialize each kinetic component to equilibrium
-            pg_k.rhos[p_idx] = coeff * (u_m + st.interior_factor * t_m / speed)
+            # The correct Maxwellian formulation
+            system_pg[k].rhos[p_idx] = st.coefficients[m_idx] * (
+                u_val[m_idx] + st.interior_factor * T_val / st.relax_speeds[k]
+            )
         end
     end
+    
+    @info "Initialized Non-Local Equilibrium (Max Potential: $(maximum(abs.(st.T_potential))))"
 end
-
 function update_potential_from_matrix!(st, system_pg, U_matrix)
     N_particles = size(U_matrix, 1)
     ensure_buffer_size!(st, N_particles)

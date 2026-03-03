@@ -343,33 +343,20 @@ function (st::NonLocalRelaxationSourceTerm{D, N, NK})(
     time::Any = 0.0
 ) where {D, N, NK}
     # V_kin is the kinetic state vector for the current particle at the current stage
-    
     # 1. Reconstruct the Macroscopic State U for this particle
     # We use the Kin2Macro ranges to sum components
-    u_macro = ntuple(Val(N)) do m
-        val = 0.0
-        for k_idx in st.kin2macro.ranges[m]
-            val += V_kin[k_idx]
-        end
-        val
-    end
+    u_macro = st.kin2macro(V_kin)
 
     # 2. Calculate the Source Term K_I = (M - V) / epsilon
-    @inbounds for k in 1:NK
+    for k in 1:NK
         # Determine which macro variable this kinetic component belongs to
-        m_idx = 1
-        for i in 1:N
-            if k in st.kin2macro.ranges[i]
-                m_idx = i
-                break
-            end
-        end
+        m_idx = st.kin2macro(k)
         
         T_val = st.T_potential[p_idx, m_idx]
         
         # The correct Maxwellian Equilibrium for non-conservative products:
         # Mk = coeff * (U_macro + factor * T / lambda)
-        Mk_val = st.coefficients[k] * (u_macro[m_idx] + st.interior_factor * T_val / st.relax_speeds[k])
+        Mk_val = st.coefficients[m_idx] * (u_macro[m_idx] + st.interior_factor * T_val / st.relax_speeds[k])
         
         # Compute the relaxation tendency
         S_out[k] = (Mk_val - V_kin[k]) * st.inv_epsilon

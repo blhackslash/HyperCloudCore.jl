@@ -78,7 +78,6 @@ function (gm::GridMover)(pgs::ParticleGridSystem{N_grids,1}, dt::Real; managed =
             manage_particles!(pg) 
             updateNeighbors!(pg)
         end
-        #println(positions)
     end
 end 
 
@@ -124,8 +123,6 @@ function update_grid_velocities!(pgs::ParticleGridSystem{N_grids, 1}, ::Physical
         # C. Store in buffer
         grid_vels[i] = u_grid
     end
-    println(grid_vels[1:N])
-    sleep(3)
 end
 
 # """
@@ -155,7 +152,6 @@ end
 #         # C. Store in buffer
 #         grid_vels[i] = u_grid
 #     end
-#     println(grid_vels)
 # end
 
 function update_grid_velocities!(pgs::ParticleGridSystem{N_grids, 1}, ::NoGridMover) where {N_grids}
