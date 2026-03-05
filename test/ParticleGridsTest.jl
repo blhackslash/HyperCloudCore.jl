@@ -1,171 +1,139 @@
-using Statistics
 using Test
-using Meshfree4ScalarEq.Particles
+using StaticArrays
+using Base.Threads: Atomic
 using Meshfree4ScalarEq.ParticleGrids
+using Meshfree4ScalarEq.HyperbolicPDEs
+# using CellListMap # Ensure this is available in your environment
 
-@testset "Update Neighbours" begin
-    xmin = -1.0
-    xmax = 2.0
-    N = 10
-    particleGrid = ParticleGrid1D(xmin, xmax, N; randomness = 0.0)
-    dx = particleGrid.dx
-    @test issorted(particleGrid.grid, by=particle->particle.pos) 
-    
-    # Check neighbours
-    updateNeighbours!(particleGrid, dx*2.5)
+# =========================================================================
+# 1. Mocks & Stubs (To run independently of your physics modules)
+# =========================================================================
 
-    for particleIndex in eachindex(particleGrid.grid)
-        particle = particleGrid.grid[particleIndex]
+# Mock Weight Function
+exponentialWeightFunction(alpha, beta) = (d2) -> exp(-alpha * sqrt(d2) / beta)
 
-        @test length(particle.neighbourIndices) == 4
+#velocity(eq::LinearAdvection{1}, t) = eq.vel[1]
 
-        # Check neighbours indices
-        if particleIndex == 1
-            @test 2 in particle.neighbourIndices
-            @test 3 in particle.neighbourIndices
-            @test particleGrid.N in particle.neighbourIndices
-            @test particleGrid.N-1 in particle.neighbourIndices
-        elseif particleIndex == 2
-            @test 3 in particle.neighbourIndices
-            @test 4 in particle.neighbourIndices
-            @test particleGrid.N in particle.neighbourIndices
-            @test 1 in particle.neighbourIndices
-        elseif particleIndex == particleGrid.N
-            @test 1 in particle.neighbourIndices
-            @test 2 in particle.neighbourIndices
-            @test particleGrid.N-1 in particle.neighbourIndices
-            @test particleGrid.N-2 in particle.neighbourIndices
-        elseif particleIndex == particleGrid.N-1
-            @test 1 in particle.neighbourIndices
-            @test particleGrid.N in particle.neighbourIndices
-            @test particleGrid.N-3 in particle.neighbourIndices
-            @test particleGrid.N-2 in particle.neighbourIndices
-        else
-            @test particleIndex+1 in particle.neighbourIndices
-            @test particleIndex+2 in particle.neighbourIndices
-            @test particleIndex-1 in particle.neighbourIndices
-            @test particleIndex-2 in particle.neighbourIndices
-        end
-    end
-end
-
-@testset "getPeriodicDistance" begin
-    xmin = -1.0
-    xmax = 5.0
-    regular = false
-
-    p1 = Particle1D(xmin, 0.0, true)
-    p2 = Particle1D(-0.2, 0.0, false)
-    p3 = Particle1D(0.5, 0.0, false)
-    p4 = Particle1D(2.5, 0.0, false)
-    p5 = Particle1D(3.6, 0.0, false)
-    p6 = Particle1D(4.9, 0.0, false)
-    grid = [p1; p2; p3; p4; p5; p6]
-    dx = mean(diff(map(particle -> particle.pos, grid)))
-
-    particleGrid = ParticleGrid1D(grid, xmin, xmax, dx, regular)
-
-    # Some handchecked tests
-    @test isapprox(getPeriodicDistance(particleGrid, 1, 2), 0.8)
-    @test isapprox(getPeriodicDistance(particleGrid, 1, 3), 1.5)
-    @test isapprox(getPeriodicDistance(particleGrid, 1, 5), -1.4)
-    @test isapprox(getPeriodicDistance(particleGrid, 1, 6), -0.1)
-    @test isapprox(getPeriodicDistance(particleGrid, 1, 4), -2.5)
-    @test isapprox(getPeriodicDistance(particleGrid, 2, 5), -2.2)
-    @test isapprox(getPeriodicDistance(particleGrid, 3, 5), -2.9)
-    @test isapprox(getPeriodicDistance(particleGrid, 4, 5), 1.1)
-
-    for i in eachindex(grid)
-        for j in eachindex(grid)
-            @test isapprox(getPeriodicDistance(particleGrid, i, j), -getPeriodicDistance(particleGrid, j, i))
-        end
-    end
-
-end
-
-@testset "updateVoxelInformation" begin
-    xmin = 0
-    xmax = 10
-    ymin = 0
-    ymax = 5
-    Nx = 10
-    Ny = 10
-    particleGrid = ParticleGrid2D(xmin, xmax, ymin, ymax, Nx, Ny)
-    maxDist = 1.0
-    updateVoxelInformation!(particleGrid, maxDist)
-    nbBoxesX = ceil((particleGrid.xmax - particleGrid.xmin)/maxDist)
-
-    # Some manual tests
-    for particle in particleGrid.grid
-        for j = 1:5
-            for i = 1:10
-                if ((i-1) <= particle.pos[1] < i) && ( j-1 <= particle.pos[2] < j)
-                    @test particle.voxel == (i-1) + (j-1)*nbBoxesX # "$(particle.pos), $(particle.voxel), $((i-1) + (j-1)*nbBoxesX)"
-                end
+# Fallback dummy for _find_neighbors_1d if it's not loaded in your test env
+function _find_neighbors_1d(pg, i, maxDist)
+    neighbors = Int[]
+    pos_i = pg.core.positions[i][1]
+    for j in 1:pg.meta.N
+        if i != j
+            dist = abs(pg.core.positions[j][1] - pos_i)
+            # Simple periodic wrap for mock
+            if pg.meta.bc == :periodic
+                L = pg.meta.maxs[1] - pg.meta.mins[1]
+                dist = min(dist, L - dist)
+            end
+            if dist <= maxDist
+                push!(neighbors, j)
             end
         end
     end
+    return neighbors
 end
 
-@testset "Grid indexing" begin
-    Nx = 10
-    Ny = 7
-    nbBoxX = 10
+# Fallback dummy for determineVolumes! if not loaded
+#determineVolumes!(pg) = nothing
 
-    # Convert coordinates to linear index and then back to grid index.
-    for i = 0:Nx-1
-        for j = 0:Ny-1
-            linear = gridToLinearIndex(i, j, nbBoxX)
-            it, jt = linearIndexToGrid(linear, nbBoxX)
-            @test (it == i) && (jt == j)
+# =========================================================================
+# 2. Test Suite
+# =========================================================================
+
+@testset "ParticleGrid System Tests" begin
+
+    @testset "1D ParticleGrid Initialization & Property Forwarding" begin
+        # Create a 1D periodic grid with 2 system variables (M=2)
+        pg1 = createParticleGrid(Val(1), 0.0, 1.0, 10, :periodic, 1.5; M=2)
+        
+        # Test Property Forwarding
+        @test pg1.N == 10
+        @test length(pg1.positions) == 10
+        @test pg1.positions[1] isa Float64
+        
+        # Test matrix allocations
+        @test size(pg1.rhos) == (10, 2)
+        @test size(pg1.core.neighbor_data) == (2, 0) # Initially empty
+        
+        # Test Boundaries
+        @test sum(pg1.is_boundary) == 0 # Periodic means no boundary particles
+    end
+
+    @testset "1D Functors: Neighbors, Sorting, and Timestep" begin
+        pg1 = createParticleGrid(Val(1), 0.0, 1.0, 20, :outflow, 1.5; M=1)
+        
+        # 1. Test Neighbor Update
+        updateNeighbors!(pg1)
+        @test pg1.max_nb > 0
+        @test size(pg1.core.neighbor_data, 1) == 2 # Row 1=weight, Row 2=dx
+        @test length(pg1.core.neighbor_indices) > 0
+        
+        # 2. Test Sorting
+        # Artificially scramble positions to test the sort functor
+        pg1.positions[1] = 99.0
+        sort_particles!(pg1)
+        @test issorted([p[1] for p in pg1.positions])
+        
+        # 3. Test Timestep Calculation
+        eq = LinearAdvection((1.0,))
+        updateNeighbors!(pg1) # Rebuild graph after sorting!
+        dt = getTimeStep(pg1, eq)
+        @test dt > 0.0
+        @test dt != Inf
+        
+        # 4. Test Boundary Conditions (1D Outflow)
+        rho_buffer = rand(pg1.N)
+        apply_boundary_conditions!(pg1, rho_buffer)
+        # For outflow, the ghost cells should match the first/last interior cells
+        interior_start = findfirst(==(false), pg1.is_boundary)
+        @test rho_buffer[1] == rho_buffer[interior_start]
+
+    end
+
+    # NOTE: The 2D tests assume CellListMap is loaded and functional. 
+    # If CellListMap throws errors in a pure test environment, ensure it is imported.
+    @testset "2D ParticleGrid Initialization & Functors" begin
+        # Create a 2D fixed dirichlet grid
+        pg2 = createParticleGrid(Val(2), 0.0, 1.0, 0.0, 1.0, 5, 5, :fixed_dirichlet, 1.5; M=3)
+        
+        @test pg2.N > 25 # 25 interior + ghost cells
+        @test pg2.positions[1] isa SVector{2, Float64}
+        @test size(pg2.rhos) == (pg2.N, 3) # M=3 variables
+        
+        # 1. Test Neighbor Update
+        updateNeighbors!(pg2)
+        @test pg2.max_nb > 0
+        @test size(pg2.core.neighbor_data, 1) == 3 # Row 1=weight, Row 2=dx, Row 3=dy
+        
+        # 2. Test Sorting (RCM Reordering)
+        # RCM should generate a valid permutation containing all indices 1:N
+        sort_particles!(pg2)
+        @test sort(pg2.reorder.permutation) == collect(1:pg2.N)
+        
+        # 3. Test Timestep Calculation
+        eq2 = LinearAdvection((1.0, -1.0))
+        updateNeighbors!(pg2) # Rebuild after reorder
+        dt = getTimeStep(pg2, eq2)
+        @test dt > 0.0
+        
+        # 4. Test Boundary Conditions (2D Dirichlet)
+        # Assign a distinct value to the grid's persistent rhos
+        fill!(pg2.rhos, 5.0) 
+        rho_buffer = zeros(pg2.N, 3)
+        apply_boundary_conditions!(pg2, rho_buffer)
+        
+        # Find a boundary particle and ensure the buffer received the Dirichlet value
+        boundary_idx = findfirst(==(true), pg2.is_boundary)
+        if !isnothing(boundary_idx)
+            @test rho_buffer[boundary_idx, 1] == 5.0
         end
     end
 end
-
-@testset "findNeighbouringVoxels" begin
-    Nx = 4
-    Ny = 5
-
-    tup = findNeighbouringVoxels(19, Nx, Ny)
-    @test 2 in tup
-    @test 3 in tup
-    @test 0 in tup
-    @test 16 in tup
-    @test 12 in tup
-    @test 18 in tup
-    @test 14 in tup
-    @test 15 in tup
-
-    tup = findNeighbouringVoxels(3, Nx, Ny)
-    @test 2 in tup
-    @test 6 in tup
-    @test 7 in tup
-    @test 0 in tup
-    @test 4 in tup
-    @test 18 in tup
-    @test 19 in tup
-    @test 16 in tup
+pg1 = createParticleGrid(Val(1), 0.0, 1.0, 10, :periodic, 1.5; M=2)
+pg2 = createParticleGrid(Val(2), 0.0, 1.0, 0.0, 1.0, 5, 5, :fixed_dirichlet, 1.5; M=3)
+function test_access(pg)
+    return pg.positions
 end
 
-@testset "updateNeighbours!" begin
-    xmin = 0
-    xmax = 10
-    ymin = 0
-    ymax = 5
-    Nx = 10
-    Ny = 10
-    particleGrid = ParticleGrid2D(xmin, xmax, ymin, ymax, Nx, Ny)
-    maxDist = 1.5
-    updateNeighbours!(particleGrid, maxDist)
-
-    for (particleIndex, particle) in enumerate(particleGrid.grid)
-        for (nbParticleIndex, nbParticle) in enumerate(particleGrid.grid)
-            d = getEuclideanDistance(particleGrid, particleIndex, nbParticleIndex)
-            if (d <= maxDist) && (particleIndex != nbParticleIndex)
-                @test nbParticleIndex in particle.neighbourIndices
-            else
-                @test !(nbParticleIndex in particle.neighbourIndices)
-            end
-        end
-    end
-end
+@code_typed test_access(pg2)

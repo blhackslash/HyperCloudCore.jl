@@ -4,7 +4,7 @@ export ParticleGrid, ParticleGrid1D, ParticleGrid2D, getPeriodicDistance, saveGr
        animateDensity, getTimeStep, findLocalExtrema, updateVoxelInformation!, gridToLinearIndex, linearIndexToGrid, 
        findneighboringVoxels, updateNeighbors!, getEuclideanDistance, logMOODEvents!, findLocalExtremaAbs, sort_1d_particles!,
        determineVolumes!, getDistance, apply_boundary_conditions!, ParticleGridSystem, set_df!, getNBSlice, reorder_particles_for_locality!,
-       manage_particles!
+       manage_particles!, sort_particles!
 
 using Random
 #using Statistics
@@ -16,59 +16,9 @@ using ProgressMeter
 using ..SimSettings
 using ..HyperbolicPDEs
 using ..MLSWeightFunctions
-import Meshfree4ScalarEq
 
-# # --- Export new types and functions ---
-# export ParticleGrid, ParticleGrid1D, ParticleGrid2D, setInitialConditions!, 
-#        getDistance, saveGrid, plotDensity, animateDensity, getTimeStep, 
-#        findLocalExtrema!, updateNeighbors!, determineVolumes!, 
-#        apply_boundary_conditions!, ParticleGridSystem
-
-# --- Core Abstract Type and System Alias ---
-abstract type ParticleGrid{D} end # Now parameterized by dimension
-#const ParticleGridSystem{N, D} = NTuple{N, <:ParticleGrid{D}}
-
-# In ParticleGrids.jl
-
-"""
-    ParticleGridSystem{D, N_grids}
-
-A container for a coupled system of particle grids. 
-- `grids`: The tuple of individual particle grids.
-- `velocity_indices`: Indices of the species (grids) that contribute to the grid velocity.
-- `grid_velocities`: A buffer storing the calculated grid velocity for every particle.
-"""
-struct ParticleGridSystem{N_grids, D}
-    grids::NTuple{N_grids, ParticleGrid{D}}
-    vel_vars::UnitRange{Int}
-    grid_velocities::Vector{Float64} # For 1D (use Vector{SVector{2,Float64}} for 2D)
-
-    function ParticleGridSystem(grids::NTuple{N_grids, ParticleGrid{D}}, velocity_indices::UnitRange{Int}) where {N_grids,D}
-        N_particles = grids[1].N # Assuming all grids have same N (coupled)
-        
-        # Pre-allocate buffer for grid velocities
-        grid_vels = zeros(Float64, N_particles)
-        
-        new{N_grids, D}(grids, velocity_indices, grid_vels)
-    end
-end
-
-
-
-# Helper to support iteration/indexing like a Tuple (backward compatibility)
-Base.getindex(pgs::ParticleGridSystem, i::Int) = pgs.grids[i]
-Base.length(pgs::ParticleGridSystem) = length(pgs.grids)
-Base.iterate(pgs::ParticleGridSystem, state=1) = iterate(pgs.grids, state)
-Base.eachindex(pgs::ParticleGridSystem) = eachindex(pgs.grids)
-
-# ============== ParticleGrids.jl ==============
-module ParticleGrids
-
-using StaticArrays
-using Base.Threads: Atomic
-
-export ParticleGrid, GridMetadata, SharedBuffers, NeighborData, ReorderData, ManagementData, ParticleGridCore
-
+export ParticleGrid, GridMetadata, SharedBuffers, NeighborData, ReorderData, ManagementData, ParticleGridCore, createParticleGrid
+struct ParticleGridSystem{NK, D} end
 # ---------------------------------------------------------
 # 1. Grid Metadata
 # ---------------------------------------------------------
@@ -97,7 +47,7 @@ end
 Shared buffers to prevent allocating new arrays during sorting, 
 particle management, or MOOD limiting.
 """
-struct SharedBuffers{D, M}
+mutable struct SharedBuffers{D, M}
     # N x M matrix for generic physics variable shuffling
     rho_buffer::Matrix{Float64}      
     
@@ -110,7 +60,7 @@ end
 # ---------------------------------------------------------
 # 3. Neighbor Search Context
 # ---------------------------------------------------------
-struct NeighborData{S, WF}
+struct NeighborData{D, S, WF}
     neighbor_system::S      # CellListMap system or similar
     weight_func::WF
     
@@ -122,7 +72,7 @@ end
 # ---------------------------------------------------------
 # 4. Reordering / Sorting Context
 # ---------------------------------------------------------
-struct ReorderData
+struct ReorderData{D}
     permutation::Vector{Int}          # Logical to physical index
     inv_permutation::Vector{Int}      # Physical to logical index
     new_permutation_buffer::Vector{Int} 
@@ -133,7 +83,7 @@ end
 # ---------------------------------------------------------
 # 5. Particle Management Context
 # ---------------------------------------------------------
-struct ManagementData
+struct ManagementData{D}
     # Placeholders for your reworked ParticleManagement.jl
     # e.g., tracking volumes, split/merge targets, etc.
     merge_flags::BitVector
@@ -143,9 +93,10 @@ end
 # ---------------------------------------------------------
 # 6. Particle Grid Core (Geometry & Topology)
 # ---------------------------------------------------------
-struct ParticleGridCore{D}
+mutable struct ParticleGridCore{D}
     positions::Vector{SVector{D, Float64}}
     is_boundary::BitVector
+    volumes::Vector{Float64}
     
     # CSR (Compressed Sparse Row) format for Neighbors
     neighbor_pointers::Vector{Int}
@@ -157,17 +108,18 @@ struct ParticleGridCore{D}
     neighbor_data::Matrix{Float64} 
 end
 
+
 # ---------------------------------------------------------
 # 7. The Top-Level Particle Grid
 # ---------------------------------------------------------
-struct ParticleGrid{D, M, S, WF}
+mutable struct ParticleGrid{D, M, S, WF}
     # Sub-structs
     meta::GridMetadata{D}
     core::ParticleGridCore{D}
     shared::SharedBuffers{D, M}
-    neighbors::NeighborData{S, WF}
-    reorder::ReorderData
-    manage::ManagementData
+    neighbors::NeighborData{D, S, WF}
+    reorder::ReorderData{D}
+    manage::ManagementData{D}
     
     # Physics Data (N x M matrices)
     rhos::Matrix{Float64}
@@ -183,7 +135,14 @@ const ParticleGrid2D{M, S, WF} = ParticleGrid{2, M, S, WF}
 # 8. Property Forwarding (The Compatibility Magic)
 # ---------------------------------------------------------
 # This ensures `grid.N` routes to `grid.meta.N` and `grid.positions` to `grid.core.positions`
-function Base.getproperty(pg::ParticleGrid, sym::Symbol)
+function Base.getproperty(pg::ParticleGrid{D}, sym::Symbol) where {D}
+    # --- MAGIC INTERCEPT FOR 1D POSITIONS ---
+    if sym === :positions && D == 1
+        # Returns a zero-cost AbstractVector{Float64} that shares the exact same memory
+        return reinterpret(Float64, getfield(getfield(pg, :core), :positions))
+    end
+    # ----------------------------------------
+
     if sym in fieldnames(ParticleGrid)
         return getfield(pg, sym)
     elseif sym in fieldnames(ParticleGridCore)
@@ -207,20 +166,183 @@ function Base.setproperty!(pg::ParticleGrid, sym::Symbol, val)
     end
 end
 
-end # module
-
-"""
-    safe_resize!(v::Vector, n::Integer)
-
-Resizes the vector `v` to at least `n` elements. If `n` is greater than the
-current length, it resizes to `ceil(n * 1.25)` to provide buffer capacity
-and avoid frequent allocations.
-"""
-function safe_resize!(v::AbstractVector, n::Integer)
-    if n > length(v)
-        resize!(v, ceil(Int, n * 1.25))
+function createParticleGrid(
+    ::Val{1}, xmin::Real, xmax::Real, N_interior::Integer, bc::Symbol,
+    interp_range_factor::Real;
+    M::Int = 1, # Number of system variables
+    randomness::Real = 0.0, rng = Random.default_rng(), merge_factor = 0.2,
+    weight_func = exponentialWeightFunction(1.,1.)
+)
+    # --- 1. Base Calculations ---
+    N_ghost::Int = bc == :periodic ? 0 : ceil(Int, interp_range_factor)
+    if bc == :periodic
+        @assert N_ghost == 0 "Periodic grids do not use ghost cells."
+        N = N_interior
+        dx = (xmax - xmin) / max(N_interior, 1.0)
+    else
+        @assert N_ghost >= 0 "N_ghost must be non-negative."
+        N = N_interior + 2 * N_ghost
+        dx = (xmax - xmin) / max(N_interior - 1, 1.0)
     end
-    return nothing
+
+    xmin_tot = xmin - N_ghost * dx
+    xmax_tot = xmax + N_ghost * dx
+    h = dx * interp_range_factor
+    regular = (randomness == 0.0)
+
+    # --- 2. Initialize Positions and Boundaries ---
+    positions = Vector{SVector{1, Float64}}(undef, N)
+    is_boundary = falses(N)
+
+    if bc == :periodic
+        for i in 1:N_interior
+            positions[i] = SVector(xmin + dx*(i-0.5) + randomness*(rand(rng, Float64)*2 - 1))
+        end
+    else
+        for i in 1:N_ghost
+            positions[i] = SVector(xmin - (N_ghost - i + 1) * dx)
+            is_boundary[i] = true
+        end
+        for i in 1:N_interior
+            base_pos = (N_interior == 1) ? (xmin+xmax)/2.0 : xmin + (i-1) * dx
+            positions[N_ghost + i] = SVector(base_pos + randomness*(rand(rng, Float64)*2 - 1))
+        end
+        for i in 1:N_ghost
+            positions[N_ghost + N_interior + i] = SVector(xmax + i * dx)
+            is_boundary[N_ghost + N_interior + i] = true
+        end
+    end
+
+    # --- 3. Construct Sub-Structs ---
+    meta = GridMetadata{1}(
+        N, N_interior, N_ghost, 
+        SVector(xmin_tot), SVector(xmax_tot), 
+        h, SVector(dx), regular, bc, Float64(interp_range_factor), 0
+    )
+
+    # Core uses a 2x0 matrix initially: Row 1 = Weight, Row 2 = dx
+    core = ParticleGridCore{1}(
+        positions, is_boundary, zeros(Int, N),
+        zeros(Int, N + 1), zeros(Int, N), Int[], 
+        Matrix{Float64}(undef, 2, 0) 
+    )
+
+    shared = SharedBuffers{1, M}(
+        zeros(N, M), similar(positions), falses(N), zeros(Int, N)
+    )
+
+    neighbors = NeighborData{1, Nothing, typeof(weight_func)}(
+        nothing, weight_func, 
+        [Atomic{Int}(0) for _ in 1:N], [Atomic{Int}(0) for _ in 1:N]
+    )
+
+    permutation = collect(1:N)
+    reorder = ReorderData{1}(
+        permutation, copy(permutation), zeros(Int, N), falses(N)
+    )
+
+    manage = ManagementData{1}(falses(N), Int[])
+
+    # --- 4. Assemble Final Grid ---
+    pg = ParticleGrid{1, M, Nothing, typeof(weight_func)}(
+        meta, core, shared, neighbors, reorder, manage,
+        zeros(N, M), falses(N, M), zeros(N, M) # rhos, mood_events, curvatures
+    )
+
+    # sort_1d_particles!(pg) # You will need to adapt your sort function to the new struct
+    return pg
+end
+
+function createParticleGrid(
+    ::Val{2}, xmin::Real, xmax::Real, ymin::Real, ymax::Real, 
+    Nx_interior::Integer, Ny_interior::Integer, bc::Symbol, interp_range_factor::Real; 
+    M::Int = 1,
+    randomness::NTuple{2, Real} = (0.0, 0.0), rng = Random.default_rng(), 
+    weight_func = exponentialWeightFunction(1.,1.)
+)
+    # --- 1. Base Calculations ---
+    N_ghost::Int = bc == :periodic ? 0 : ceil(Int, interp_range_factor)
+    
+    if bc == :periodic
+        @assert N_ghost == 0 "Periodic grids do not use ghost cells."
+        Nx_total, Ny_total = Nx_interior, Ny_interior
+        dx_nominal = (xmax - xmin) / Nx_interior
+        dy_nominal = (ymax - ymin) / Ny_interior
+    else
+        @assert N_ghost >= 0 "N_ghost must be non-negative."
+        Nx_total = Nx_interior + 2*N_ghost
+        Ny_total = Ny_interior + 2*N_ghost
+        dx_nominal = (xmax - xmin) / max(Nx_interior - 1, 1.0)
+        dy_nominal = (ymax - ymin) / max(Ny_interior - 1, 1.0)
+    end
+    
+    N = Nx_total * Ny_total
+    interp_range = interp_range_factor < 1e-10 ? max(dx_nominal, dy_nominal) : interp_range_factor * max(dx_nominal, dy_nominal)
+
+    # --- 2. Initialize Positions and Boundaries ---
+    positions = Vector{SVector{2, Float64}}(undef, N)
+    is_boundary = falses(N)
+    
+    if bc == :periodic
+        for i in 1:Nx_total, j in 1:Ny_total
+            index = (i - 1) * Ny_total + j
+            posX = xmin + dx_nominal*(i-0.5) + randomness[1]*(rand(rng, Float64)*2 - 1)
+            posY = ymin + dy_nominal*(j-0.5) + randomness[2]*(rand(rng, Float64)*2 - 1)
+            positions[index] = SVector(posX, posY)
+        end
+        system = InPlaceNeighborList(x=positions, cutoff=interp_range, unitcell=[xmax-xmin; ymax-ymin], parallel=true)
+    else
+        for i in 1:Nx_total, j in 1:Ny_total
+            index = (i - 1) * Ny_total + j
+            is_interior = (N_ghost < i <= Nx_interior + N_ghost) && (N_ghost < j <= Ny_interior + N_ghost)
+            
+            posX = i <= N_ghost ? xmin - (N_ghost-i+1)*dx_nominal : (i > Nx_interior+N_ghost ? xmax+(i-(Nx_interior+N_ghost))*dx_nominal : xmin+(i-N_ghost-1)*dx_nominal + randomness[1]*(rand(rng,Float64)*2-1))
+            posY = j <= N_ghost ? ymin - (N_ghost-j+1)*dy_nominal : (j > Ny_interior+N_ghost ? ymax+(j-(Ny_interior+N_ghost))*dy_nominal : ymin+(j-N_ghost-1)*dy_nominal + randomness[2]*(rand(rng,Float64)*2-1))
+            
+            positions[index] = SVector(posX, posY)
+            is_boundary[index] = !is_interior
+        end
+        system = InPlaceNeighborList(x=positions, cutoff=interp_range, parallel=true)
+    end
+
+    # --- 3. Construct Sub-Structs ---
+    meta = GridMetadata{2}(
+        N, Nx_interior * Ny_interior, N - (Nx_interior * Ny_interior), 
+        SVector(xmin, ymin), SVector(xmax, ymax), 
+        interp_range, SVector(dx_nominal, dy_nominal), 
+        (randomness == (0.0, 0.0)), bc, Float64(interp_range_factor), 0
+    )
+
+    # Core uses a 3x0 matrix initially: Row 1 = Weight, Row 2 = dx, Row 3 = dy
+    core = ParticleGridCore{2}(
+        positions, is_boundary, zeros(Int, N),
+        zeros(Int, N + 1), zeros(Int, N), Int[], 
+        Matrix{Float64}(undef, 3, 0)
+    )
+
+    shared = SharedBuffers{2, M}(
+        zeros(N, M), similar(positions), falses(N), zeros(Int, N)
+    )
+
+    neighbors = NeighborData{2, typeof(system), typeof(weight_func)}(
+        system, weight_func, 
+        [Atomic{Int}(0) for _ in 1:N], [Atomic{Int}(0) for _ in 1:N]
+    )
+
+    permutation = collect(1:N)
+    reorder = ReorderData{2}(
+        permutation, copy(permutation), zeros(Int, N), falses(N)
+    )
+
+    manage = ManagementData{2}(falses(N), Int[])
+
+    # --- 4. Assemble Final Grid ---
+    pg = ParticleGrid{2, M, typeof(system), typeof(weight_func)}(
+        meta, core, shared, neighbors, reorder, manage,
+        zeros(N, M), falses(N, M), zeros(N, M)
+    )
+
+    return pg
 end
 
 """
@@ -257,258 +379,6 @@ end
 
 
 
-#==============================================================================
-  1D PARTICLE GRID (Struct of Arrays Implementation)
-==============================================================================#
-
-# --- In ParticleGrids.jl ---
-
-mutable struct ParticleGrid1D{WF} <: ParticleGrid{1}
-    # --- Persistent State (SoA) ---
-    positions::Vector{Float64}
-    rhos::Vector{Float64}
-    curvatures::Vector{Float64}
-    is_boundary::BitVector
-    volumes::Vector{Float64}
-    mood_events::BitVector
-
-    # Particle Sized Buffers
-    neighbor_pointers::Vector{Int}
-    num_neighbors::Vector{Int}
-
-    # --- NEW: Flattened Neighbor Data Buffers (like 2D) ---
-    neighbor_indices::Vector{Int}
-    neighbor_xdistance::Vector{Float64}
-    neighbor_weights::Vector{Float64}
-
-# --- AMR Buffers (Pre-allocated) ---
-    merged_buffer::BitVector          # To mark particles absorbed during merge
-    split_buffer_pos::Vector{Float64} # Temporary storage for new particles
-    split_buffer_rho::Vector{Float64}
-
-    # --- Grid Properties ---
-    weight_func::WF     
-    xmin::Float64
-    xmax::Float64
-    inner_xmin::Float64
-    inner_xmax::Float64
-    N::Int # Total number of particles
-    N_ghost::Int
-    dx::Float64
-    regular::Bool
-    bc::Symbol
-    interior_indices::UnitRange{Int}
-    range_factor::Float64 
-    max_dist::Float64
-    min_dist::Float64
-    max_nb::Int  
-    local_voxels::LocalVoxels       
-
-    function ParticleGrid1D(
-        xmin::Real, xmax::Real, N_interior::Integer, bc::Symbol,
-        interp_range_factor::Real; 
-        randomness::Real = 0.0, rng = nothing, merge_factor = .2,
-        # --- MODIFIED: Added default value ---
-        weight_func::MLSWeightFunction = exponentialWeightFunction(1.,1.)
-    )
-        #rng = MersenneTwister(10)
-        # --- (Existing constructor logic for N, interior_indices, dx) ---
-        N_ghost::Int = bc == :periodic ? 0 : ceil(Int, interp_range_factor)
-        local dx
-        if bc == :periodic
-            @assert N_ghost == 0 "Periodic grids do not use ghost cells."
-            N = N_interior
-            interior_indices = 1:N
-            dx = (xmax - xmin) / (N_interior > 1 ? (N_interior) : 1.0)
-        else
-            @assert N_ghost >= 0 "N_ghost must be non-negative."
-            if N_ghost == 0; @warn "No ghost cells given for non-periodic BCs! This is only supported for Analytical Functions!" end
-            N = N_interior + 2 * N_ghost
-            interior_indices = N_ghost == 0 ? (2:(N-1)) : ((N_ghost + 1):(N_ghost + N_interior))
-            dx = (xmax - xmin) / (N_interior > 1 ? (N_interior - 1) : 1.0)
-        end
-
-        # --- (Existing logic for positions, is_boundary) ---
-        positions = Vector{Float64}(undef, N)
-        is_boundary = falses(N)
-        if bc == :periodic
-            for i in 1:N_interior
-                # --- MODIFIED: Citation removed ---
-                positions[i] = xmin + dx*(i-0.5) + randomness*(rand(rng, Float64)*2 - 1) 
-            end
-        else
-            for i in 1:N_ghost
-                positions[i] = xmin - (N_ghost - i + 1) * dx
-                is_boundary[i] = true
-            end
-            for i in 1:N_interior
-                # --- MODIFIED: Citation removed ---
-                base_pos = (N_interior == 1) ? (xmin+xmax)/2.0 : xmin + (i-1) * dx 
-                positions[N_ghost + i] = base_pos + randomness*(rand(rng, Float64)*2 - 1)
-            end
-            for i in 1:N_ghost
-                positions[N_ghost + N_interior + i] = xmax + i * dx
-                is_boundary[N_ghost + N_interior + i] = true
-            end
-        end
-        
-        min_dist = dx * merge_factor
-        max_dist = dx * interp_range_factor
-        voxels = LocalVoxels(floor(Int,interp_range_factor), max_dist)
-        #error("Test")
-        # --- (Initialize other state fields) ---
-        rhos = zeros(Float64, N)
-        curvatures = zeros(Float64, N)
-        volumes = zeros(Float64, N)
-        mood_events = falses(N)
-        regular = (randomness == 0.0)
-        xmin_tot = xmin - N_ghost * dx
-        xmax_tot = xmax + N_ghost * dx
-
-        # --- NEW: Initialize flat neighbor buffers ---
-        neighbor_indices = Int[]
-        neighbor_pointers = zeros(Int, N + 1)
-        num_neighbors = zeros(Int, N)
-        neighbor_xdistance = Float64[]
-        neighbor_weights = Float64[]
-        # --- Create the new grid object ---
-        pg = new{typeof(weight_func)}(
-            positions, rhos, curvatures, is_boundary, volumes, mood_events,
-            neighbor_pointers, num_neighbors, neighbor_indices, 
-            neighbor_xdistance, neighbor_weights,
-            falses(N), Float64[], Float64[],
-            weight_func,
-            xmin_tot, xmax_tot, xmin, xmax, N, N-N_interior, dx, regular, bc, 
-            interior_indices,
-            convert(Float64, interp_range_factor), max_dist, min_dist, 0, voxels
-        )
-        sort_1d_particles!(pg)
-        # --- Populate neighbor buffers ---
-        updateNeighbors!(pg) # Call the new function
-        return pg
-    end
-end
-
-#==============================================================================
-  2D PARTICLE GRID (Struct of Arrays Implementation)
-==============================================================================#
-
-mutable struct ParticleGrid2D{S, WF} <: ParticleGrid{2}
-    # --- Persistent State (SoA) ---
-    positions::Vector{SVector{2, Float64}}
-    rhos::Vector{Float64}
-    is_boundary::BitVector
-    #mood_events::Bitvector
-
-    neighbor_system::S
-    weight_func::WF
-
-    # Particle Sized Buffers
-    neighbor_pointers::Vector{Int}
-    num_neighbors::Vector{Int}
-    # --- Flattened Neighbor Data Buffers ---
-    neighbor_indices::Vector{Int}
-    neighbor_xdistance::Vector{Float64}
-    neighbor_ydistance::Vector{Float64}
-    neighbor_weights::Vector{Float64}
-
-    # --- NEW: Pre-allocated atomic buffers for thread-safety ---
-    atomic_counts_buffer::Vector{Atomic{Int}}
-    atomic_offsets_buffer::Vector{Atomic{Int}}
-    atomic_seen_buffer::Vector{Atomic{Int}}
-
-    # --- NEW: For Adaptive Reordering ---
-    permutation::Vector{Int}          # Maps logical index `i` to its current physical storage index.
-    inv_permutation::Vector{Int}      # Maps physical storage index `p` back to its logical index.
-    new_permutation_buffer::Vector{Int} # Buffer to discover the next optimal permutation.
-    reorder_buffer_rhos::Vector{Float64}      # NEW: Pre-allocated buffer for rhos
-    reorder_buffer_pos::Vector{SVector{2, Float64}} # NEW: Pre-allocated buffer for positions
-    reorder_buffer_boundary::BitVector
-    seen_buffer::BitVector # Simple boolean buffer for serial execution
-    
-
-    # --- Grid Metadata ---
-    xmin::Float64; xmax::Float64; ymin::Float64; ymax::Float64
-    N::Int; N_ghost::Int; dx::Float64; dy::Float64
-    regular::Bool; bc::Symbol; range_factor::Float64; max_nb::Int
-
-    function ParticleGrid2D(
-        xmin::Real, xmax::Real, ymin::Real, ymax::Real, 
-        Nx_interior::Integer, Ny_interior::Integer, bc::Symbol, interp_range_factor::Real; 
-        randomness::NTuple{2, Real} = (0.0, 0.0), rng = Meshfree4ScalarEq.rng, weight_func::MLSWeightFunction = exponentialWeightFunction(1.,1.)
-    )
-        N_ghost::Int = bc == :periodic ? 0 : ceil(Int, interp_range_factor)
-        local Nx_total, Ny_total, interior_indices, dx_nominal, dy_nominal
-        if bc == :periodic
-            @assert N_ghost == 0 "Periodic grids do not use ghost cells."
-            Nx_total, Ny_total = Nx_interior, Ny_interior
-            interior_indices = collect(1:(Nx_interior * Ny_interior))
-            dx_nominal = (xmax - xmin) / Nx_interior
-            dy_nominal = (ymax - ymin) / Ny_interior
-        else
-            @assert N_ghost >= 0 "N_ghost must be non-negative."
-            if N_ghost == 0; @warn "No ghost cells given for non-periodic BCs! This is only supported for Analytical Functions!" end
-            Nx_total = Nx_interior + 2*N_ghost
-            Ny_total = Ny_interior + 2*N_ghost
-            interior_indices = Int[]
-            dx_nominal = (xmax - xmin) / (Nx_interior > 1 ? Nx_interior - 1 : 1.0)
-            dy_nominal = (ymax - ymin) / (Ny_interior > 1 ? Ny_interior - 1 : 1.0)
-        end
-        N = Nx_total * Ny_total
-
-        positions = Vector{SVector{2, Float64}}(undef, N)
-        is_boundary = falses(N)
-        interp_range = interp_range_factor < 1e-10 ? max(dx_nominal, dy_nominal) : interp_range_factor * max(dx_nominal, dy_nominal)  
-        # --- Populate Particle Positions ---
-        if bc == :periodic
-            # CORRECTED: Use cell-centered positions for periodic case
-            for i in 1:Nx_total, j in 1:Ny_total
-                index = (i - 1) * Ny_total + j
-                posX = xmin + dx_nominal*(i-0.5) + randomness[1]*(rand(rng, Float64)*2 - 1)
-                posY = ymin + dy_nominal*(j-0.5) + randomness[2]*(rand(rng, Float64)*2 - 1)
-                positions[index] = SVector(posX, posY)
-            end
-            system = InPlaceNeighborList(
-                x=positions, 
-                cutoff=interp_range, 
-                unitcell=[xmax-xmin; ymax-ymin],
-                parallel=true # Enable parallelization
-            )
-        else # Non-periodic logic
-            for i in 1:Nx_total, j in 1:Ny_total
-                index = (i - 1) * Ny_total + j
-                is_interior = (N_ghost < i <= Nx_interior + N_ghost) && (N_ghost < j <= Ny_interior + N_ghost)
-                
-                posX = if i <= N_ghost; xmin - (N_ghost-i+1)*dx_nominal; elseif i > Nx_interior+N_ghost; xmax+(i-(Nx_interior+N_ghost))*dx_nominal; else xmin+(i-N_ghost-1)*dx_nominal + randomness[1]*(rand(rng,Float64)*2-1); end
-                posY = if j <= N_ghost; ymin - (N_ghost-j+1)*dy_nominal; elseif j > Ny_interior+N_ghost; ymax+(j-(Ny_interior+N_ghost))*dy_nominal; else ymin+(j-N_ghost-1)*dy_nominal + randomness[2]*(rand(rng,Float64)*2-1); end
-                
-                positions[index] = SVector(posX, posY)
-                is_boundary[index] = !is_interior
-                if is_interior; push!(interior_indices, index); end
-            end
-            system = InPlaceNeighborList(
-                x=positions, 
-                cutoff=interp_range, 
-                parallel=true # Enable parallelization
-            )
-        end
-
-        permutation = collect(1:N)
-        # 3. Create the stateful object
-        N_ghost = N - Nx_interior * Ny_interior
-        pg = new{typeof(system),typeof(weight_func)}(positions, zeros(N), is_boundary, 
-        system, weight_func, zeros(Int,N+1), zeros(Int,N), Int[], Float64[], Float64[], Float64[],
-        [Atomic{Int}(0) for _ in 1:N], [Atomic{Int}(0) for _ in 1:N], [Atomic{Int}(0) for _ in 1:N], 
-        permutation, copy(permutation), zeros(Int,N), zeros(N), similar(positions), copy(is_boundary), falses(N),
-        xmin, xmax, ymin, ymax, N, N_ghost,
-        dx_nominal, dy_nominal, (randomness == (0.0, 0.0)), bc, convert(Float64,interp_range_factor), 0)
-        reorder_particles_for_locality!(pg)
-        updateNeighbors!(pg)
-        return pg
-    end
-end
-
-
 @inline function getNBSlice(pg::ParticleGrid, p_idx::Int)
     num_nb = pg.num_neighbors[p_idx]
     pointer = pg.neighbor_pointers[p_idx]
@@ -516,109 +386,26 @@ end
     return neighbor_slice
 end
 
-"""
-    reorder_particles_for_locality!(pg::ParticleGrid2D, system)
+sort_particles!(pg::ParticleGrid) = pg.reorder(pg) 
 
-Calculates an optimal particle permutation using the Reverse Cuthill-McKee (RCM)
-algorithm and then physically reorders all particle data (`rhos`, `positions`, etc.)
-to match this new order for improved cache locality.
-
-This function should be called ONCE after the grid is first initialized.
-"""
-function reorder_particles_for_locality!(pg::ParticleGrid2D)
-    @info "Building connectivity graph for reordering..."
-    # 1. Build the minimal connectivity graph (neighbor lists)
-    _build_connectivity_graph!(pg, pg.neighbor_system)
-
-    @info "Calculating RCM permutation..."
-    # 2. Calculate the optimal permutation (writes to pg.permutation)
-    _calculate_rcm_permutation!(pg)
-
-    @info "Physically reordering particle data..."
-    # 3. Physically reorder all particle data using this permutation
-    reorder_particles!(pg)
+function (rd::ReorderData{D})(pg::ParticleGrid{D, M, S, WF}) where {D, M, S, WF}
+    N = pg.meta.N
     
-    @info "Particle reordering complete."
-    return nothing
-end
-
-"""
-    reorder_particles!(pg::ParticleGrid2D)
-
-Physically reorders the persistent *particle data* (`rhos`, `positions`, 
-`is_boundary`) based on the permutation stored in `pg.permutation`.
-
-This function does NOT reorder the graph itself, as it assumes
-`updateNeighbors!` will be called immediately after to rebuild
-the graph from scratch.
-"""
-function reorder_particles!(pg::ParticleGrid2D)
-    N = pg.N
-    
-    # 1. Copy all current (old) particle data to buffers (fast, serial)
-    copyto!(pg.reorder_buffer_rhos, pg.rhos)
-    copyto!(pg.reorder_buffer_pos, pg.positions)
-    copyto!(pg.reorder_buffer_boundary, pg.is_boundary)
-    # 2. Use the buffers to write all reordered data back in ONE parallel loop
-    @threads for i in 1:N
-        # i = The NEW, destination index (1..N)
-        
-        # --- THE FIX ---
-        # Get the OLD source index from the permutation map
-        src_idx = pg.permutation[i]
-        # --- END FIX ---
-        
-        # Reorder all particle data arrays at once
-        pg.rhos[i]         = pg.reorder_buffer_rhos[src_idx]
-        pg.positions[i]    = pg.reorder_buffer_pos[src_idx]
-        pg.is_boundary[i]  = pg.reorder_buffer_boundary[src_idx]
-    end
-
-    # 3. Update the grid's permutation maps for consistency
-    # (Even though the graph is stale, these maps reflect the data)
-    @threads for i in 1:N
-        pg.inv_permutation[pg.permutation[i]] = i
-    end
-    
-    return nothing
-end
-
-"""
-    _calculate_rcm_permutation!(pg::ParticleGrid2D)
-
-Performs a serial Reverse Cuthill-McKee (RCM) graph traversal,
-writing the resulting permutation *directly into* `pg.permutation`.
-"""
-function _calculate_rcm_permutation!(pg::ParticleGrid2D)
-    N = pg.N
-    adj = pg.neighbor_indices
-    ptr = pg.neighbor_pointers
-    degrees = pg.num_neighbors
-    
-    # Use the grid's permutation buffer as the output
-    permutation = pg.permutation
-    # Use the grid's seen_buffer as the visited set
-    visited = pg.seen_buffer
+    # --- 1. Calculate RCM Permutation ---
+    # We use the grid's seen_buffer as the visited set to avoid allocations
+    visited = rd.seen_buffer
     fill!(visited, false)
-
     perm_idx = 0
     
-    # Local allocations are fine here (small, and only run once)
     queue = Int[]
-    neighbor_buffer = Int[] 
+    neighbor_buffer = Int[]
 
-    for i in 1:N # Loop over all particles to find starting points
+    for i in 1:N 
         if !visited[i]
-            # Found an unvisited component. Find the best starting node
-            # (lowest degree) in this component.
-            
-            # --- Simple start: just use i ---
-            # (A full search for the min-degree node in the component
-            # is more robust but more complex. This is usually fine.)
-            start_node = i 
-            
-            # --- Start BFS ---
+            # Start BFS from an unvisited component
+            start_node = i
             visited[start_node] = true
+            
             resize!(queue, 0)
             push!(queue, start_node)
 
@@ -627,39 +414,63 @@ function _calculate_rcm_permutation!(pg::ParticleGrid2D)
                 
                 # Add current node to the permutation
                 perm_idx += 1
-                permutation[perm_idx] = current_node
+                rd.permutation[perm_idx] = current_node
 
-                # --- Cuthill-McKee part: Get & sort unvisited neighbors ---
+                # Get unvisited neighbors
                 resize!(neighbor_buffer, 0)
-                num_nb = degrees[current_node]
+                num_nb = pg.core.num_neighbors[current_node]
                 
                 if num_nb > 0
-                    neighbor_slice = ptr[current_node] : (ptr[current_node] + num_nb - 1)
+                    start_ptr = pg.core.neighbor_pointers[current_node]
+                    neighbor_slice = start_ptr:(start_ptr + num_nb - 1)
+                    
                     @inbounds for k in neighbor_slice
-                        nb_idx = adj[k]
+                        nb_idx = pg.core.neighbor_indices[k]
                         if !visited[nb_idx]
-                            visited[nb_idx] = true # Mark as visited *when adding*
+                            visited[nb_idx] = true # Mark visited when adding
                             push!(neighbor_buffer, nb_idx)
                         end
                     end
                 end
                 
-                # Sort neighbors by their degree (low to high)
-                sort!(neighbor_buffer, by = i -> degrees[i])
-                
-                # Add them to the *end* of the queue
+                # Sort neighbors by their degree (low to high) for Cuthill-McKee
+                sort!(neighbor_buffer, by = idx -> pg.core.num_neighbors[idx])
                 append!(queue, neighbor_buffer)
             end
         end
     end
     
-    @assert perm_idx == N "RCM permutation did not visit all nodes."
+    # Reverse the permutation in-place for RCM
+    reverse!(rd.permutation)
 
-    # --- "Reverse" part (in-place) ---
-    reverse!(permutation)
+    # --- 2. Physically Reorder Data ---
+    # Step 2a: Copy old data to our pre-allocated shared buffers
+    copyto!(pg.shared.pos_buffer, pg.core.positions)
+    copyto!(pg.shared.bit_buffer, pg.core.is_boundary)
+    copyto!(pg.shared.rho_buffer, pg.rhos)
+
+    # Step 2b: Write reordered data back
+    Threads.@threads for i in 1:N
+        # Get the OLD source index from the permutation map
+        src_idx = rd.permutation[i]
+        
+        pg.core.positions[i]   = pg.shared.pos_buffer[src_idx]
+        pg.core.is_boundary[i] = pg.shared.bit_buffer[src_idx]
+        
+        # Handle the N x M matrices
+        for m in 1:M
+            pg.rhos[i, m] = pg.shared.rho_buffer[src_idx, m]
+        end
+    end
+
+    # Step 2c: Update the inverse permutation map
+    Threads.@threads for i in 1:N
+        rd.inv_permutation[rd.permutation[i]] = i
+    end
     
     return nothing
 end
+
 
 """
     _build_connectivity_graph!(pg::ParticleGrid2D, system)
@@ -736,143 +547,59 @@ function _build_connectivity_graph!(pg::ParticleGrid2D, system)
     return nothing
 end
 
+updateNeighbors!(pg::ParticleGrid) = pg.neighbors(pg)
 
-"""
-    updateNeighborsParallel!(pg, weightFunc; reorder_threshold=0.1)
+function (nd::NeighborData{1, S, WF})(pg::ParticleGrid{1, M, S, WF}) where {M, S, WF}
+    N = pg.meta.N
+    maxDist = pg.meta.range_factor * pg.meta.dx[1]
+    weightFunc = nd.weight_func
+    
+    # --- PASS 1: Count Neighbors (Serial) ---
+    max_nb = 0
+    total_neighbors = 0
+    for i in 1:N
+        num_nb = length(_find_neighbors_1d(pg, i, maxDist))
+        pg.core.num_neighbors[i] = num_nb
+        pg.core.neighbor_pointers[i] = total_neighbors + 1
+        total_neighbors += num_nb
+        max_nb = max(max_nb, num_nb)
+    end
+    pg.core.neighbor_pointers[N+1] = total_neighbors + 1
+    pg.meta.max_nb = max_nb
+    
+    # --- Buffer Resizing Optimization ---
+    # Only resize if we exceed current capacity. Grow by 25% to minimize allocations.
+    current_capacity = length(pg.core.neighbor_indices)
+    if total_neighbors > current_capacity
+        new_capacity = ceil(Int, total_neighbors * 1.25)
+        resize!(pg.core.neighbor_indices, new_capacity)
+        # Allocate new matrix: Row 1 = weight, Row 2 = dx
+        pg.core.neighbor_data = Matrix{Float64}(undef, 2, new_capacity)
+    end
 
-Builds neighbor lists with an adaptive particle reordering strategy.
-This function is now THREAD-SAFE and allocation-free.
-"""
-function updateNeighbors!(
-    pg::ParticleGrid2D, 
-    reorder_threshold::Float64 = 0.1 
-)
-    system = pg.neighbor_system
-    weightFunc = pg.weight_func    
-
-    CellListMap.update!(system, pg.positions)
-
-    # --- PASS 1: COUNT NEIGHBORS (Thread-Safe & Allocation-Free) ---
-    @inbounds for i in 1:pg.N; pg.atomic_counts_buffer[i][] = 0; end
-    @inbounds for i in 1:pg.N; pg.atomic_seen_buffer[i][] = 0; end
-    fill!(pg.new_permutation_buffer, 0) # Explicitly reset buffer
-    atomic_counts = pg.atomic_counts_buffer
-    atomic_seen = pg.atomic_seen_buffer
-    new_order_counter = Atomic{Int}(0)
-
-    map_pairwise!(
-        (xi, xj, i, j, d2, null) -> begin
-            if atomic_cas!(atomic_seen[i], 0, 1) == 0
-                pg.new_permutation_buffer[i] = atomic_add!(new_order_counter, 1) + 1
-            end
-            if atomic_cas!(atomic_seen[j], 0, 1) == 0
-                pg.new_permutation_buffer[j] = atomic_add!(new_order_counter, 1) + 1
-            end
+    # --- PASS 2: Fill Neighbor Data (Serial) ---
+    offset_counts = zeros(Int, N) 
+    
+    for i in 1:N
+        neighbor_list = _find_neighbors_1d(pg, i, maxDist)
+        
+        for j in neighbor_list
+            offset = offset_counts[i]
+            write_idx = pg.core.neighbor_pointers[i] + offset
             
-            atomic_add!(atomic_counts[i], 1)
-            atomic_add!(atomic_counts[j], 1)
-            null
-        end,
-        0, system.box, system.cl; parallel = true
-    )
-    # 2. Single loop to copy counts AND find the maximum
-    max_so_far = 0 # Or typemin(Int)
-    @inbounds for i in 1:pg.N
-        # Get the value from the atomic
-        count = atomic_counts[i][]
-        
-        # Copy it to the regular array
-        pg.num_neighbors[i] = count
-        
-        # Check if it's the new maximum
-        if count > max_so_far
-            max_so_far = count
+            dist_x = getDistance(pg, i, j) 
+            d2 = dist_x^2
+
+            pg.core.neighbor_indices[write_idx] = j
+            
+            # Write directly to the pre-allocated matrix
+            pg.core.neighbor_data[1, write_idx] = weightFunc(d2)
+            pg.core.neighbor_data[2, write_idx] = dist_x
+            
+            offset_counts[i] += 1
         end
     end
-
-    # 3. Store the final maximum
-    pg.max_nb = max_so_far
-
-    
-    # --- CRITICAL FIX: Handle isolated or missed particles ---
-    # `map_pairwise!` does not guarantee visiting every particle. This loop
-    # finds any particles that were missed (where the buffer is still 0) and
-    # assigns them the remaining permutation slots, ensuring a valid permutation.
-    final_counter_val = new_order_counter[]
-    @inbounds for i in 1:pg.N
-        if pg.new_permutation_buffer[i] == 0
-            final_counter_val += 1
-            pg.new_permutation_buffer[i] = final_counter_val
-        end
-    end
-    
-
-    # --- VALIDATION: Ensure the buffer is a valid permutation ---
-    @assert final_counter_val == pg.N "Permutation counter did not reach N. Something is wrong."
-    @assert isperm(pg.new_permutation_buffer) "new_permutation_buffer is not a valid permutation. It may contain zeros or duplicates."
-
-    # # --- ADAPTIVE REORDERING DECISION ---
-    # mismatches = 0
-    # for i in 1:pg.N
-    #     if pg.permutation[i] != pg.new_permutation_buffer[i]
-    #         mismatches += 1
-    #     end
-    # end
-
-    # if (mismatches / pg.N > reorder_threshold)# && !reordered
-    #     pg.permutation[1] = -1 
-    # end
-
-    # --- PREPARE FOR PASS 2 ---
-    total_neighbors = sum(pg.num_neighbors)
-    resize!.((pg.neighbor_indices, pg.neighbor_xdistance, pg.neighbor_ydistance, pg.neighbor_weights), total_neighbors)
-    
-    pg.neighbor_pointers[1] = 1
-    @inbounds for i in 1:pg.N
-        pg.neighbor_pointers[i+1] = pg.neighbor_pointers[i] + pg.num_neighbors[i]
-    end
-    
-    # --- PASS 2: FILL DATA (Thread-Safe & Allocation-Free) ---
-    @inbounds for i in 1:pg.N; pg.atomic_offsets_buffer[i][] = 0; end
-    atomic_offsets = pg.atomic_offsets_buffer
-    map_pairwise!(
-        (xi, xj, i, j, d2, null) -> begin
-
-            dist_x = xj[1] - xi[1]
-            dist_y = xj[2] - xi[2]
-            if pg.bc == :periodic
-                domainSizeX = pg.xmax - pg.xmin
-                domainSizeY = pg.ymax - pg.ymin
-                dist_x -= round(dist_x / domainSizeX) * domainSizeX
-                dist_y -= round(dist_y / domainSizeY) * domainSizeY
-            end
-            weight = weightFunc(d2)
-
-            # CORRECTED: Use robust atomic pattern
-            offset_i = atomic_add!(atomic_offsets[i], 1)
-            write_idx_i = pg.neighbor_pointers[i] + offset_i
-            #println(write_idx_i)
-            pg.neighbor_indices[write_idx_i]   = j
-            pg.neighbor_xdistance[write_idx_i] = dist_x
-            pg.neighbor_ydistance[write_idx_i] = dist_y
-            pg.neighbor_weights[write_idx_i]   = weight
-
-            # CORRECTED: Use robust atomic pattern
-            
-            offset_j = atomic_add!(atomic_offsets[j], 1) # -1 included bc of old value 
-            #println(pg.neighbor_pointers[j],":", atomic_offsets[j][])
-            write_idx_j = pg.neighbor_pointers[j] + offset_j
-            pg.neighbor_indices[write_idx_j]   = i
-            pg.neighbor_xdistance[write_idx_j] = -dist_x
-            pg.neighbor_ydistance[write_idx_j] = -dist_y
-            pg.neighbor_weights[write_idx_j]   = weight
-            @assert (!isnan(dist_x) && !isnan(dist_y)) "$dist_x,$dist_y"
-            null
-        end,
-        0, system.box, system.cl; parallel = true
-    )
-    #println(pg.neighbor_xdistance)
-    #check_for_nans(pg)
+    determineVolumes!(pg) 
     return nothing
 end
 # --- In ParticleGrids.jl ---
@@ -891,145 +618,13 @@ function getDistance(pg::ParticleGrid1D, i::Integer, j::Integer)
 
     # 2. Apply periodic correction if necessary
     if pg.bc == :periodic
-        domain_size = pg.xmax - pg.xmin
+        domain_size = pg.xmax[1] - pg.xmin[1]
         # Correct the distance by the shortest wrap-around
         dist -= round(dist / domain_size) * domain_size
     end
     
     return dist
 end
-
-# """
-#     updateNeighbors!(pg::ParticleGrid1D)
-
-# Robust, pairwise (N^2) neighbor search. Does NOT require particles to be sorted.
-# Also calculates volumes using the discovered neighbors.
-# """
-# function updateNeighbors!(pg::ParticleGrid1D)
-#     N = pg.N
-#     maxDist = pg.range_factor * pg.dx
-#     weightFunc = pg.weight_func
-    
-#     # --- PASS 1: Count Neighbors ---
-#     # We iterate N^2 to count valid neighbors.
-#     total_neighbors = 0
-#     max_nb = 0
-    
-#     for i in 1:N
-#         count = 0
-#         for j in 1:N
-#             if i == j; continue; end # Skip self
-            
-#             # getDistance handles periodic wrapping automatically
-#             dist = getDistance(pg, i, j)
-            
-#             if abs(dist) <= maxDist
-#                 count += 1
-#             end
-#         end
-        
-#         pg.num_neighbors[i] = count
-#         pg.neighbor_pointers[i] = total_neighbors + 1
-#         total_neighbors += count
-        
-#         if count > max_nb
-#             max_nb = count
-#         end
-#     end
-#     # Set the end pointer (essential for iteration logic)
-#     pg.neighbor_pointers[N+1] = total_neighbors + 1
-#     pg.max_nb = max_nb
-    
-#     # --- Resize Buffers ---
-#     if length(pg.neighbor_indices) < total_neighbors
-#         # Grow with 25% buffer
-#         new_cap = total_neighbors + (total_neighbors ÷ 4)
-#         resize!(pg.neighbor_indices, new_cap)
-#         resize!(pg.neighbor_xdistance, new_cap)
-#         resize!(pg.neighbor_weights, new_cap)
-#     end
-
-#     # --- PASS 2: Fill Neighbor Data ---
-#     for i in 1:N
-#         # Start writing at the pointer for particle i
-#         write_idx = pg.neighbor_pointers[i]
-        
-#         for j in 1:N
-#             if i == j; continue; end
-            
-#             dist = getDistance(pg, i, j)
-#             d_abs = abs(dist)
-            
-#             if d_abs <= maxDist
-#                 d2 = d_abs^2
-                
-#                 pg.neighbor_indices[write_idx]   = j
-#                 pg.neighbor_xdistance[write_idx] = dist
-#                 pg.neighbor_weights[write_idx]   = weightFunc(d2)
-                
-#                 write_idx += 1
-#             end
-#         end
-#     end
-    
-#     # Recalculate volumes using the new connectivity
-#     determineVolumes!(pg)
-    
-#     return nothing
-# end
-
-# """
-#     determineVolumes!(pg::ParticleGrid1D)
-
-# Calculates Voronoi volumes using the neighbor list. 
-# Robust to unsorted particles.
-# """
-# function determineVolumes!(pg::ParticleGrid1D)
-#     N = pg.N
-#     # Fallback if no neighbor is found (e.g. at boundaries or isolated)
-#     default_vol = pg.dx 
-    
-#     for i in 1:N
-#         # Find closest left and right neighbors from the neighbor list
-#         closest_neg_dist = -Inf
-#         closest_pos_dist = Inf
-        
-#         found_left  = false
-#         found_right = false
-        
-#         start_ptr = pg.neighbor_pointers[i]
-#         end_ptr   = start_ptr + pg.num_neighbors[i] - 1
-        
-#         for k in start_ptr:end_ptr
-#             d = pg.neighbor_xdistance[k]
-            
-#             # Check Left Neighbor (negative distance)
-#             if d < 0.0
-#                 if d > closest_neg_dist
-#                     closest_neg_dist = d
-#                     found_left = true
-#                 end
-#             # Check Right Neighbor (positive distance)
-#             elseif d > 0.0
-#                 if d < closest_pos_dist
-#                     closest_pos_dist = d
-#                     found_right = true
-#                 end
-#             end
-#         end
-        
-#         # Calculate Half-distances
-#         # If a neighbor is missing (boundary), we assume dx/2 from the particle center.
-#         # Alternatively, for non-periodic, you might use the distance to the wall.
-        
-#         dist_L = found_left  ? abs(closest_neg_dist) : (pg.dx)
-#         dist_R = found_right ? abs(closest_pos_dist) : (pg.dx)
-        
-#         # Volume is the average of the gap sizes (1D Voronoi)
-#         pg.volumes[i] = (dist_L + dist_R) / 2.0
-#     end
-#     return nothing
-# end
 
 """
 Finds all neighbors for particle `i` in a 1D grid within `maxDist`.
@@ -1042,7 +637,7 @@ function _find_neighbors_1d(pg::ParticleGrid1D, i::Int, maxDist::Float64)
     
     # Pre-allocate a reasonable number of neighbors
     neighbor_list = Vector{Int}()
-    sizehint!(neighbor_list, 2 * ceil(Int, maxDist / pg.dx) + 2)
+    sizehint!(neighbor_list, 2 * ceil(Int, maxDist / pg.dx[1]) + 2)
 
     if pg.bc == :periodic
         # Search left, wrapping around the boundary
@@ -1086,102 +681,229 @@ function _find_neighbors_1d(pg::ParticleGrid1D, i::Int, maxDist::Float64)
     return neighbor_list
 end
 
-"""
-(1D Implementation) Populates the flat neighbor buffers.
-This version is serial, fast, and allocation-free (after the first setup).
-"""
-function updateNeighbors!(pg::ParticleGrid1D)
-    N = pg.N
-    maxDist = pg.range_factor * pg.dx
-    weightFunc = pg.weight_func
-    
-    # --- PASS 1: Count Neighbors (Serial) ---
-    max_nb = 0
-    total_neighbors = 0
-    for i in 1:N
-        # Find neighbors using the simple sorted search
-        # Note: This helper allocates a temporary list,
-        # which is unavoidable for this pass.
-        num_nb = length(_find_neighbors_1d(pg, i, maxDist)) 
-        pg.num_neighbors[i] = num_nb
-        pg.neighbor_pointers[i] = total_neighbors + 1
-        total_neighbors += num_nb
-        max_nb = max(max_nb, num_nb)
-    end
-    pg.neighbor_pointers[N+1] = total_neighbors + 1
-    pg.max_nb = max_nb
-    
-    # --- Resize flat buffers ---
-    if length(pg.neighbor_indices) < total_neighbors
-        n = total_neighbors + total_neighbors ÷ 4
-        resize!(pg.neighbor_indices, n)
-        resize!(pg.neighbor_xdistance, n)
-        resize!(pg.neighbor_weights, n)
-    end
+function (nd::NeighborData{D, S, WF})(pg::ParticleGrid{D, M, S, WF}) where {D, M, S, WF}
+    system = nd.neighbor_system
+    weightFunc = nd.weight_func    
 
-    # --- PASS 2: Fill Neighbor Data (Serial) ---
-    # We use a helper array to track the current write offset for each particle
-    offset_counts = zeros(Int, N) 
-    
-    for i in 1:N
-        pos_i = pg.positions[i]
-        
-        # Find neighbors again (this is fast in 1D)
-        neighbor_list = _find_neighbors_1d(pg, i, maxDist)
-        
-        for j in neighbor_list
-            offset = offset_counts[i]
-            write_idx = pg.neighbor_pointers[i] + offset
-            
-            dist_x = getDistance(pg, i, j) # Handles periodicity
-            d2 = dist_x^2
+    CellListMap.update!(system, pg.core.positions)
 
-            pg.neighbor_indices[write_idx] = j
-            pg.neighbor_xdistance[write_idx] = dist_x
-            pg.neighbor_weights[write_idx] = weightFunc(d2)
-            
-            offset_counts[i] += 1
+    # --- PASS 1: COUNT NEIGHBORS (Thread-Safe) ---
+    @inbounds for i in 1:pg.meta.N; nd.atomic_counts[i][] = 0; end
+    
+    atomic_counts = nd.atomic_counts
+
+    map_pairwise!(
+        (xi, xj, i, j, d2, null) -> begin
+            atomic_add!(atomic_counts[i], 1)
+            atomic_add!(atomic_counts[j], 1)
+            null
+        end,
+        0, system.box, system.cl; parallel = true
+    )
+
+    max_so_far = 0 
+    @inbounds for i in 1:pg.meta.N
+        count = atomic_counts[i][]
+        pg.core.num_neighbors[i] = count
+        if count > max_so_far
+            max_so_far = count
         end
     end
-    determineVolumes!(pg)
+    pg.meta.max_nb = max_so_far
+
+    # --- PREPARE FOR PASS 2 ---
+    total_neighbors = sum(pg.core.num_neighbors)
+    
+    # --- Buffer Resizing Optimization ---
+    current_capacity = length(pg.core.neighbor_indices)
+    if total_neighbors > current_capacity
+        new_capacity = ceil(Int, total_neighbors * 1.25)
+        resize!(pg.core.neighbor_indices, new_capacity)
+        # Allocate new matrix: Row 1 = weight, Rows 2 to D+1 = spatial distances
+        pg.core.neighbor_data = Matrix{Float64}(undef, D + 1, new_capacity)
+    end
+    
+    pg.core.neighbor_pointers[1] = 1
+    @inbounds for i in 1:pg.meta.N
+        pg.core.neighbor_pointers[i+1] = pg.core.neighbor_pointers[i] + pg.core.num_neighbors[i]
+    end
+    
+    # --- PASS 2: FILL DATA (Thread-Safe) ---
+    @inbounds for i in 1:pg.meta.N; nd.atomic_offsets[i][] = 0; end
+    atomic_offsets = nd.atomic_offsets
+    
+    map_pairwise!(
+        (xi, xj, i, j, d2, null) -> begin
+            # SVector math automatically handles D dimensions
+            dist = xj - xi 
+            
+            if pg.meta.bc == :periodic
+                domainSize = pg.meta.maxs - pg.meta.mins
+                # Element-wise periodic wrapping for D dimensions
+                dist -= round.(dist ./ domainSize) .* domainSize
+            end
+            
+            weight = weightFunc(d2)
+
+            # i -> j
+            offset_i = atomic_add!(atomic_offsets[i], 1)
+            write_idx_i = pg.core.neighbor_pointers[i] + offset_i
+            pg.core.neighbor_indices[write_idx_i] = j
+            pg.core.neighbor_data[1, write_idx_i] = weight
+            for d in 1:D
+                pg.core.neighbor_data[1 + d, write_idx_i] = dist[d]
+            end
+
+            # j -> i (Symmetric)
+            offset_j = atomic_add!(atomic_offsets[j], 1) 
+            write_idx_j = pg.core.neighbor_pointers[j] + offset_j
+            pg.core.neighbor_indices[write_idx_j] = i
+            pg.core.neighbor_data[1, write_idx_j] = weight
+            for d in 1:D
+                pg.core.neighbor_data[1 + d, write_idx_j] = -dist[d]
+            end
+            
+            null
+        end,
+        0, system.box, system.cl; parallel = true
+    )
     return nothing
 end
+# A clean top-level call for your physics loops
+reorder_particles!(pg::ParticleGrid) = pg.reorder(pg)
 
-"""
-    sort_1d_particles!(pg::ParticleGrid1D)
+function (rd::ReorderData{1})(pg::ParticleGrid{1, M, S, WF}) where {M, S, WF}
+    N = pg.meta.N
+    
+    # 1. Determine the permutation that sorts the active positions [cite: 376]
+    range = (N + 1):length(pg.core.positions)
+    p = [sortperm(pg.core.positions[1:N]); collect(range)]
 
-Sorts the persistent state arrays (positions, rhos, curvatures, etc.) based on
-position x_i < x_j for i < j. This is crucial for moving grids (Lagrangian
-or semi-Lagrangian) to ensure the 1D neighbor search and boundary handling
-remain valid.
-
-Note: This function invalidates the current neighbor graph. You must call 
-`updateNeighbors!(pg)` immediately after.
-"""
-function sort_1d_particles!(pg::ParticleGrid1D)
-    # 1. Determine the permutation that sorts the positions
-    # sortperm is robust and handles the indices logic for us
-    range = pg.N+1:length(pg.positions)
-    p = [sortperm(pg.positions[1:pg.N]) ; collect(range) ]
-
-    # Optimization: If already sorted (common in small time steps), exit early
+    # Optimization: Exit early if already sorted (common in small time steps) [cite: 376]
     if issorted(p)
         return nothing
     end
 
-    # 2. Permute all persistent state vectors in-place using the permutation `p`.
-    # Base.permute! handles the cycles efficiently.
-    Base.permute!(pg.positions, p)
-    Base.permute!(pg.rhos, p)
-    Base.permute!(pg.curvatures, p)
-    Base.permute!(pg.is_boundary, p)
-    Base.permute!(pg.volumes, p)
-    Base.permute!(pg.mood_events, p)
-
-    # Note: We do not permute neighbor buffers (indices/weights/pointers)
-    # because those are meaningless after a position swap and must be 
-    # totally rebuilt by updateNeighbors!().
+    # 2. Permute core geometry fields in-place [cite: 377]
+    Base.permute!(pg.core.positions, p)
+    Base.permute!(pg.core.is_boundary, p)
     
+    # 3. Permute physics matrices (N x M). 
+    # Row-wise assignment handles the multiple species/variables elegantly.
+    pg.rhos .= pg.rhos[p, :]
+    pg.curvatures .= pg.curvatures[p, :]
+    pg.mood_events .= pg.mood_events[p, :]
+
+    # Note: We do not permute the CSR neighbor buffers here because 
+    # the spatial swap invalidates them. updateNeighbors! must be called next.
+    return nothing
+end
+
+# --- 1D Boundary Conditions ---
+function apply_boundary_conditions!(pg::ParticleGrid{1}, rhos_buffer::AbstractArray)
+    bc = pg.meta.bc
+    is_matrix = ndims(rhos_buffer) == 2
+
+    if bc == :periodic
+        return 
+        
+    elseif bc == :fixed_dirichlet
+        @inbounds for i in 1:pg.meta.N
+            if pg.core.is_boundary[i]
+                if is_matrix
+                    rhos_buffer[i, :] .= pg.rhos[i, :]
+                else
+                    rhos_buffer[i] = pg.rhos[i] # Fallback for 1D vectors
+                end
+            end
+        end
+
+    elseif bc == :outflow
+        # Find bounds of the interior dynamically since particles are sorted
+        first_interior = findfirst(==(false), pg.core.is_boundary)
+        last_interior  = findlast(==(false), pg.core.is_boundary)
+        
+        if isnothing(first_interior) || isnothing(last_interior)
+            return
+        end
+        
+        if is_matrix
+            val_left = rhos_buffer[first_interior, :]
+            val_right = rhos_buffer[last_interior, :]
+            for i in 1:(first_interior-1)
+                rhos_buffer[i, :] .= val_left
+            end
+            for i in (last_interior+1):pg.meta.N
+                rhos_buffer[i, :] .= val_right
+            end
+        else
+            val_left = rhos_buffer[first_interior]
+            val_right = rhos_buffer[last_interior]
+            rhos_buffer[1:(first_interior-1)] .= val_left
+            rhos_buffer[(last_interior+1):end] .= val_right
+        end
+    end
+    return nothing
+end
+
+# --- 2D Boundary Conditions ---
+function apply_boundary_conditions!(pg::ParticleGrid{2}, rhos_buffer::AbstractArray)
+    bc = pg.meta.bc
+    is_matrix = ndims(rhos_buffer) == 2
+
+    if bc == :periodic
+        return 
+        
+    elseif bc == :fixed_dirichlet
+        @inbounds for i in 1:pg.meta.N
+            if pg.core.is_boundary[i]
+                if is_matrix
+                    rhos_buffer[i, :] .= pg.rhos[i, :]
+                else
+                    rhos_buffer[i] = pg.rhos[i] 
+                end
+            end
+        end
+        
+    elseif bc == :outflow
+        @inbounds for ghost_idx in 1:pg.meta.N
+            if pg.core.is_boundary[ghost_idx]
+                num_nb = pg.core.num_neighbors[ghost_idx]
+                if num_nb == 0
+                    continue
+                end
+
+                start_idx = pg.core.neighbor_pointers[ghost_idx]
+                min_dist_sq = Inf
+                closest_interior_idx = -1
+
+                # Search through neighbors using the cache-friendly matrix
+                @inbounds for k in start_idx:(start_idx + num_nb - 1)
+                    neighbor_idx = pg.core.neighbor_indices[k]
+                    
+                    if !pg.core.is_boundary[neighbor_idx]
+                        dx = pg.core.neighbor_data[2, k]
+                        dy = pg.core.neighbor_data[3, k]
+                        dist_sq = dx^2 + dy^2
+
+                        if dist_sq < min_dist_sq
+                            min_dist_sq = dist_sq
+                            closest_interior_idx = neighbor_idx
+                        end
+                    end
+                end
+                
+                # Copy values from the closest interior neighbor found
+                if closest_interior_idx != -1
+                    if is_matrix
+                        rhos_buffer[ghost_idx, :] .= rhos_buffer[closest_interior_idx, :]
+                    else
+                        rhos_buffer[ghost_idx] = rhos_buffer[closest_interior_idx]
+                    end
+                end
+            end
+        end
+    end
     return nothing
 end
 
@@ -1206,225 +928,12 @@ function determineVolumes!(particleGrid::ParticleGrid1D)
         end
     else
         # For non-periodic, only calculate for interior points
-        for i in particleGrid.interior_indices
+        for i in 1:N
+            if particleGrid.is_boundary[i]; continue end
             volumes[i] = (positions[i+1] - positions[i-1]) / 2.0
         end
     end
     return
-end
-
-"""
-(1D Implementation) Updates ghost cell values in the provided `rhos_buffer`.
-
-This operates on a buffer (like `rhoInit` or `rhos` in the timestepper)
-to avoid modifying the grid's state mid-step.
-"""
-function apply_boundary_conditions!(particleGrid::ParticleGrid1D, rhos_buffer::AbstractVector)
-    bc = particleGrid.bc
-
-    if bc == :periodic
-        return # Periodic boundaries have no ghost cells to update
-    
-    elseif bc == :fixed_dirichlet
-        # Copy the grid's "permanent" rho values into the buffer's ghost cells.
-        # This is for fixed inflow/wall boundaries.
-        @inbounds for ghost_idx in 1:particleGrid.N
-            if particleGrid.is_boundary[ghost_idx]
-                # This reads from the grid's persistent state (particleGrid.rhos)
-                # and writes to the temporary buffer (rhos_buffer).
-                rhos_buffer[ghost_idx] = particleGrid.rhos[ghost_idx]
-            end
-        end
-
-    elseif bc == :outflow
-        # Copy the value from the nearest interior particle (at the edge)
-        # into all ghost cells on that side. This uses the sorted nature of the 1D grid.
-        interior = particleGrid.interior_indices
-        if isempty(interior); return; end
-        
-        first_interior_idx = first(interior)
-        last_interior_idx  = last(interior)
-
-        # Read the boundary values *from the buffer* we are currently working on.
-        val_at_left_boundary  = rhos_buffer[first_interior_idx]
-        val_at_right_boundary = rhos_buffer[last_interior_idx]
-
-        # Write those values into the ghost cell regions *of the buffer*.
-        rhos_buffer[1:(first_interior_idx-1)] .= val_at_left_boundary
-        rhos_buffer[(last_interior_idx+1):end] .= val_at_right_boundary
-    end
-    
-    return nothing
-end
-
-
-"""
-    apply_boundary_conditions!(particleGrid::ParticleGrid2D, rhos_buffer::AbstractVector)
-
-Updates ghost cell values in the provided `rhos_buffer` for `:outflow`
-boundary conditions by finding the closest interior neighbor. This operates
-on a buffer to avoid modifying the grid's state mid-step.
-"""
-function apply_boundary_conditions!(particleGrid::ParticleGrid2D, rhos_buffer::AbstractVector)
-    if particleGrid.bc == :periodic; return; 
-    elseif particleGrid.bc == :fixed_dirichlet
-        for ghost_idx in 1:particleGrid.N
-            if particleGrid.is_boundary[ghost_idx]
-                rhos_buffer[ghost_idx] = particleGrid.rhos[ghost_idx]
-            end
-        end
-    elseif particleGrid.bc == :outflow
-    # Find all ghost particles by checking the is_boundary flag
-    @inbounds for ghost_idx in 1:particleGrid.N
-        if particleGrid.is_boundary[ghost_idx]
-            num_nb = particleGrid.num_neighbors[ghost_idx]
-            if num_nb == 0; continue; end
-
-            start_idx = particleGrid.neighbor_pointers[ghost_idx]
-            
-            min_dist_sq = Inf
-            closest_interior_neighbor_idx = -1
-
-            # Search through this ghost particle's neighbors
-            @inbounds for k in 1:num_nb
-                global_idx = start_idx + k - 1
-                neighbor_idx = particleGrid.neighbor_indices[global_idx]
-                
-                # Check if the neighbor is an interior particle
-                if !particleGrid.is_boundary[neighbor_idx]
-                    dx = particleGrid.neighbor_xdistance[global_idx]
-                    dy = particleGrid.neighbor_ydistance[global_idx]
-                    dist_sq = dx^2 + dy^2
-
-                    if dist_sq < min_dist_sq
-                        min_dist_sq = dist_sq
-                        closest_interior_neighbor_idx = neighbor_idx
-                    end
-                end
-            end
-            # Copy the value from the closest neighbor *from the buffer*
-            if closest_interior_neighbor_idx != -1
-                rhos_buffer[ghost_idx] = rhos_buffer[closest_interior_neighbor_idx]
-#            else
-#                rhos_buffer[ghost_idx] = particleGrid.rhos[ghost_idx]
-            end
-        end
-    end
-end
-end
-"""
-    getTimeStep(particleGrid::ParticleGrid1D, eq::LinearAdvection{1})
-
-Return the maximum time step for the first-order upwind method,
-using the pre-calculated neighbor buffers.
-"""
-function getTimeStep(particleGrid::ParticleGrid1D, eq::LinearAdvection{1})
-    dtMax = Inf
-    
-    # It is assumed updateNeighbors!(particleGrid) has already been called.
-    
-    vel = velocity(eq, 0.0)
-
-    # Access the flat buffers once
-    neighbor_xdistance_full = particleGrid.neighbor_xdistance
-    neighbor_weights_full = particleGrid.neighbor_weights
-
-    for particleIndex in particleGrid.interior_indices
-        num = 0.0
-        denum = 0.0
-        
-        # --- NEW: Use flat buffer loop ---
-        nb_slice = getNBSlice(particleGrid, particleIndex)
-        
-        @inbounds for k in nb_slice
-            dx = neighbor_xdistance_full[k]
-            w = neighbor_weights_full[k]
-            
-            # Upwind condition
-            if ((vel >= 0.0) && (dx <= 0.0)) || ((vel <= 0.0) && (dx >= 0.0))
-                num += w * dx
-                denum += w * dx * dx
-            end
-        end
-        # --- End new loop ---
-
-        if abs(vel * num) > 1e-14
-            dtMax = min(-denum / (vel * num), dtMax)
-        end
-    end
-    return dtMax
-end
-function getTimeStep(particleGrid::ParticleGrid2D{S}, eq::LinearAdvection{2}) where S
-    dtMax = Inf
-    # Note: It's assumed that `updateNeighbors!` has already been called
-    # and has populated all the neighbor_* buffers, including neighbor_weights.
-
-    vel = eq.vel
-
-    for particleIndex in 1:particleGrid.N
-        if particleGrid.is_boundary[particleIndex]; continue end
-        num_nb = particleGrid.num_neighbors[particleIndex]
-        if num_nb == 0; continue; end
-        
-        start_idx = particleGrid.neighbor_pointers[particleIndex]
-
-        # --- 1. First Pass: Calculate the least-squares matrix A ---
-        # This loop reads directly from the global grid buffers. No allocations.
-        A11 = 0.0; A12 = 0.0; A22 = 0.0
-        @inbounds for k in 1:num_nb
-            global_idx = start_idx + k - 1
-            
-            # Read pre-calculated values directly from the grid
-            dx = particleGrid.neighbor_xdistance[global_idx]
-            dy = particleGrid.neighbor_ydistance[global_idx]
-            w  = particleGrid.neighbor_weights[global_idx]
-
-            # Accumulate for the A matrix
-            A11 += w * dx * dx
-            A12 += w * dx * dy
-            A22 += w * dy * dy
-        end
-
-        D = A11 * A22 - (A12^2)
-        if abs(D) < 1e-14; continue; end
-
-        # --- 2. Second Pass: Calculate sumCij using the A matrix ---
-        # This loop also reads directly from the global grid buffers. No allocations.
-        sumCij = 0.0
-        @inbounds for k in 1:num_nb
-            global_idx = start_idx + k - 1
-
-            # Read pre-calculated values again
-            deltaX = particleGrid.neighbor_xdistance[global_idx]
-            deltaY = particleGrid.neighbor_ydistance[global_idx]
-            w      = particleGrid.neighbor_weights[global_idx]
-            
-            # Solve 2x2 LS system for coefficients
-            coeff_x = (A22 * w * deltaX - A12 * w * deltaY) / D
-            coeff_y = (A11 * w * deltaY - A12 * w * deltaX) / D
-            
-            # Compute adapted coefficients for positivity
-            angle = atan(deltaY, deltaX)
-            n_x, n_y = cos(angle), sin(angle)
-            s_x, s_y = -n_y, n_x
-            
-            alfaBar = n_x * coeff_x + n_y * coeff_y
-            betaBar = s_x * coeff_x + s_y * coeff_y
-            
-            dot_vel_n = vel[1] * n_x + vel[2] * n_y
-            dot_vel_s = vel[1] * s_x + vel[2] * s_y
-            
-            bracketMinus = dot_vel_n > 0.0 ? 0.0 : dot_vel_n
-            bracketMinus2 = betaBar * dot_vel_s > 0.0 ? 0.0 : betaBar * dot_vel_s
-            
-            sumCij -= alfaBar * bracketMinus + bracketMinus2
-        end
-        
-        if abs(sumCij) > 1e-14
-            dtMax = min(1 / (2 * sumCij), dtMax)
-        end
-    end
-    return dtMax
 end
 
 """
@@ -1518,6 +1027,110 @@ function findLocalExtremaAbs(
     end
     
     return (mini1, maxi1, minAbs1, maxAbs1, mini2, maxi2, minAbs2, maxAbs2)
+end
+
+# --- 1D Time Step ---
+function getTimeStep(pg::ParticleGrid{1}, eq)#::LinearAdvection{1})
+    dtMax = Inf
+    vel = velocity(eq, 0.0)
+
+    for i in 1:pg.meta.N
+        # Skip boundary particles
+        if pg.core.is_boundary[i]
+            continue
+        end
+        
+        num = 0.0
+        denum = 0.0
+        
+        start_idx = pg.core.neighbor_pointers[i]
+        num_nb = pg.core.num_neighbors[i]
+        
+        @inbounds for k in start_idx:(start_idx + num_nb - 1)
+            # Row 1 is Weight, Row 2 is dx
+            w  = pg.core.neighbor_data[1, k]
+            dx = pg.core.neighbor_data[2, k]
+            
+            # Upwind condition
+            if ((vel >= 0.0) && (dx <= 0.0)) || ((vel <= 0.0) && (dx >= 0.0))
+                num += w * dx
+                denum += w * dx * dx
+            end
+        end
+
+        if abs(vel * num) > 1e-14
+            dtMax = min(-denum / (vel * num), dtMax)
+        end
+    end
+    return dtMax
+end
+
+# --- 2D Time Step ---
+function getTimeStep(pg::ParticleGrid{2}, eq)#::LinearAdvection{2})
+    dtMax = Inf
+    vel = eq.vel
+
+    for i in 1:pg.meta.N
+        if pg.core.is_boundary[i]
+            continue
+        end
+        
+        num_nb = pg.core.num_neighbors[i]
+        if num_nb == 0
+            continue
+        end
+        
+        start_idx = pg.core.neighbor_pointers[i]
+
+        # --- First Pass: Least Squares Matrix ---
+        A11 = 0.0; A12 = 0.0; A22 = 0.0
+        @inbounds for k in start_idx:(start_idx + num_nb - 1)
+            # Row 1: w, Row 2: dx, Row 3: dy
+            w  = pg.core.neighbor_data[1, k]
+            dx = pg.core.neighbor_data[2, k]
+            dy = pg.core.neighbor_data[3, k]
+
+            A11 += w * dx * dx
+            A12 += w * dx * dy
+            A22 += w * dy * dy
+        end
+
+        D = A11 * A22 - (A12^2)
+        if abs(D) < 1e-14
+            continue
+        end
+
+        # --- Second Pass: Calculate sumCij ---
+        sumCij = 0.0
+        @inbounds for k in start_idx:(start_idx + num_nb - 1)
+            w  = pg.core.neighbor_data[1, k]
+            dx = pg.core.neighbor_data[2, k]
+            dy = pg.core.neighbor_data[3, k]
+            
+            coeff_x = (A22 * w * dx - A12 * w * dy) / D
+            coeff_y = (A11 * w * dy - A12 * w * dx) / D
+            
+            angle = atan(dy, dx)
+            n_x, n_y = cos(angle), sin(angle)
+            s_x, s_y = -n_y, n_x
+            
+            alfaBar = n_x * coeff_x + n_y * coeff_y
+            betaBar = s_x * coeff_x + s_y * coeff_y
+            
+            dot_vel_n = vel[1] * n_x + vel[2] * n_y
+            dot_vel_s = vel[1] * s_x + vel[2] * s_y
+            
+            bracketMinus = dot_vel_n > 0.0 ? 0.0 : dot_vel_n
+            bracketMinus2 = betaBar * dot_vel_s > 0.0 ? 0.0 : betaBar * dot_vel_s
+            
+            sumCij -= alfaBar * bracketMinus + bracketMinus2
+        end
+        
+        if abs(sumCij) > 1e-14
+            dtMax = min(1 / (2 * sumCij), dtMax)
+        end
+    end
+    return dtMax
 end
 
 include("ParticleManagement.jl")
