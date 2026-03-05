@@ -36,7 +36,7 @@ function main()
     sim_config_euler1d_system = SimulationConfig(
         runSystemSimulation,
         ParamDict(
-            "tmax" => 0.2, "N" => 100, "bc" => :outflow,
+            "tmax" => 0.2, "N" => 600, "bc" => :outflow,
             "xmin" => -0.5, "xmax" => .5, 
             "dt" => 0.001, "snapshots" => 21, 
             "interp_alpha" => 1.0, "interp_range" => 3.5, # Factor for dx
@@ -45,7 +45,7 @@ function main()
             "PDE" => "leuler1d", "sim_function" => "runSystemSimulation",
             #"init_params" => euler_smooth_params, 
             "init_params" => sod_euler_params, 
-            "randomness_factor" => 0., "grid_mover" => "none", "merge_factor" => .5,
+            "randomness_factor" => 0., "grid_mover" => "none", "merge_factor" => .3,
             "SEED" => SEED_value, "save_relax" => false, "weight_function" => "exponential",
             #"relax_velocities" => [as, as, as]
             "relax_velocities" => [ [2.0, -2.0], [2.0, -2.0], [2.0, -2.0] ], # Pairs for rho, m, E kinetic components

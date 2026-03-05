@@ -225,7 +225,7 @@ Calculates the path integral ∫ A(Φ(s)) ∂sΦ ds numerically. [cite: 89, 249]
 This version is specialized for N-component systems to ensure zero allocation.
 """
 @inline function path_integral(eq::HyperbolicPDE{D, N}, uL::NTuple{N, Float64}, uR::NTuple{N, Float64}) where {D, N}
-    nodes, weights = gauss_lobatto_5()
+    nodes, weights = simpson_3_point()
     path = eq.path # Assumes path is stored in the PDE struct
 
     # Initialize the integral tuple with zeros
@@ -248,5 +248,55 @@ This version is specialized for N-component systems to ensure zero allocation.
     if maximum(abs.(integral)) > 1000; error("Integral too large!") end
     return integral
 end
+# Add these helpers to convert between states
+@inline function primitive_to_conservative(U::Tuple)
+    rho, u, p = U
+    E = p / (GAS_GAMMA_EULER - 1.0) + 0.5 * rho * u^2
+    return (rho, rho * u, E)
+end
 
+@inline function conservative_to_primitive(W::Tuple)
+    rho, m, E = W
+    safe_rho = max(rho, 1e-7)
+    u = m / safe_rho
+    p = (GAS_GAMMA_EULER - 1.0) * (E - 0.5 * m^2 / safe_rho)
+    return (safe_rho, u, max(p, 1e-7))
+end
+
+# Modified Path Integral
+@inline function path_integral(eq::LEuler1D{P}, uL::NTuple{3, Float64}, uR::NTuple{3, Float64}) where {P<:AbstractPath}
+    nodes, weights = gauss_lobatto_5() 
+    
+    # 1. Convert endpoints to Conservative variables
+    wL = primitive_to_conservative(uL)
+    wR = primitive_to_conservative(uR)
+
+    integral = (0.0, 0.0, 0.0)
+
+    for i in eachindex(nodes)
+        s = nodes[i]
+        w = weights[i]
+        
+        # 2. Linearly interpolate in CONSERVATIVE space
+        w_s = ntuple(k -> wL[k] + s * (wR[k] - wL[k]), Val(3))
+        
+        # Derivative of conservative path with respect to s
+        dw_s = ntuple(k -> wR[k] - wL[k], Val(3))
+        
+        # 3. Map the state and the derivative BACK to primitive space
+        # (Using finite differences for the mapped derivative is safest and easiest)
+        eps_fd = 1e-6
+        w_s_plus = ntuple(k -> w_s[k] + eps_fd * dw_s[k], Val(3))
+        
+        U_s = conservative_to_primitive(w_s)
+        U_s_plus = conservative_to_primitive(w_s_plus)
+        dU_s = ntuple(k -> (U_s_plus[k] - U_s[k]) / eps_fd, Val(3))
+        
+        # 4. Calculate the non-conservative product using the mapped path
+        term = A_matrix_times_vector(eq, U_s, dU_s)
+        integral = ntuple(k -> integral[k] + w * term[k], Val(3))
+    end
+    
+    return integral
+end
 end # Module

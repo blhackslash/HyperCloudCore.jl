@@ -53,6 +53,7 @@ end
         if k in range; return i end
     end
     @warn "Could not match given kinetic index to macro variable!"
+    return 1
 end
 
 # Helper for 1D PDEs: flux_result is a single tuple
