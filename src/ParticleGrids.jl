@@ -61,6 +61,154 @@ Base.length(pgs::ParticleGridSystem) = length(pgs.grids)
 Base.iterate(pgs::ParticleGridSystem, state=1) = iterate(pgs.grids, state)
 Base.eachindex(pgs::ParticleGridSystem) = eachindex(pgs.grids)
 
+# ============== ParticleGrids.jl ==============
+module ParticleGrids
+
+using StaticArrays
+using Base.Threads: Atomic
+
+export ParticleGrid, GridMetadata, SharedBuffers, NeighborData, ReorderData, ManagementData, ParticleGridCore
+
+# ---------------------------------------------------------
+# 1. Grid Metadata
+# ---------------------------------------------------------
+mutable struct GridMetadata{D}
+    N::Int                  # Current number of active particles
+    N_interior::Int         # Number of interior (non-boundary) particles
+    N_ghost::Int            # Number of ghost/boundary particles
+    
+    # Domain Boundaries
+    mins::SVector{D, Float64}
+    maxs::SVector{D, Float64}
+    
+    # Resolution / Topology
+    h::Float64              # Smoothing length
+    dx::SVector{D, Float64} # Base spacing (for regular grids)
+    regular::Bool
+    bc::Symbol              # :periodic, :fixed_dirichlet, etc.
+    range_factor::Float64
+    max_nb::Int             # Estimated max neighbors per particle
+end
+
+# ---------------------------------------------------------
+# 2. Shared Workspace Buffers
+# ---------------------------------------------------------
+"""
+Shared buffers to prevent allocating new arrays during sorting, 
+particle management, or MOOD limiting.
+"""
+struct SharedBuffers{D, M}
+    # N x M matrix for generic physics variable shuffling
+    rho_buffer::Matrix{Float64}      
+    
+    # N-length buffers for positions and flags
+    pos_buffer::Vector{SVector{D, Float64}} 
+    bit_buffer::BitVector
+    int_buffer::Vector{Int}
+end
+
+# ---------------------------------------------------------
+# 3. Neighbor Search Context
+# ---------------------------------------------------------
+struct NeighborData{S, WF}
+    neighbor_system::S      # CellListMap system or similar
+    weight_func::WF
+    
+    # Thread-safety atomics for building neighbor lists in parallel
+    atomic_counts::Vector{Atomic{Int}}
+    atomic_offsets::Vector{Atomic{Int}}
+end
+
+# ---------------------------------------------------------
+# 4. Reordering / Sorting Context
+# ---------------------------------------------------------
+struct ReorderData
+    permutation::Vector{Int}          # Logical to physical index
+    inv_permutation::Vector{Int}      # Physical to logical index
+    new_permutation_buffer::Vector{Int} 
+    seen_buffer::BitVector            # O(1) lookup for graph traversal
+    # Note: We use the SharedBuffers for the actual data shuffling!
+end
+
+# ---------------------------------------------------------
+# 5. Particle Management Context
+# ---------------------------------------------------------
+struct ManagementData
+    # Placeholders for your reworked ParticleManagement.jl
+    # e.g., tracking volumes, split/merge targets, etc.
+    merge_flags::BitVector
+    split_targets::Vector{Int}
+end
+
+# ---------------------------------------------------------
+# 6. Particle Grid Core (Geometry & Topology)
+# ---------------------------------------------------------
+struct ParticleGridCore{D}
+    positions::Vector{SVector{D, Float64}}
+    is_boundary::BitVector
+    
+    # CSR (Compressed Sparse Row) format for Neighbors
+    neighbor_pointers::Vector{Int}
+    num_neighbors::Vector{Int}
+    neighbor_indices::Vector{Int}
+    
+    # Matrix holding (Weight, dx, [dy, dz]) for cache-friendly access
+    # Rows: D + 1, Columns: Total number of neighbor pairs
+    neighbor_data::Matrix{Float64} 
+end
+
+# ---------------------------------------------------------
+# 7. The Top-Level Particle Grid
+# ---------------------------------------------------------
+struct ParticleGrid{D, M, S, WF}
+    # Sub-structs
+    meta::GridMetadata{D}
+    core::ParticleGridCore{D}
+    shared::SharedBuffers{D, M}
+    neighbors::NeighborData{S, WF}
+    reorder::ReorderData
+    manage::ManagementData
+    
+    # Physics Data (N x M matrices)
+    rhos::Matrix{Float64}
+    mood_events::Matrix{Bool}
+    curvatures::Matrix{Float64}
+end
+
+# --- Aliases for convenience ---
+const ParticleGrid1D{M, S, WF} = ParticleGrid{1, M, S, WF}
+const ParticleGrid2D{M, S, WF} = ParticleGrid{2, M, S, WF}
+
+# ---------------------------------------------------------
+# 8. Property Forwarding (The Compatibility Magic)
+# ---------------------------------------------------------
+# This ensures `grid.N` routes to `grid.meta.N` and `grid.positions` to `grid.core.positions`
+function Base.getproperty(pg::ParticleGrid, sym::Symbol)
+    if sym in fieldnames(ParticleGrid)
+        return getfield(pg, sym)
+    elseif sym in fieldnames(ParticleGridCore)
+        return getproperty(getfield(pg, :core), sym)
+    elseif sym in fieldnames(GridMetadata)
+        return getproperty(getfield(pg, :meta), sym)
+    else
+        error("type ParticleGrid has no field $sym")
+    end
+end
+
+function Base.setproperty!(pg::ParticleGrid, sym::Symbol, val)
+    if sym in fieldnames(ParticleGrid)
+        setfield!(pg, sym, val)
+    elseif sym in fieldnames(ParticleGridCore)
+        setproperty!(getfield(pg, :core), sym, val)
+    elseif sym in fieldnames(GridMetadata)
+        setproperty!(getfield(pg, :meta), sym, val)
+    else
+        error("type ParticleGrid has no field $sym")
+    end
+end
+
+end # module
+
 """
     safe_resize!(v::Vector, n::Integer)
 
@@ -257,7 +405,7 @@ mutable struct ParticleGrid2D{S, WF} <: ParticleGrid{2}
 
     # Particle Sized Buffers
     neighbor_pointers::Vector{Int}
-    num_neighbors::Vector{Int}    
+    num_neighbors::Vector{Int}
     # --- Flattened Neighbor Data Buffers ---
     neighbor_indices::Vector{Int}
     neighbor_xdistance::Vector{Float64}

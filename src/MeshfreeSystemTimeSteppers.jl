@@ -224,7 +224,189 @@ function initAddTSBuffer!(imex_ts::GeneralIMEXTimeStepper, pgs::ParticleGridSyst
     end
 end
 
+using StaticArrays
 
+# --- REFACTORED Functor for GeneralIMEXTimeStepper ---
+function (imex_ts::GeneralIMEXTimeStepper{G1, G2, M, IS, ST_OBJ, BT})(
+        scalar_equations::DiagonalHyperbolicSystem{N,D},
+        system_pg::ParticleGridSystem{N,D},
+        settings::SimSetting,
+        time_n::Real,
+        dt::Real
+    ) where {G1, G2, M, IS, ST_OBJ, BT, N, D}
+
+    N_components = N
+    s = imex_ts.num_stages
+    bt = imex_ts.butcher_tableau
+    grid_mover = imex_ts.grid_mover
+    
+    manage_particles!(system_pg) 
+    update_grid_velocities!(system_pg, grid_mover)
+    N_particles = system_pg[1].N 
+    fill!(imex_ts.mood_triggered, false)
+
+    for i in 1:s
+        if i != s
+            grid_mover(system_pg, (bt.ct[i+1] - bt.ct[i]) * dt; managed = false)
+        else
+            grid_mover(system_pg, (1. - bt.ct[i]) * dt; managed = false)           
+        end
+        
+        initTSBuffer!(imex_ts, system_pg)       
+        current_Y_i_sys = imex_ts.Y_stages_sys[i]
+
+        # ==================================================================
+        # PHASE 1: Accumulate Stages (Register Blocked)
+        # ==================================================================
+        Threads.@threads :static for p_idx in 1:N_particles
+            if system_pg[1].is_boundary[p_idx]
+                # Boundaries stay at their U_n state
+                for k in 1:N_components
+                    current_Y_i_sys[p_idx, k] = system_pg[k].rhos[p_idx]
+                end
+                continue
+            end
+
+            # 1. READ ONCE into fast MVector (Registers)
+            Y_local = MVector{N_components, Float64}(undef)
+            for k in 1:N_components
+                Y_local[k] = system_pg[k].rhos[p_idx]
+            end
+            
+            # 2. ACCUMULATE IN REGISTERS (Zero cache misses)
+            for j in 1:(i-1)
+                for k in 1:N_components
+                    if imex_ts.mood_triggered[p_idx, k, j]
+                        Y_local[k] += dt * (bt.ct[j+1] - bt.ct[j]) * imex_ts.K_E_stages_sys[j][p_idx, k]
+                    else
+                        Y_local[k] += dt * bt.At[i,j] * imex_ts.K_E_stages_sys[j][p_idx, k]
+                    end
+                    if bt.A[i,j] != 0.0
+                        Y_local[k] += dt * bt.A[i,j] * imex_ts.K_I_stages_sys[j][p_idx, k]
+                    end
+                end
+            end
+            
+            # 3. WRITE ONCE to RAM
+            for k in 1:N_components
+                current_Y_i_sys[p_idx, k] = Y_local[k]
+            end
+        end
+
+        # ==================================================================
+        # PHASE 2: Non-Local Potential (Synchronization Point)
+        # ==================================================================
+        if imex_ts.source_term_object isa NonLocalRelaxationSourceTerm
+            update_nonlocal_potential!(imex_ts.source_term_object, current_Y_i_sys, system_pg)  
+        end
+
+        # ==================================================================
+        # PHASE 3: Implicit Solve & K_I Evaluation (Merged & Register Blocked)
+        # ==================================================================
+        time_implicit = time_n + bt.c[i] * dt
+        
+        Threads.@threads :static for p_idx in 1:N_particles
+            # Skip ghost particles if needed, or process them if gravity applies
+            
+            # 1. READ state into MVector
+            V_local = MVector{N_components, Float64}(undef)
+            for k in 1:N_components
+                V_local[k] = current_Y_i_sys[p_idx, k]
+            end
+            
+            # 2. SOLVE IN REGISTERS
+            if abs(bt.A[i,i]) > 1e-14
+                ImplicitSolvers.solve!(
+                    imex_ts.implicit_solver, V_local, dt * bt.A[i,i],
+                    imex_ts.source_term_object, p_idx,
+                    system_pg[1].positions[p_idx], time_implicit, N_components
+                )
+                
+                # Write updated state back
+                for k in 1:N_components
+                    current_Y_i_sys[p_idx, k] = V_local[k]
+                end
+            end
+            
+            # 3. EVALUATE SOURCE K_I IMMEDIATELY (Using hot registers)
+            KI_local = MVector{N_components, Float64}(undef)
+            imex_ts.source_term_object(
+                KI_local, V_local, p_idx, 
+                system_pg[1].positions[p_idx], time_implicit
+            )
+            
+            # Write K_I back
+            for k in 1:N_components
+                imex_ts.K_I_stages_sys[i][p_idx, k] = KI_local[k]
+            end
+        end
+
+        # ==================================================================
+        # PHASE 4: Explicit Gradients K_E
+        # ==================================================================
+        # (This block remains mostly exactly as you wrote it!)
+        
+        # 1. Apply BCs & Init Buffers
+        Threads.@threads :static for k in 1:N
+            grid_k = system_pg[k]
+            apply_boundary_conditions!(grid_k, @view(current_Y_i_sys[:, k]))
+            initGIBuffers!(imex_ts.gradientInterpolator[k], grid_k)
+            initGIBuffers!(imex_ts.fallbackInterpolator[k], grid_k)
+        end
+        
+        # 2. Slopes & Gradients (p_idx outside caches the neighbor lists!)
+        Threads.@threads :static for p_idx in 1:N_particles
+            initFs!(imex_ts, p_idx, @view(current_Y_i_sys[p_idx,:]), current_Y_i_sys, system_pg)
+            
+            # Get neighbor topological slice once for this particle
+            nb_slice = getNBSlice(system_pg[1], p_idx) 
+            
+            for k in 1:N
+                grid_k = system_pg[k]
+                neighbor_fs = @view imex_ts.all_neighbor_fs[:,k]
+                neighbor_dfs = @view imex_ts.all_neighbor_dfs[:,k]
+                fi = current_Y_i_sys[p_idx, k]
+                
+                initGI!(imex_ts.gradientInterpolator[k], p_idx, fi, grid_k, neighbor_fs, neighbor_dfs)
+                initGI!(imex_ts.fallbackInterpolator[k], p_idx, fi, grid_k, neighbor_fs, neighbor_dfs)
+                
+                if !grid_k.is_boundary[p_idx]
+                    eq = scalar_equations[k] 
+                    div_high = imex_ts.gradientInterpolator[k](eq, p_idx, fi, nb_slice, grid_k, neighbor_fs, neighbor_dfs) 
+                    
+                    rho_candidate = fi - dt * div_high
+                    if !(imex_ts.fallbackInterpolator isa NoFallbackGrad) && imex_ts.mood(imex_ts.gradientInterpolator[k], p_idx, fi, nb_slice, rho_candidate, grid_k, neighbor_fs)
+                        div_fallback = imex_ts.fallbackInterpolator[k](eq, p_idx, fi, nb_slice, grid_k, neighbor_fs, neighbor_dfs)
+                        imex_ts.K_E_stages_sys[i][p_idx, k] = -div_fallback
+                        imex_ts.mood_triggered[p_idx,k,i] = true
+                    else
+                        imex_ts.K_E_stages_sys[i][p_idx, k] = -div_high
+                    end
+                end
+            end
+        end 
+    end # End of stages loop
+    
+    # ==================================================================
+    # PHASE 5: Final Step Update
+    # ==================================================================
+    for i in 1:s
+        dt_bt = dt * bt.bt[i]
+        dt_b  = dt * bt.b[i]
+        
+        Threads.@threads :static for p_idx in 1:N_particles
+            if system_pg[1].is_boundary[p_idx]; continue; end
+            
+            for k in 1:N_components
+                system_pg[k].rhos[p_idx] += dt_bt * imex_ts.K_E_stages_sys[i][p_idx, k] + dt_b * imex_ts.K_I_stages_sys[i][p_idx, k]
+            end
+        end
+    end
+
+    for k in 1:N
+        apply_boundary_conditions!(system_pg[k], system_pg[k].rhos)
+    end
+end
 # --- REFACTORED Functor for GeneralIMEXTimeStepper ---
 function (imex_ts::GeneralIMEXTimeStepper{G1, G2, M, IS, ST_OBJ, BT})(
         scalar_equations::DiagonalHyperbolicSystem{N,D},
