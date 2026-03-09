@@ -11,7 +11,7 @@ function manage_particles!(pg::ParticleGrid)
     # =========================================================================
     # PHASE 1: VOXEL FILL (Splitting)
     # =========================================================================
-    
+    return
     empty!(pg.split_buffer_pos)
     empty!(pg.split_buffer_rho)
 

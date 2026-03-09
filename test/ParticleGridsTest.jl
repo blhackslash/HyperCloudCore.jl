@@ -54,7 +54,7 @@ end
         
         # Test matrix allocations
         @test size(pg1.rhos) == (10, 2)
-        @test size(pg1.core.neighbor_data) == (2, 0) # Initially empty
+        @test size(pg1.core.neighbor_data) == (0, 2) # Initially empty
         
         # Test Boundaries
         @test sum(pg1.is_boundary) == 0 # Periodic means no boundary particles
@@ -66,7 +66,7 @@ end
         # 1. Test Neighbor Update
         updateNeighbors!(pg1)
         @test pg1.max_nb > 0
-        @test size(pg1.core.neighbor_data, 1) == 2 # Row 1=weight, Row 2=dx
+        @test size(pg1.core.neighbor_data, 2) == 2 # Row 1=weight, Row 2=dx
         @test length(pg1.core.neighbor_indices) > 0
         
         # 2. Test Sorting
@@ -104,7 +104,7 @@ end
         # 1. Test Neighbor Update
         updateNeighbors!(pg2)
         @test pg2.max_nb > 0
-        @test size(pg2.core.neighbor_data, 1) == 3 # Row 1=weight, Row 2=dx, Row 3=dy
+        @test size(pg2.core.neighbor_data, 2) == 3 # Row 1=weight, Row 2=dx, Row 3=dy
         
         # 2. Test Sorting (RCM Reordering)
         # RCM should generate a valid permutation containing all indices 1:N
@@ -136,4 +136,26 @@ function test_access(pg)
     return pg.positions
 end
 
+using InteractiveUtils # Required for @code_warntype in some environments
+
+function test_grid_access(pg)
+    # Test a direct property
+    a = pg.rhos
+    # Test a forwarded property (Meta)
+    b = pg.N
+    # Test a forwarded property (Core)
+    c = pg.positions
+    # Test our special view
+    d = pg.neighbor_xdistance
+    return a, b, c, d
+end
+
+# Call it once to compile
+test_grid_access(pg1)
+
+# Now ask the compiler what it sees
+@code_warntype test_grid_access(pg1)
+
 @code_typed test_access(pg2)
+
+

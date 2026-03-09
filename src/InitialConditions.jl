@@ -43,108 +43,87 @@ function setInitialConditions!(particleGrid::ParticleGrid{2}, IC::InitialConditi
     map!(x -> IC(x[1],x[2]), particleGrid.rhos, particleGrid.positions)
 end
 
-function setInitialConditions!(
-    particleGrids_vec::ParticleGridSystem{NK, D}, # e.g., Vector{ParticleGrid}
-    st::RelaxationSourceTerm,     # e.g., Vector{MaxwellianFunctor}
-    IC::InitialCondition                               # The initial condition functor, e.g., an instance of Gauss
-) where {NK,D}
-    M_funcs_vec = st.maxwellians
-    # The number of kinetic descriptions can be found from the input vectors
-    N_total_kinetic = length(particleGrids_vec)
-
-    for k in 1:N_total_kinetic
-        pg_k = particleGrids_vec[k]
-        M_k = M_funcs_vec[k]
-
-        # This `map!` is now fully type-stable because the compiler knows the
-        # concrete type of `IC` within this specialized function.
-        map!(p_idx -> M_k(IC(pg_k.positions[p_idx]...)), pg_k.rhos, 1:pg_k.N)
+# --- Base Case: Standard PDE (No Source Term, No Systems) ---
+function setInitialConditions!(pg::ParticleGrid{D, M}, IC::InitialCondition) where {D, M}
+    for i in 1:pg.meta.N
+        val = IC(pg.positions[i]...)
+        
+        # Handles both scalar IC outputs and tuple IC outputs seamlessly
+        if M == 1
+            pg.rhos[i, 1] = val
+        else
+            for m in 1:M
+                pg.rhos[i, m] = val[m]
+            end
+        end
     end
+end
 
+# --- LOCAL Relaxation Initialization ---
+function setInitialConditions!(
+    pg::ParticleGrid{D, NK}, 
+    st::RelaxationSourceTerm{D, N, NK, PDE},     
+    IC::InitialCondition                              
+) where {D, N, NK, PDE}
+    
+    for p_idx in 1:pg.meta.N
+        # 1. Get macroscopic state at this position
+        u_val = IC(pg.positions[p_idx]...)
+        
+        # 2. Evaluate physical flux exactly once for the macro state
+        flux_vals = flux(st.system_eq, u_val)
+        
+        # 3. Initialize each kinetic component to local equilibrium
+        for k in 1:NK
+            m_idx = st.kin2macro(k)
+            dim = st.dimensions[k]
+            
+            f_val = SourceTerms.get_flux_component(flux_vals, m_idx, dim, Val(D))
+            
+            # Inline Maxwellian Initialization
+            Mk = st.coefficients[k] * (u_val[m_idx] + st.interior_factors[k] * f_val / st.relax_speeds[k])
+            pg.rhos[p_idx, k] = Mk
+        end
+    end
     return nothing
 end
 
-# function setInitialConditions!(
-#     system_pg::ParticleGridSystem{NK, D},
-#     st::NonLocalRelaxationSourceTerm{D, N, NK, PDE},
-#     IC::InitialCondition
-# ) where {NK, D, N, PDE <:HyperbolicPDE{D,N}}
-#     N_particles = system_pg[1].N
-    
-#     # 1. Evaluate IC to fill macroscopic buffer U0
-#     U0 = Matrix{Float64}(undef, N_particles, N)
-#     for p_idx in 1:N_particles
-#         u_val = IC(system_pg[1].positions[p_idx]...) 
-#         for m in 1:N
-#             U0[p_idx, m] = u_val[m]
-#         end
-#     end
-
-#     # 2. Compute initial potential T[U^0] using current U0 matrix
-#     update_potential_from_matrix!(st, system_pg, U0)
-
-#     # 3. Initialize Kinetic Grids (v_k = M_k[U, T])
-#     Threads.@threads for k in 1:NK
-#         pg_k = system_pg[k]
-#         m_idx = st.kin2macro(k) # Overloaded range lookup
-#         coeff = st.coefficients[m_idx]
-#         speed = st.relax_speeds[k]
-        
-#         for p_idx in 1:N_particles
-#             u_m = U0[p_idx, m_idx]
-#             t_m = st.T_potential[p_idx, m_idx]
-            
-#             # Initialize each kinetic component to equilibrium
-#             pg_k.rhos[p_idx] = coeff * (u_m + st.interior_factor * t_m / speed)
-#         end
-#     end
-# end
-# In InitialConditions.jl
-
-"""
-Specialized Initialization for Non-Local Relaxation Systems.
-Ensures V_0 = M(U_0, T_0) so that K_I starts at strictly 0.0.
-"""
+# --- NON-LOCAL Relaxation Initialization ---
 function setInitialConditions!(
-    system_pg::ParticleGridSystem{NK, D},
-    st::NonLocalRelaxationSourceTerm{D, N, NK},
+    pg::ParticleGrid{D, NK},
+    st::NonLocalRelaxationSourceTerm{D, N, NK, PDE},
     IC::InitialCondition
-) where {NK, D, N}
-    N_particles = system_pg[1].N
+) where {D, N, NK, PDE}
+    N_particles = pg.meta.N
     
-    # 1. Initialize grids to LOCAL equilibrium (V = c_k * U)
+    # 1. Initialize grid to LOCAL equilibrium (V_k = c_k * U_m)
     for p_idx in 1:N_particles
-        u_val = IC(system_pg[1].positions[p_idx]...) 
+        u_val = IC(pg.positions[p_idx]...) 
         for k in 1:NK
             m_idx = st.kin2macro(k)
-            system_pg[k].rhos[p_idx] = st.coefficients[m_idx] * u_val[m_idx]
+            pg.rhos[p_idx, k] = st.coefficients[m_idx] * u_val[m_idx]
         end
     end
 
-    # 2. Extract this local state into a temporary matrix for the potential solver
-    V_temp = Matrix{Float64}(undef, N_particles, NK)
-    for k in 1:NK
-        V_temp[:, k] .= system_pg[k].rhos
-    end
+    # 2. Compute the true initial potential T_0 using current grid state
+    update_nonlocal_potential!(st, pg.rhos, pg)
 
-    # 3. Compute the true initial potential T_0 across the domain
-    update_nonlocal_potential!(st, V_temp, system_pg)
-
-    # 4. Re-initialize kinetic grids to the NON-LOCAL equilibrium: V_0 = M(U_0, T_0)
+    # 3. Re-initialize kinetic grids to the NON-LOCAL equilibrium: V_0 = M(U_0, T_0)
     for p_idx in 1:N_particles
-        u_val = IC(system_pg[1].positions[p_idx]...)
+        u_val = IC(pg.positions[p_idx]...)
         for k in 1:NK
             m_idx = st.kin2macro(k)
             T_val = st.T_potential[p_idx, m_idx]
             
             # The correct Maxwellian formulation
-            system_pg[k].rhos[p_idx] = st.coefficients[m_idx] * (
+            pg.rhos[p_idx, k] = st.coefficients[m_idx] * (
                 u_val[m_idx] + st.interior_factor * T_val / st.relax_speeds[k]
             )
         end
     end
     
     @info "Initialized Non-Local Equilibrium (Max Potential: $(maximum(abs.(st.T_potential))))"
+    return nothing
 end
 function update_potential_from_matrix!(st, system_pg, U_matrix)
     N_particles = size(U_matrix, 1)

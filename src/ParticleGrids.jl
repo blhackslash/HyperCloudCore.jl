@@ -3,7 +3,7 @@ module ParticleGrids
 export ParticleGrid, ParticleGrid1D, ParticleGrid2D, getPeriodicDistance, saveGrid, plotDensity, 
        animateDensity, getTimeStep, findLocalExtrema, updateVoxelInformation!, gridToLinearIndex, linearIndexToGrid, 
        findneighboringVoxels, updateNeighbors!, getEuclideanDistance, logMOODEvents!, findLocalExtremaAbs, sort_1d_particles!,
-       determineVolumes!, getDistance, apply_boundary_conditions!, ParticleGridSystem, set_df!, getNBSlice, reorder_particles_for_locality!,
+       determineVolumes!, getDistance, apply_boundary_conditions!, set_df!, getNBSlice, reorder_particles_for_locality!,
        manage_particles!, sort_particles!
 
 using Random
@@ -18,7 +18,6 @@ using ..HyperbolicPDEs
 using ..MLSWeightFunctions
 
 export ParticleGrid, GridMetadata, SharedBuffers, NeighborData, ReorderData, ManagementData, ParticleGridCore, createParticleGrid
-struct ParticleGridSystem{NK, D} end
 # ---------------------------------------------------------
 # 1. Grid Metadata
 # ---------------------------------------------------------
@@ -131,35 +130,39 @@ end
 const ParticleGrid1D{M, S, WF} = ParticleGrid{1, M, S, WF}
 const ParticleGrid2D{M, S, WF} = ParticleGrid{2, M, S, WF}
 
-# ---------------------------------------------------------
-# 8. Property Forwarding (The Compatibility Magic)
-# ---------------------------------------------------------
-# This ensures `grid.N` routes to `grid.meta.N` and `grid.positions` to `grid.core.positions`
-function Base.getproperty(pg::ParticleGrid{D}, sym::Symbol) where {D}
-    # --- MAGIC INTERCEPT FOR 1D POSITIONS ---
+@inline function Base.getproperty(pg::ParticleGrid{D}, sym::Symbol) where {D}
+    # 1. Intercept 1D Positions
     if sym === :positions && D == 1
-        # Returns a zero-cost AbstractVector{Float64} that shares the exact same memory
         return reinterpret(Float64, getfield(getfield(pg, :core), :positions))
     end
-    # ----------------------------------------
+    
+    # 2. Intercept Old Neighbor Vector Names (Returns Contiguous Columns!)
+    if sym === :neighbor_weights
+        return view(getfield(getfield(pg, :core), :neighbor_data), :, 1)
+    elseif sym === :neighbor_xdistance
+        return view(getfield(getfield(pg, :core), :neighbor_data), :, 2)
+    elseif sym === :neighbor_ydistance && D >= 2
+        return view(getfield(getfield(pg, :core), :neighbor_data), :, 3)
+    end
 
-    if sym in fieldnames(ParticleGrid)
+    # 3. Standard Fallbacks using zero-cost compile-time checks
+    if hasfield(typeof(pg), sym)
         return getfield(pg, sym)
-    elseif sym in fieldnames(ParticleGridCore)
-        return getproperty(getfield(pg, :core), sym)
-    elseif sym in fieldnames(GridMetadata)
-        return getproperty(getfield(pg, :meta), sym)
+    elseif hasfield(typeof(getfield(pg, :core)), sym)
+        return getfield(getfield(pg, :core), sym)
+    elseif hasfield(typeof(getfield(pg, :meta)), sym)
+        return getfield(getfield(pg, :meta), sym)
     else
         error("type ParticleGrid has no field $sym")
     end
 end
 
-function Base.setproperty!(pg::ParticleGrid, sym::Symbol, val)
-    if sym in fieldnames(ParticleGrid)
+@inline function Base.setproperty!(pg::ParticleGrid, sym::Symbol, val)
+    if hasfield(typeof(pg), sym)
         setfield!(pg, sym, val)
-    elseif sym in fieldnames(ParticleGridCore)
+    elseif hasfield(typeof(getfield(pg, :core)), sym)
         setproperty!(getfield(pg, :core), sym, val)
-    elseif sym in fieldnames(GridMetadata)
+    elseif hasfield(typeof(getfield(pg, :meta)), sym)
         setproperty!(getfield(pg, :meta), sym, val)
     else
         error("type ParticleGrid has no field $sym")
@@ -224,7 +227,7 @@ function createParticleGrid(
     core = ParticleGridCore{1}(
         positions, is_boundary, zeros(Int, N),
         zeros(Int, N + 1), zeros(Int, N), Int[], 
-        Matrix{Float64}(undef, 2, 0) 
+        Matrix{Float64}(undef, 0, 2) 
     )
 
     shared = SharedBuffers{1, M}(
@@ -317,7 +320,7 @@ function createParticleGrid(
     core = ParticleGridCore{2}(
         positions, is_boundary, zeros(Int, N),
         zeros(Int, N + 1), zeros(Int, N), Int[], 
-        Matrix{Float64}(undef, 3, 0)
+        Matrix{Float64}(undef, 0, 3)
     )
 
     shared = SharedBuffers{2, M}(
@@ -574,7 +577,7 @@ function (nd::NeighborData{1, S, WF})(pg::ParticleGrid{1, M, S, WF}) where {M, S
         new_capacity = ceil(Int, total_neighbors * 1.25)
         resize!(pg.core.neighbor_indices, new_capacity)
         # Allocate new matrix: Row 1 = weight, Row 2 = dx
-        pg.core.neighbor_data = Matrix{Float64}(undef, 2, new_capacity)
+        pg.core.neighbor_data = Matrix{Float64}(undef, new_capacity, 2)
     end
 
     # --- PASS 2: Fill Neighbor Data (Serial) ---
@@ -593,8 +596,8 @@ function (nd::NeighborData{1, S, WF})(pg::ParticleGrid{1, M, S, WF}) where {M, S
             pg.core.neighbor_indices[write_idx] = j
             
             # Write directly to the pre-allocated matrix
-            pg.core.neighbor_data[1, write_idx] = weightFunc(d2)
-            pg.core.neighbor_data[2, write_idx] = dist_x
+            pg.core.neighbor_data[write_idx, 1] = weightFunc(d2)
+            pg.core.neighbor_data[write_idx, 2] = dist_x
             
             offset_counts[i] += 1
         end
@@ -720,7 +723,7 @@ function (nd::NeighborData{D, S, WF})(pg::ParticleGrid{D, M, S, WF}) where {D, M
         new_capacity = ceil(Int, total_neighbors * 1.25)
         resize!(pg.core.neighbor_indices, new_capacity)
         # Allocate new matrix: Row 1 = weight, Rows 2 to D+1 = spatial distances
-        pg.core.neighbor_data = Matrix{Float64}(undef, D + 1, new_capacity)
+        pg.core.neighbor_data = Matrix{Float64}(undef, new_capacity, D+1)
     end
     
     pg.core.neighbor_pointers[1] = 1
@@ -749,18 +752,18 @@ function (nd::NeighborData{D, S, WF})(pg::ParticleGrid{D, M, S, WF}) where {D, M
             offset_i = atomic_add!(atomic_offsets[i], 1)
             write_idx_i = pg.core.neighbor_pointers[i] + offset_i
             pg.core.neighbor_indices[write_idx_i] = j
-            pg.core.neighbor_data[1, write_idx_i] = weight
+            pg.core.neighbor_data[write_idx_i, 1] = weight
             for d in 1:D
-                pg.core.neighbor_data[1 + d, write_idx_i] = dist[d]
+                pg.core.neighbor_data[write_idx_i, 1 + d] = dist[d]
             end
 
             # j -> i (Symmetric)
             offset_j = atomic_add!(atomic_offsets[j], 1) 
             write_idx_j = pg.core.neighbor_pointers[j] + offset_j
             pg.core.neighbor_indices[write_idx_j] = i
-            pg.core.neighbor_data[1, write_idx_j] = weight
+            pg.core.neighbor_data[write_idx_j, 1] = weight
             for d in 1:D
-                pg.core.neighbor_data[1 + d, write_idx_j] = -dist[d]
+                pg.core.neighbor_data[write_idx_j, 1 + d] = -dist[d]
             end
             
             null
@@ -882,8 +885,8 @@ function apply_boundary_conditions!(pg::ParticleGrid{2}, rhos_buffer::AbstractAr
                     neighbor_idx = pg.core.neighbor_indices[k]
                     
                     if !pg.core.is_boundary[neighbor_idx]
-                        dx = pg.core.neighbor_data[2, k]
-                        dy = pg.core.neighbor_data[3, k]
+                        dx = pg.core.neighbor_data[k, 2]
+                        dy = pg.core.neighbor_data[k, 3]
                         dist_sq = dx^2 + dy^2
 
                         if dist_sq < min_dist_sq
@@ -1045,11 +1048,13 @@ function getTimeStep(pg::ParticleGrid{1}, eq)#::LinearAdvection{1})
         
         start_idx = pg.core.neighbor_pointers[i]
         num_nb = pg.core.num_neighbors[i]
+        w_vec = pg.neighbor_weights
+        dx_vec = pg.neighbor_xdistance
         
         @inbounds for k in start_idx:(start_idx + num_nb - 1)
             # Row 1 is Weight, Row 2 is dx
-            w  = pg.core.neighbor_data[1, k]
-            dx = pg.core.neighbor_data[2, k]
+            w  = w_vec[k]
+            dx = dx_vec[k]
             
             # Upwind condition
             if ((vel >= 0.0) && (dx <= 0.0)) || ((vel <= 0.0) && (dx >= 0.0))
@@ -1081,14 +1086,16 @@ function getTimeStep(pg::ParticleGrid{2}, eq)#::LinearAdvection{2})
         end
         
         start_idx = pg.core.neighbor_pointers[i]
-
+        w_vec = pg.neighbor_weights
+        dx_vec = pg.neighbor_xdistance
+        dy_vec = pg.neighbor_ydistance
         # --- First Pass: Least Squares Matrix ---
         A11 = 0.0; A12 = 0.0; A22 = 0.0
         @inbounds for k in start_idx:(start_idx + num_nb - 1)
             # Row 1: w, Row 2: dx, Row 3: dy
-            w  = pg.core.neighbor_data[1, k]
-            dx = pg.core.neighbor_data[2, k]
-            dy = pg.core.neighbor_data[3, k]
+            w  = w_vec[k]
+            dx = dx_vec[k]
+            dy = dy_vec[k]
 
             A11 += w * dx * dx
             A12 += w * dx * dy
@@ -1103,9 +1110,9 @@ function getTimeStep(pg::ParticleGrid{2}, eq)#::LinearAdvection{2})
         # --- Second Pass: Calculate sumCij ---
         sumCij = 0.0
         @inbounds for k in start_idx:(start_idx + num_nb - 1)
-            w  = pg.core.neighbor_data[1, k]
-            dx = pg.core.neighbor_data[2, k]
-            dy = pg.core.neighbor_data[3, k]
+            w  = w_vec[k]
+            dx = dx_vec[k]
+            dy = dy_vec[k]
             
             coeff_x = (A22 * w * dx - A12 * w * dy) / D
             coeff_y = (A11 * w * dy - A12 * w * dx) / D

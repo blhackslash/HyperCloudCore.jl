@@ -226,14 +226,14 @@ function main()
         ParamDict(
             "tmax" => 0.2, "N" => 50, "bc" => :fixed_dirichlet,
             "xmin" => -0.5, "xmax" => .5, 
-            "dt" => 0.001, "snapshots" => 21, 
+            "dt" => 0.01, "snapshots" => 21, 
             "interp_alpha" => 1.0, "interp_range" => 3.5, # Factor for dx
             #"init_func" => "eulerShockTube",
             "init_func" => "riemann", 
-            "PDE" => "leuler1d", "sim_function" => "runSystemSimulation",
+            "PDE" => "euler1d", "sim_function" => "runSystemSimulation",
             #"init_params" => euler_smooth_params, 
             "init_params" => sod_euler_params, 
-            "randomness_factor" => 0., "grid_mover" => "physical", "merge_factor" => .5,
+            "randomness_factor" => 0., "grid_mover" => "none", "merge_factor" => .5,
             "SEED" => SEED_value, "save_relax" => false, "weight_function" => "exponential",
             #"relax_velocities" => [as, as, as]
             "relax_velocities" => [ [2.0, -2.0], [2.0, -2.0], [2.0, -2.0] ], # Pairs for rho, m, E kinetic components
@@ -245,12 +245,12 @@ function main()
             #"PDE_params" => (1.0, 1.0) # 2D velocity vector (vx, vy)
         )
     #runSystemSimulation(params)
-    #@profview runSystemSimulation(params)
+    @profview runSystemSimulation(params)
     return sim_config_euler1d_system
 end
 
 sim_config_euler1d_system = main()
-show1DSolutionFig(sim_config_euler1d_system; ui_options = :publication) 
+#show1DSolutionFig(sim_config_euler1d_system; ui_options = :publication) 
 #showDynamicDependence(sim_config_euler1d_system; calc_stats = true)
 #showConvergencePlot(sim_config_euler1d_system, "N", 10. .^(1.:.25:2.5); force_int_param = true, initial_calc = true, ui_options = :default)
 #showConvergencePlot(sim_config_euler1d_system, "SEED", 100:50:10000; force_int_param = true, initial_calc = true, ui_options = :default)
