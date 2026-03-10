@@ -63,8 +63,7 @@ function manage_particles!(pg::ParticleGrid)
         pg.meta.N = N_total
         
         # Intermediate Rebuild needed for Merge
-        safe_resize!(pg.neighbor.amount, pg.meta.N)
-        safe_resize!(pg.neighbor.pointers, pg.meta.N + 1)
+        safe_resize!(pg.neighbor.ranges, pg.meta.N)
         
         sort_1d_particles!(pg)
         updateNeighbors!(pg)
@@ -82,8 +81,7 @@ function manage_particles!(pg::ParticleGrid)
     # PHASE 4: FINALIZE
     # =========================================================================
     
-    safe_resize!(pg.neighbor.amount, pg.meta.N)
-    safe_resize!(pg.neighbor.pointers, pg.meta.N + 1)
+    safe_resize!(pg.neighbor.ranges, pg.meta.N)
     if pg isa ParticleGrid1D; sort_1d_particles!(pg) end
     updateNeighbors!(pg)
     if pg isa ParticleGrid1D; determineVolumes!(pg) end
@@ -128,30 +126,24 @@ function _merge_particles!(pg::ParticleGrid1D)
             q_head += 1
             
             # Iterate neighbors of 'u' (the current link in the chain)
-            start_ptr = pg.neighbor.pointers[u]
-            n_count   = pg.neighbor.amount[u]
-            
-            if n_count > 0
-                end_ptr = start_ptr + n_count - 1
-                for k in start_ptr:end_ptr
-                    j = pg.neighbor.indices[k]
+            for k in pg.neighbor.ranges[i]
+                j = pg.neighbor.indices[k]
+                
+                # 1. Forward check (j > i) ensures we don't merge backwards into finished data
+                # 2. !merged[j] ensures we don't double-process
+                if j > i && !merged[j]
+                    # Distance between 'u' and 'j'
+                    dist = abs(get_xdistance(pg)[k]) 
                     
-                    # 1. Forward check (j > i) ensures we don't merge backwards into finished data
-                    # 2. !merged[j] ensures we don't double-process
-                    if j > i && !merged[j]
-                        # Distance between 'u' and 'j'
-                        dist = abs(get_xdistance(pg)[k]) 
+                    if dist < pg.min_dist
+                        # --- MERGE ---
+                        sum_x += pos[j]
+                        sum_rho += rhos[j]
+                        count += 1.0
+                        merged[j] = true
                         
-                        if dist < pg.min_dist
-                            # --- MERGE ---
-                            sum_x += pos[j]
-                            sum_rho += rhos[j]
-                            count += 1.0
-                            merged[j] = true
-                            
-                            # Add j to queue to check *its* neighbors next
-                            push!(queue, j)
-                        end
+                        # Add j to queue to check *its* neighbors next
+                        push!(queue, j)
                     end
                 end
             end
@@ -414,30 +406,24 @@ function _merge_particles_pairwise!(pg::ParticleGrid1D)
         best_j = -1
         min_dist_found = pg.min_dist # Initialize with threshold
         
-        start_ptr = pg.neighbor.pointers[i]
-        n_count   = pg.neighbor.amount[i]
-        
-        if n_count > 0
-            end_ptr = start_ptr + n_count - 1
-            for k in start_ptr:end_ptr
-                j = pg.neighbor.indices[k]
+        for k in pg.neighbor.ranges[i]
+            j = pg.neighbor.indices[k]
+            
+            # Criteria:
+            # 1. Forward neighbor (j > i) to prevent double processing
+            # 2. Not already merged
+            if j > i && !merged[j]
+                dist = abs(get_xdistance(pg)[k]) 
                 
-                # Criteria:
-                # 1. Forward neighbor (j > i) to prevent double processing
-                # 2. Not already merged
-                if j > i && !merged[j]
-                    dist = abs(get_xdistance(pg)[k]) 
-                    
-                    if dist < min_dist_found
-                        # Found a strictly closer neighbor
-                        min_dist_found = dist
+                if dist < min_dist_found
+                    # Found a strictly closer neighbor
+                    min_dist_found = dist
+                    best_j = j
+                elseif abs(dist - min_dist_found) < 1e-14
+                    # TIE DETECTED: Use Random coin flip
+                    # If true, switch to this new candidate.
+                    if rand(Bool)
                         best_j = j
-                    elseif abs(dist - min_dist_found) < 1e-14
-                        # TIE DETECTED: Use Random coin flip
-                        # If true, switch to this new candidate.
-                        if rand(Bool)
-                            best_j = j
-                        end
                     end
                 end
             end
@@ -519,9 +505,7 @@ function fill_empty_voxels!(lv::LocalVoxels, pg::ParticleGrid1D, i::Int, visited
             closest_L_dist = -Inf; closest_L_idx = -1
             closest_R_dist = Inf;  closest_R_idx = -1
             
-            start_ptr = pg.neighbor.pointers[i]
-            for n in 0:(pg.neighbor.amount[i]-1)
-                flat_idx = start_ptr + n
+            for flat_idx in pg.neighbor.ranges[i]
                 d_from_i = get_xdistance(pg)[flat_idx]
                 nb_idx   = pg.neighbor.indices[flat_idx]
                 d_new = d_from_i - rel_pos
@@ -669,13 +653,9 @@ end
 """
 function check_occupation!(lv::LocalVoxels, pg::ParticleGrid1D, i::Int, visited::BitVector)
     R = pg.max_dist
-    start_ptr = pg.neighbor.pointers[i]
-    num_nbs   = pg.neighbor.amount[i]
-    
     center_offset = lv.half_bins + 1
 
-    for k in 0:(num_nbs - 1)
-        flat_idx = start_ptr + k
+    for flat_idx in pg.neighbor.ranges[i]
         dist = get_xdistance(pg)[flat_idx]
         
         if abs(dist) > R; continue; end

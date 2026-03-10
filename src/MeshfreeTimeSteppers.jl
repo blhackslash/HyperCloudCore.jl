@@ -15,15 +15,13 @@ Initializes all buffers within the timestepper `ts` based on the particle grid `
 It then runs a parallel "pre-gather" loop to fill the `neighbor_fs` and 
 `neighbor_dfs` buffers using data from `fVec`.
 """
-function initFs!(ts::MeshfreeTimeStepper, i, f_i, fVec, pg::ParticleGrid)
+function initFs!(ts::MeshfreeTimeStepper, i, f_i, nb_slice, fVec, pg::ParticleGrid)
     # --- 4. Parallel Pre-Gather Loop ---
     # Get local aliases to the buffers for cleaner code in the loop
     neighbor_fs  = ts.neighbor_fs
     neighbor_dfs = ts.neighbor_dfs
-    pointer = pg.neighbor.pointers[i]
-    neighbor_slice = pointer:(pointer + pg.neighbor.amount[i] - 1)
     nb_indices = pg.neighbor.indices
-    for k in neighbor_slice
+    for k in nb_slice
         # `k` is the global index into the flat neighbor arrays
         
         # 1. GATHER: Get neighbor index `j`...
@@ -55,7 +53,7 @@ struct EulerUpwind{G1 <: GradientInterpolator, G2 <: GradientInterpolator, M <: 
 end
 
 function initAddTSBuffer!(eu::EulerUpwind, pg::ParticleGrid)
-    num_particles = length(pg.neighbor.amount) 
+    num_particles = length(pg.neighbor.ranges) 
         # --- 2. Resize Per-Particle Buffers (Size N) ---
     _ensure_capacity!(eu.rhoInit, num_particles)
 end
@@ -80,6 +78,7 @@ function (eu::EulerUpwind)(
     # Ensure buffers are correctly sized (only resizes if needed)
     initGIBuffers!(eu.gradientInterpolator, pg)
     initTSBuffer!(eu, pg) 
+    nb_slices = pg.neighbor.ranges
 
     # Copy initial state for the step
     eu.rhoInit[1:N] .= view(pg.rhos, 1:N)
@@ -93,14 +92,14 @@ function (eu::EulerUpwind)(
     Threads.@threads for particle_range in chunks
         for p_idx in particle_range
             fi = eu.rhoInit[p_idx]
-            
+            nb_slice = nb_slices[p_idx]
             # Pre-gather neighbor data into ts.neighbor_fs/dfs
             # NOTE: Pass the correct rho vector (eu.rhoInit)
-            initFs!(eu, p_idx, fi, eu.rhoInit, pg) 
+            initFs!(eu, p_idx, fi, nb_slice, eu.rhoInit, pg) 
             
             # Calculate slopes/coefficients needed by the gradient interpolator
             # NOTE: Pass the correct rho vector (eu.rhoInit)
-            initGI!(eu.gradientInterpolator, p_idx, fi, pg, eu.neighbor_fs, eu.neighbor_dfs)
+            initGI!(eu.gradientInterpolator, p_idx, fi, nb_slice, pg, eu.neighbor_fs, eu.neighbor_dfs)
         end
     end
     
@@ -118,7 +117,7 @@ function (eu::EulerUpwind)(
             
             # --- This code now only runs for INTERIOR particles ---
             # Get neighbor slice
-            nb_slice = getNBSlice(pg, p_idx)
+            nb_slice = nb_slices[p_idx]
 
             # Calculate divergence using the local signature and pre-gathered data
             div = eu.gradientInterpolator(
@@ -181,7 +180,7 @@ end
 
 function initAddTSBuffer!(ralston::RalstonRK2, pg::ParticleGrid)
     # `num_particles` is the number of particles (N)
-    num_particles = length(pg.neighbor.amount) 
+    num_particles = length(pg.neighbor.ranges) 
         # --- 2. Resize Per-Particle Buffers (Size N) ---
     _ensure_capacity!(ralston.rhoInit, num_particles)
     _ensure_capacity!(ralston.rhos, num_particles)
@@ -198,27 +197,6 @@ function initTimeStepper(ralston::RalstonRK2, pg::ParticleGrid)
     updateNeighbors!(pg)
 end
 
-# """
-#     zero_vector_fields!(s)
-
-# Iterates over all fields of a struct `s`. If a field is an `AbstractVector`,
-# it fills that vector with zeros. This is useful for clearing workspace
-# arrays for debugging.
-# """
-# function zero_vector_fields!(s)
-#     for name in fieldnames(typeof(s))
-#         field = getfield(s, name)
-        
-#         # Check if the field is a subtype of AbstractVector
-#         if field isa AbstractVector
-#             # Get the element type of the vector (e.g., Float64)
-#             # and fill with the zero() of that type (e.g., 0.0)
-#             fill_value = zero(eltype(field))
-#             fill!(field, fill_value)
-#         end
-#     end
-#     return s # Return the modified struct
-# end
 
 function (ralston::RalstonRK2)(eq::ScalarHyperbolicPDE, pg::ParticleGrid{D, M, S, WF}, settings::SimSetting, time::Real, dt::Real) where {D, M, S, WF}
     
@@ -229,6 +207,7 @@ function (ralston::RalstonRK2)(eq::ScalarHyperbolicPDE, pg::ParticleGrid{D, M, S
     initGIBuffers!(ralston.gradientInterpolator, pg)
     initGIBuffers!(ralston.fallbackInterpolator, pg)
     initTSBuffer!(ralston, pg)
+    nb_slices = pg.neighbor.ranges
 
     N = pg.meta.N
     # --- First RK Stage ---
@@ -241,9 +220,11 @@ function (ralston::RalstonRK2)(eq::ScalarHyperbolicPDE, pg::ParticleGrid{D, M, S
     # Partition 1:N into chunks of 100, and schedule *those* dynamically
     Threads.@threads for p_idx in 1:N
             fi = ralston.rhoInit[p_idx]
-            initFs!(ralston, p_idx, fi, ralston.rhoInit, pg)
-            initGI!(ralston.gradientInterpolator, p_idx, fi, pg, ralston.neighbor_fs, ralston.neighbor_dfs)
-            initGI!(ralston.fallbackInterpolator, p_idx, fi, pg, ralston.neighbor_fs, ralston.neighbor_dfs)
+            nb_slice = nb_slices[p_idx]
+            initFs!(ralston, p_idx, fi, nb_slice, ralston.rhoInit, pg)
+            idx = pg.core.is_boundary[p_idx] ? -p_idx : p_idx
+            initGI!(ralston.gradientInterpolator, idx, fi, nb_slice, pg, ralston.neighbor_fs, ralston.neighbor_dfs)
+            initGI!(ralston.fallbackInterpolator, idx, fi, nb_slice, pg, ralston.neighbor_fs, ralston.neighbor_dfs)
     end
     
     # 3. Calculate divergence for interior particles
@@ -251,7 +232,7 @@ function (ralston::RalstonRK2)(eq::ScalarHyperbolicPDE, pg::ParticleGrid{D, M, S
             if pg.core.is_boundary[p_idx]; continue; end # Skip ghost particles
 
             fi = ralston.rhoInit[p_idx]
-            nb_slice = getNBSlice(pg, p_idx)
+            nb_slice = nb_slices[p_idx]
 
             ralston.div1[p_idx] = ralston.gradientInterpolator(eq, p_idx, fi, nb_slice, pg, ralston.neighbor_fs, ralston.neighbor_dfs)
             rho_candidate = ralston.rhoInit[p_idx] - ralston.div1[p_idx] * dt * 2/3
@@ -276,9 +257,10 @@ function (ralston::RalstonRK2)(eq::ScalarHyperbolicPDE, pg::ParticleGrid{D, M, S
     # Partition 1:N into chunks of 100, and schedule *those* dynamically
     Threads.@threads for p_idx in 1:N
             fi = ralston.rhos[p_idx]
-            initFs!(ralston, p_idx, fi, ralston.rhos, pg)
-            initGI!(ralston.gradientInterpolator, p_idx, fi, pg, ralston.neighbor_fs, ralston.neighbor_dfs) # ERROR IS HERE
-            initGI!(ralston.fallbackInterpolator, p_idx, fi, pg, ralston.neighbor_fs, ralston.neighbor_dfs)
+            nb_slice = nb_slices[p_idx]
+            initFs!(ralston, p_idx, fi, nb_slice, ralston.rhos, pg)
+            initGI!(ralston.gradientInterpolator, p_idx, fi, nb_slice, pg, ralston.neighbor_fs, ralston.neighbor_dfs) # ERROR IS HERE
+            initGI!(ralston.fallbackInterpolator, p_idx, fi, nb_slice, pg, ralston.neighbor_fs, ralston.neighbor_dfs)
     end
 
     # 2. Calculate final divergence for interior particles
@@ -286,7 +268,7 @@ function (ralston::RalstonRK2)(eq::ScalarHyperbolicPDE, pg::ParticleGrid{D, M, S
         if pg.core.is_boundary[p_idx]; continue; end # Skip ghost particles
     
         fi = ralston.rhos[p_idx]
-        nb_slice = getNBSlice(pg, p_idx)
+        nb_slice = nb_slices[p_idx]
         # Pass the intermediate state (ralston.rhos) to the gradient calculation
         div2 = ralston.gradientInterpolator(eq, p_idx, fi, nb_slice, pg, ralston.neighbor_fs, ralston.neighbor_dfs)
         rho_final = ralston.rhoInit[p_idx] - dt * (ralston.div1[p_idx] / 4 + 3 * div2 / 4)
@@ -335,7 +317,7 @@ end
 
 # --- NEW: initAddTSBuffer! for RK3 ---
 function initAddTSBuffer!(rk3::RK3, pg::ParticleGrid)
-    num_particles = length(pg.neighbor.amount) 
+    num_particles = length(pg.neighbor.ranges) 
     _ensure_capacity!(rk3.rho_n, num_particles)
     _ensure_capacity!(rk3.rho_stage1, num_particles)
     _ensure_capacity!(rk3.rho_stage2, num_particles)
@@ -352,7 +334,7 @@ function (rk3::RK3)(eq::ScalarHyperbolicPDE, pg::ParticleGrid, settings::SimSett
     # --- Define chunks for parallel loops ---
     chunk_size = 50 # Or any value you prefer
     chunks = collect(Iterators.partition(1:N, chunk_size))
-
+    nb_slices = pg.neighbor.ranges
     # ==================================================================
     # --- Stage 1: u^(1) = u^n - dt * div(u^n) ---
     # ==================================================================
@@ -369,9 +351,10 @@ function (rk3::RK3)(eq::ScalarHyperbolicPDE, pg::ParticleGrid, settings::SimSett
     Threads.@threads for particle_range in chunks
         for p_idx in particle_range
             fi = rk3.rho_n[p_idx]
-            initFs!(rk3, p_idx, fi, rk3.rho_n, pg)
-            initGI!(rk3.gradientInterpolator, p_idx, fi, pg, rk3.neighbor_fs, rk3.neighbor_dfs)
-            initGI!(rk3.fallbackInterpolator, p_idx, fi, pg, rk3.neighbor_fs, rk3.neighbor_dfs)
+            nb_slice = nb_slices[p_idx]
+            initFs!(rk3, p_idx, fi, nb_slice, rk3.rho_n, pg)
+            initGI!(rk3.gradientInterpolator, p_idx, fi, nb_slice, pg, rk3.neighbor_fs, rk3.neighbor_dfs)
+            initGI!(rk3.fallbackInterpolator, p_idx, fi, nb_slice, pg, rk3.neighbor_fs, rk3.neighbor_dfs)
         end
     end
     
@@ -381,7 +364,7 @@ function (rk3::RK3)(eq::ScalarHyperbolicPDE, pg::ParticleGrid, settings::SimSett
             if pg.core.is_boundary[p_idx]; continue; end
 
             fi = rk3.rho_n[p_idx]
-            nb_slice = getNBSlice(pg, p_idx)
+            nb_slice = nb_slices[p_idx]
             
             div1_val = rk3.gradientInterpolator(eq, p_idx, fi, nb_slice, pg, rk3.neighbor_fs, rk3.neighbor_dfs)
             
@@ -412,9 +395,10 @@ function (rk3::RK3)(eq::ScalarHyperbolicPDE, pg::ParticleGrid, settings::SimSett
     Threads.@threads for particle_range in chunks
         for p_idx in particle_range
             fi = rk3.rho_stage1[p_idx] # <-- Use u^(1)
-            initFs!(rk3, p_idx, fi, rk3.rho_stage1, pg)
-            initGI!(rk3.gradientInterpolator, p_idx, fi, pg, rk3.neighbor_fs, rk3.neighbor_dfs)
-            initGI!(rk3.fallbackInterpolator, p_idx, fi, pg, rk3.neighbor_fs, rk3.neighbor_dfs)
+            nb_slice = nb_slices[p_idx]
+            initFs!(rk3, p_idx, fi, nb_slice, rk3.rho_stage1, pg)
+            initGI!(rk3.gradientInterpolator, p_idx, fi, nb_slice, pg, rk3.neighbor_fs, rk3.neighbor_dfs)
+            initGI!(rk3.fallbackInterpolator, p_idx, fi, nb_slice, pg, rk3.neighbor_fs, rk3.neighbor_dfs)
         end
     end
     
@@ -424,7 +408,7 @@ function (rk3::RK3)(eq::ScalarHyperbolicPDE, pg::ParticleGrid, settings::SimSett
             if pg.core.is_boundary[p_idx]; continue; end
 
             fi = rk3.rho_stage1[p_idx] # <-- Use u^(1)
-            nb_slice = getNBSlice(pg, p_idx)
+            nb_slice = nb_slices[p_idx]
             
             div2_val = rk3.gradientInterpolator(eq, p_idx, fi, nb_slice, pg, rk3.neighbor_fs, rk3.neighbor_dfs)
             
@@ -455,9 +439,10 @@ function (rk3::RK3)(eq::ScalarHyperbolicPDE, pg::ParticleGrid, settings::SimSett
     Threads.@threads for particle_range in chunks
         for p_idx in particle_range
             fi = rk3.rho_stage2[p_idx] # <-- Use u^(2)
-            initFs!(rk3, p_idx, fi, rk3.rho_stage2, pg)
-            initGI!(rk3.gradientInterpolator, p_idx, fi, pg, rk3.neighbor_fs, rk3.neighbor_dfs)
-            initGI!(rk3.fallbackInterpolator, p_idx, fi, pg, rk3.neighbor_fs, rk3.neighbor_dfs)
+            nb_slice = nb_slices[p_idx]
+            initFs!(rk3, p_idx, fi, nb_slice, rk3.rho_stage2, pg)
+            initGI!(rk3.gradientInterpolator, p_idx, fi, nb_slice, pg, rk3.neighbor_fs, rk3.neighbor_dfs)
+            initGI!(rk3.fallbackInterpolator, p_idx, fi, nb_slice, pg, rk3.neighbor_fs, rk3.neighbor_dfs)
         end
     end
     
@@ -467,7 +452,7 @@ function (rk3::RK3)(eq::ScalarHyperbolicPDE, pg::ParticleGrid, settings::SimSett
             if pg.core.is_boundary[p_idx]; continue; end
 
             fi = rk3.rho_stage2[p_idx] # <-- Use u^(2)
-            nb_slice = getNBSlice(pg, p_idx)
+            nb_slice = nb_slices[p_idx]
             
             div3_val = rk3.gradientInterpolator(eq, p_idx, fi, nb_slice, pg, rk3.neighbor_fs, rk3.neighbor_dfs)
             
@@ -520,7 +505,7 @@ function RK4(gradientInterpolator::G1; fallbackInterpolator::G2 = NoFallbackGrad
 end
 
 function initAddTSBuffer!(rk4::RK4, pg::ParticleGrid)
-    num_particles = length(pg.neighbor.amount) 
+    num_particles = length(pg.neighbor.ranges) 
     _ensure_capacity!(rk4.rho_n, num_particles)
     _ensure_capacity!(rk4.rho_stage, num_particles)
     _ensure_capacity!(rk4.k1, num_particles)
@@ -530,7 +515,7 @@ function initAddTSBuffer!(rk4::RK4, pg::ParticleGrid)
 end
 function (rk4::RK4)(eq::ScalarHyperbolicPDE, pg::ParticleGrid, settings::SimSetting, time::Real, dt::Real)
     N = pg.meta.N
-    
+    nb_slices = pg.neighbor.ranges
     # --- Define chunks for parallel loops ---
     chunk_size = 50 # Or any value you prefer
     chunks = collect(Iterators.partition(1:N, chunk_size))
@@ -550,9 +535,10 @@ function (rk4::RK4)(eq::ScalarHyperbolicPDE, pg::ParticleGrid, settings::SimSett
     Threads.@threads for particle_range in chunks
         for p_idx in particle_range
             fi = rk4.rho_n[p_idx]
-            initFs!(rk4, p_idx, fi, rk4.rho_n, pg)
-            initGI!(rk4.gradientInterpolator, p_idx, fi, pg, rk4.neighbor_fs, rk4.neighbor_dfs)
-            initGI!(rk4.fallbackInterpolator, p_idx, fi, pg, rk4.neighbor_fs, rk4.neighbor_dfs)
+            nb_slice = nb_slices[p_idx]
+            initFs!(rk4, p_idx, fi, nb_slice, rk4.rho_n, pg)
+            initGI!(rk4.gradientInterpolator, p_idx, fi, nb_slice, pg, rk4.neighbor_fs, rk4.neighbor_dfs)
+            initGI!(rk4.fallbackInterpolator, p_idx, fi, nb_slice, pg, rk4.neighbor_fs, rk4.neighbor_dfs)
         end
     end
     
@@ -562,7 +548,7 @@ function (rk4::RK4)(eq::ScalarHyperbolicPDE, pg::ParticleGrid, settings::SimSett
             if pg.core.is_boundary[p_idx]; continue; end
 
             fi = rk4.rho_n[p_idx]
-            nb_slice = getNBSlice(pg, p_idx)
+            nb_slice = nb_slices[p_idx]
             
             k1_val = rk4.gradientInterpolator(eq, p_idx, fi, nb_slice, pg, rk4.neighbor_fs, rk4.neighbor_dfs)
             
@@ -590,10 +576,11 @@ function (rk4::RK4)(eq::ScalarHyperbolicPDE, pg::ParticleGrid, settings::SimSett
     # 2.2: Threaded loop to calculate slopes/coefficients (using u^(1))
     Threads.@threads for particle_range in chunks
         for p_idx in particle_range
-            fi = rk4.rho_stage[p_idx] # <-- Use u^(1) from rho_stage
-            initFs!(rk4, p_idx, fi, rk4.rho_stage, pg)
-            initGI!(rk4.gradientInterpolator, p_idx, fi, pg, rk4.neighbor_fs, rk4.neighbor_dfs)
-            initGI!(rk4.fallbackInterpolator, p_idx, fi, pg, rk4.neighbor_fs, rk4.neighbor_dfs)
+            fi = rk4.rho_stage[p_idx] # <-- Use u^(1) from rho_st
+            nb_slice = nb_slices[p_idx]age
+            initFs!(rk4, p_idx, fi, nb_slice, rk4.rho_stage, pg)
+            initGI!(rk4.gradientInterpolator, p_idx, fi, nb_slice, pg, rk4.neighbor_fs, rk4.neighbor_dfs)
+            initGI!(rk4.fallbackInterpolator, p_idx, fi, nb_slice, pg, rk4.neighbor_fs, rk4.neighbor_dfs)
         end
     end
     
@@ -603,7 +590,7 @@ function (rk4::RK4)(eq::ScalarHyperbolicPDE, pg::ParticleGrid, settings::SimSett
             if pg.core.is_boundary[p_idx]; continue; end
 
             fi = rk4.rho_stage[p_idx] # <-- Use u^(1)
-            nb_slice = getNBSlice(pg, p_idx)
+            nb_slice = nb_slices[p_idx]
             
             k2_val = rk4.gradientInterpolator(eq, p_idx, fi, nb_slice, pg, rk4.neighbor_fs, rk4.neighbor_dfs)
             
@@ -632,9 +619,10 @@ function (rk4::RK4)(eq::ScalarHyperbolicPDE, pg::ParticleGrid, settings::SimSett
     Threads.@threads for particle_range in chunks
         for p_idx in particle_range
             fi = rk4.rho_stage[p_idx] # <-- Use u^(2) from rho_stage
-            initFs!(rk4, p_idx, fi, rk4.rho_stage, pg)
-            initGI!(rk4.gradientInterpolator, p_idx, fi, pg, rk4.neighbor_fs, rk4.neighbor_dfs)
-            initGI!(rk4.fallbackInterpolator, p_idx, fi, pg, rk4.neighbor_fs, rk4.neighbor_dfs)
+            nb_slice = nb_slices[p_idx]
+            initFs!(rk4, p_idx, fi, nb_slice, rk4.rho_stage, pg)
+            initGI!(rk4.gradientInterpolator, p_idx, fi, nb_slice, pg, rk4.neighbor_fs, rk4.neighbor_dfs)
+            initGI!(rk4.fallbackInterpolator, p_idx, fi, nb_slice, pg, rk4.neighbor_fs, rk4.neighbor_dfs)
         end
     end
     
@@ -644,7 +632,7 @@ function (rk4::RK4)(eq::ScalarHyperbolicPDE, pg::ParticleGrid, settings::SimSett
             if pg.core.is_boundary[p_idx]; continue; end
 
             fi = rk4.rho_stage[p_idx] # <-- Use u^(2)
-            nb_slice = getNBSlice(pg, p_idx)
+            nb_slice = nb_slices[p_idx]
             
             k3_val = rk4.gradientInterpolator(eq, p_idx, fi, nb_slice, pg, rk4.neighbor_fs, rk4.neighbor_dfs)
             
@@ -673,9 +661,10 @@ function (rk4::RK4)(eq::ScalarHyperbolicPDE, pg::ParticleGrid, settings::SimSett
     Threads.@threads for particle_range in chunks
         for p_idx in particle_range
             fi = rk4.rho_stage[p_idx] # <-- Use u^(3) from rho_stage
-            initFs!(rk4, p_idx, fi, rk4.rho_stage, pg)
-            initGI!(rk4.gradientInterpolator, p_idx, fi, pg, rk4.neighbor_fs, rk4.neighbor_dfs)
-            initGI!(rk4.fallbackInterpolator, p_idx, fi, pg, rk4.neighbor_fs, rk4.neighbor_dfs)
+            nb_slice = nb_slices[p_idx]
+            initFs!(rk4, p_idx, fi, nb_slice, rk4.rho_stage, pg)
+            initGI!(rk4.gradientInterpolator, p_idx, fi, nb_slice, pg, rk4.neighbor_fs, rk4.neighbor_dfs)
+            initGI!(rk4.fallbackInterpolator, p_idx, fi, nb_slice, pg, rk4.neighbor_fs, rk4.neighbor_dfs)
         end
     end
     
@@ -685,7 +674,7 @@ function (rk4::RK4)(eq::ScalarHyperbolicPDE, pg::ParticleGrid, settings::SimSett
             if pg.core.is_boundary[p_idx]; continue; end
 
             fi = rk4.rho_stage[p_idx] # <-- Use u^(3)
-            nb_slice = getNBSlice(pg, p_idx)
+            nb_slice = nb_slices[p_idx]
             
             k4_val = rk4.gradientInterpolator(eq, p_idx, fi, nb_slice, pg, rk4.neighbor_fs, rk4.neighbor_dfs)
             rk4.k4[p_idx] = k4_val # Store k4
@@ -747,7 +736,7 @@ function RalstonRK2SmoothSwitch(gradientInterpolator::G1; fallbackInterpolator::
 end
 
 function initAddTSBuffer!(ralston::RalstonRK2SmoothSwitch, pg::ParticleGrid)
-    num_particles = length(pg.neighbor.amount) 
+    num_particles = length(pg.neighbor.ranges) 
     _ensure_capacity!(ralston.rho_n, num_particles)
     _ensure_capacity!(ralston.rho_stage, num_particles)
     _ensure_capacity!(ralston.rho_fallback, num_particles)
@@ -764,7 +753,7 @@ end
 function (ralston::RalstonRK2SmoothSwitch)(eq::ScalarHyperbolicPDE, pg::ParticleGrid, settings::SimSetting, time::Real, dt::Real)
     N = pg.meta.N
     interior = 1:N # Assuming interior_indices is 1:N for now
-    
+    nb_slices = pg.neighbor.ranges
     # --- Define chunks for parallel loops ---
     chunk_size = 50 
     chunks = collect(Iterators.partition(1:N, chunk_size))
@@ -784,9 +773,10 @@ function (ralston::RalstonRK2SmoothSwitch)(eq::ScalarHyperbolicPDE, pg::Particle
     Threads.@threads for particle_range in chunks
         for p_idx in particle_range
             fi = ralston.rho_n[p_idx]
-            initFs!(ralston, p_idx, fi, ralston.rho_n, pg)
+            nb_slice = nb_slices[p_idx]
+            initFs!(ralston, p_idx, fi, nb_slice, ralston.rho_n, pg)
             # Use fallback interpolator for GI
-            initGI!(ralston.fallbackInterpolator, p_idx, fi, pg, ralston.neighbor_fs, ralston.neighbor_dfs)
+            initGI!(ralston.fallbackInterpolator, p_idx, fi, nb_slice, pg, ralston.neighbor_fs, ralston.neighbor_dfs)
         end
     end
 
@@ -796,7 +786,7 @@ function (ralston::RalstonRK2SmoothSwitch)(eq::ScalarHyperbolicPDE, pg::Particle
             if pg.core.is_boundary[p_idx]; continue; end
 
             fi = ralston.rho_n[p_idx]
-            nb_slice = getNBSlice(pg, p_idx)
+            nb_slice = nb_slices[p_idx]
             
             div_fallback = ralston.fallbackInterpolator(eq, p_idx, fi, nb_slice, pg, ralston.neighbor_fs, ralston.neighbor_dfs)
             ralston.rho_fallback[p_idx] = ralston.rho_n[p_idx] - div_fallback * dt
@@ -819,9 +809,10 @@ function (ralston::RalstonRK2SmoothSwitch)(eq::ScalarHyperbolicPDE, pg::Particle
     Threads.@threads for particle_range in chunks
         for p_idx in particle_range
             fi = ralston.rho_n[p_idx]
-            initFs!(ralston, p_idx, fi, ralston.rho_n, pg)
+            nb_slice = nb_slices[p_idx]
+            initFs!(ralston, p_idx, fi, nb_slice, ralston.rho_n, pg)
             # Use high-order interpolator for GI
-            initGI!(ralston.gradientInterpolator, p_idx, fi, pg, ralston.neighbor_fs, ralston.neighbor_dfs)
+            initGI!(ralston.gradientInterpolator, p_idx, fi, nb_slice, pg, ralston.neighbor_fs, ralston.neighbor_dfs)
         end
     end
 
@@ -831,7 +822,7 @@ function (ralston::RalstonRK2SmoothSwitch)(eq::ScalarHyperbolicPDE, pg::Particle
             if pg.core.is_boundary[p_idx]; continue; end
 
             fi = ralston.rho_n[p_idx]
-            nb_slice = getNBSlice(pg, p_idx)
+            nb_slice = nb_slices[p_idx]
             
             ralston.div1[p_idx] = ralston.gradientInterpolator(eq, p_idx, fi, nb_slice, pg, ralston.neighbor_fs, ralston.neighbor_dfs)
             ralston.rho_stage[p_idx] = ralston.rho_n[p_idx] - ralston.div1[p_idx] * dt * 2/3
@@ -853,8 +844,9 @@ function (ralston::RalstonRK2SmoothSwitch)(eq::ScalarHyperbolicPDE, pg::Particle
     Threads.@threads for particle_range in chunks
         for p_idx in particle_range
             fi = ralston.rho_stage[p_idx]
-            initFs!(ralston, p_idx, fi, ralston.rho_stage, pg)
-            initGI!(ralston.gradientInterpolator, p_idx, fi, pg, ralston.neighbor_fs, ralston.neighbor_dfs)
+            nb_slice = nb_slices[p_idx]
+            initFs!(ralston, p_idx, fi, nb_slice, ralston.rho_stage, pg)
+            initGI!(ralston.gradientInterpolator, p_idx, fi, nb_slice, pg, ralston.neighbor_fs, ralston.neighbor_dfs)
         end
     end
 
@@ -871,7 +863,7 @@ function (ralston::RalstonRK2SmoothSwitch)(eq::ScalarHyperbolicPDE, pg::Particle
         end
 
         fi = ralston.rho_stage[p_idx]
-        nb_slice = getNBSlice(pg, p_idx)
+        nb_slice = nb_slices[p_idx]
 
         div2 = ralston.gradientInterpolator(eq, p_idx, fi, nb_slice, pg, ralston.neighbor_fs, ralston.neighbor_dfs)
         rho_final_candidate = ralston.rho_n[p_idx] - dt * (ralston.div1[p_idx]/4 + 3*div2/4)

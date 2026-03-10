@@ -569,13 +569,14 @@ Dispatches calculation based on muscl.order and ws type.
 function initGI!(
     muscl::MUSCL{D},
     i::Int,                         # Current particle index
-    f_i::Real,                      # Value of f at particle i
+    f_i::Real,
+    nb_slice::UnitRange{Int},                      # Value of f at particle i
     pg::ParticleGrid{D},               # Grid object
     neighbor_fs::AbstractVector,    # The flat neighbor-value buffer
     neighbor_dfs::AbstractVector    # The flat neighbor-difference buffer
 ) where D
     ws = muscl.workspace # ws will be MUSCLWorkspace2D1O or MUSCLWorkspace2D2O
-    if pg.core.is_boundary[i]
+    if i < 0
         # 1. Set 1st-order slopes to zero [cite: 76]
         slopes = D == 1 ? 0. : ntuple(x -> 0., D)
         
@@ -586,21 +587,20 @@ function initGI!(
         higher_derivatives_zeros = _calculate_higher_derivatives(muscl.order, nb_slice_empty, neighbor_dfs, ws)
         
         # 3. Save these zero-derivatives and return [cite: 9, 15, 16]
-        _save_derivatives!(ws, i, slopes, higher_derivatives_zeros) 
+        _save_derivatives!(ws, -i, slopes, higher_derivatives_zeros) 
         return
     end    
 
-    nb_slice = getNBSlice(pg, i)
     num_nb = length(nb_slice)
 
-    # --- Handle zero-neighbor case ---
-    if num_nb == 0
-        _zero_coeffs!(nb_slice, ws) # Zero coefficients
-        slopes = D == 1 ? 0. : ntuple(x -> 0., D)
-        higher_derivatives = _calculate_higher_derivatives(muscl.order, nb_slice, neighbor_dfs, ws) # Returns () or (0,0,0)
-        _save_derivatives!(ws, i, slopes, higher_derivatives) # Save zero derivatives
-        return
-    end
+    # # --- Handle zero-neighbor case ---
+    # if num_nb == 0
+    #     _zero_coeffs!(nb_slice, ws) # Zero coefficients
+    #     slopes = D == 1 ? 0. : ntuple(x -> 0., D)
+    #     higher_derivatives = _calculate_higher_derivatives(muscl.order, nb_slice, neighbor_dfs, ws) # Returns () or (0,0,0)
+    #     _save_derivatives!(ws, i, slopes, higher_derivatives) # Save zero derivatives
+    #     return
+    # end
 
     # --- 1. Compute Coefficients ---
     # Dispatches based on muscl.order AND ws type implicitly
@@ -641,8 +641,6 @@ function (muscl::MUSCL{1, ORDER})(
     # Assert that the workspace is the 1D abstract type
     ws = muscl.workspace::MUSCLWorkspace1D 
     nFlux = muscl.numericalFlux
-    
-    if pg.neighbor.amount[i] == 0; return 0.0; end
 
     # Get refs to global 1D buffers
     dx = get_xdistance(pg)
@@ -694,8 +692,6 @@ function (muscl::MUSCL{2, ORDER})(
     div = 0.0
     ws = muscl.workspace
     nFlux = muscl.numericalFlux
-    
-    if pg.neighbor.amount[i] == 0; return 0.0; end
 
     dx = get_xdistance(pg)
     dy = get_ydistance(pg)
@@ -703,7 +699,7 @@ function (muscl::MUSCL{2, ORDER})(
 
     fx, fy = flux(eq, f_i)
     # Loop over neighbors using the local index `k_local`
-    for k_global in neighbor_slice
+    @inbounds for k_global in neighbor_slice
         # Get global index for coefficient arrays
         
         # Get data from views

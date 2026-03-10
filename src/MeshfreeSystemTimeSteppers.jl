@@ -95,14 +95,7 @@ end
     Y_sys::AbstractMatrix{Float64}, 
     pg::ParticleGrid
 )
-    start_ptr = pg.neighbor.pointers[p_idx]
-    num_nb = pg.neighbor.amount[p_idx]
-    
-    if num_nb == 0
-        return
-    end
-
-    nb_slice = start_ptr:(start_ptr + num_nb - 1)
+    nb_slice = pg.neighbor.ranges[p_idx]
     
     # Cache friendly: k iterates sequentially through the neighbor flat arrays
     @inbounds for k in nb_slice
@@ -240,7 +233,7 @@ function (imex_ts::GeneralIMEXTimeStepper{M_comp, G1, G2, M_crit, IS, ST_OBJ, BT
             f_i_vec = @view current_Y_i_sys[p_idx, :]
             initFs!(imex_ts, p_idx, f_i_vec, current_Y_i_sys, pg)
             
-            nb_slice = pg.neighbor.pointers[p_idx]:(pg.neighbor.pointers[p_idx] + pg.neighbor.amount[p_idx] - 1)
+            nb_slice = pg.neighbor.ranges[p_idx]
             
             for k in 1:M_comp
                 fi = current_Y_i_sys[p_idx, k]

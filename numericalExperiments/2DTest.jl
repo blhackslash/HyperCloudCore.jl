@@ -1,19 +1,20 @@
 using Meshfree4ScalarEq
 using IPlotPDESols
+using InteractiveUtils
 
 # 2D simulation using your `runScalar2DSim` function.
 function main()
     params = ParamDict(
         # --- Shared Parameters ---
         "tmax" => 5.0,
-        "Nx" => 250,
-        "Ny" => 250,
+        "Nx" => 400,
+        "Ny" => 400,
         "xmin" => -5.0,
         "xmax" => 5.0,
         "ymin" => -5.0,
         "ymax" => 5.0,
-        #"CFL" => 0.4,
-        "dt" => .001,
+        "CFL" => 0.4,
+        #"dt" => .005,
         "snapshots" => 20,
         "interp_alpha" => 1.0,
         "interp_range" => 3.5,
@@ -86,8 +87,8 @@ function main()
     #    We also give it a larger buffer (n) and a reasonable delay
     sim_data = nothing
     #sim_data = runScalarSimulation(params);
-    #@profview runScalarSimulation(params)
-    @code_warntype runScalarSimulation(params)
+    @profview runScalarSimulation(params)
+    #@code_warntype runScalarSimulation(params)
     # 3. `sim_data` will now hold the results (a SimData2D object), which you can inspect.
     #
     test_config = SimulationConfig(
