@@ -62,7 +62,7 @@ end
 
 function initAddTSBuffer!(imex_ts::GeneralIMEXTimeStepper{M_comp}, pg::ParticleGrid) where {M_comp}
     N_particles = pg.meta.N
-    total_neighbors = length(pg.core.neighbor_indices)
+    total_neighbors = length(pg.neighbor.indices)
 
     # 1. Resize Stage Matrices
     if size(imex_ts.U_n_sys, 1) < N_particles
@@ -95,8 +95,8 @@ end
     Y_sys::AbstractMatrix{Float64}, 
     pg::ParticleGrid
 )
-    start_ptr = pg.core.neighbor_pointers[p_idx]
-    num_nb = pg.core.num_neighbors[p_idx]
+    start_ptr = pg.neighbor.pointers[p_idx]
+    num_nb = pg.neighbor.amount[p_idx]
     
     if num_nb == 0
         return
@@ -106,7 +106,7 @@ end
     
     # Cache friendly: k iterates sequentially through the neighbor flat arrays
     @inbounds for k in nb_slice
-        j = pg.core.neighbor_indices[k]
+        j = pg.neighbor.indices[k]
         
         # Extract all species/components for this neighbor j
         for c in 1:size(Y_sys, 2)
@@ -240,7 +240,7 @@ function (imex_ts::GeneralIMEXTimeStepper{M_comp, G1, G2, M_crit, IS, ST_OBJ, BT
             f_i_vec = @view current_Y_i_sys[p_idx, :]
             initFs!(imex_ts, p_idx, f_i_vec, current_Y_i_sys, pg)
             
-            nb_slice = pg.core.neighbor_pointers[p_idx]:(pg.core.neighbor_pointers[p_idx] + pg.core.num_neighbors[p_idx] - 1)
+            nb_slice = pg.neighbor.pointers[p_idx]:(pg.neighbor.pointers[p_idx] + pg.neighbor.amount[p_idx] - 1)
             
             for k in 1:M_comp
                 fi = current_Y_i_sys[p_idx, k]

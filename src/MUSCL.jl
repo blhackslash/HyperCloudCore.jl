@@ -341,7 +341,7 @@ end
 Ensures the flat coefficient arrays can hold data for every neighbor interaction.
 """
 function ensure_coefficients_capacity!(ws::MUSCLWorkspace2D1O, grid::ParticleGrid2D{S}) where S
-    required_len = length(grid.neighbor_indices)
+    required_len = length(grid.neighbor.indices)
     if length(ws.alfaijs) < required_len
    
      # Resize all flat coefficient arrays at once
@@ -354,7 +354,7 @@ function ensure_coefficients_capacity!(ws::MUSCLWorkspace2D1O, grid::ParticleGri
 end
 
 function ensure_coefficients_capacity!(ws::MUSCLWorkspace2D2O, grid::ParticleGrid2D{S}) where S
-    required_len = length(grid.neighbor_indices)
+    required_len = length(grid.neighbor.indices)
     if length(ws.alfaijs) < required_len
    
      # Resize all flat coefficient arrays at once
@@ -467,7 +467,7 @@ end
   total number of interactions, plus a 25% buffer[cite: 22].
 """
 function initGIBuffers!(ws::MUSCLWorkspace, pg::ParticleGrid)
-    N = pg.N
+    N = pg.meta.N
     
     # 1. Ensure capacity for per-particle buffers (size N)
     ensure_particle_capacity!(ws, N)
@@ -483,7 +483,7 @@ end
 # --- Buffer Initialization ---
 
 function initGIBuffers!(ws::MUSCLWorkspace1D0O, pg::ParticleGrid1D)
-    M = length(pg.neighbor_indices)
+    M = length(pg.neighbor.indices)
     if length(ws.alfaij_bars) < M
         resize!(ws.alfaij_bars, M)
     end
@@ -496,7 +496,7 @@ end
 
 # Helper for 2D0O
 function ensure_coefficients_capacity!(ws::MUSCLWorkspace2D0O, grid::ParticleGrid2D)
-    required_len = length(grid.neighbor_indices)
+    required_len = length(grid.neighbor.indices)
     if length(ws.alfaijs) < required_len
         new_capacity = required_len + required_len ÷ 4
         resize!.((ws.alfaijs, ws.betaijs), new_capacity)
@@ -504,8 +504,8 @@ function ensure_coefficients_capacity!(ws::MUSCLWorkspace2D0O, grid::ParticleGri
 end
 # --- NEW: initGIBuffers! for 1D workspaces ---
 function initGIBuffers!(ws::Union{MUSCLWorkspace1D1O,MUSCLWorkspace1D2O}, pg::ParticleGrid1D)
-    N = pg.N
-    M = length(pg.neighbor_indices) # Total interactions
+    N = pg.meta.N
+    M = length(pg.neighbor.indices) # Total interactions
     
     if length(ws.slopes) < N
         resize!.((ws.slopes, ws.curves_xx), N)
@@ -516,8 +516,8 @@ function initGIBuffers!(ws::Union{MUSCLWorkspace1D1O,MUSCLWorkspace1D2O}, pg::Pa
 end
 
 function initGIBuffers!(ws::MUSCLWorkspace1D3O, pg::ParticleGrid1D)
-    N = pg.N
-    M = length(pg.neighbor_indices)
+    N = pg.meta.N
+    M = length(pg.neighbor.indices)
     
     # --- Resize derivative and coefficient buffers (as before) ---
     if length(ws.slopes) < N
@@ -528,7 +528,7 @@ function initGIBuffers!(ws::MUSCLWorkspace1D3O, pg::ParticleGrid1D)
     end
 
     # # --- NEW: Resize thread-local buffers based on max_nb ---
-    # max_nb = pg.max_nb 
+    # max_nb = pg.meta.max_nb 
     
     # # Check if the *current* buffers are inadequately sized
     # if size(ws.thread_Q_buffers[1], 1) < max_nb
@@ -542,8 +542,8 @@ function initGIBuffers!(ws::MUSCLWorkspace1D3O, pg::ParticleGrid1D)
 end
 
 function initGIBuffers!(ws::MUSCLWorkspace1D4O, pg::ParticleGrid1D)
-    N = pg.N
-    M = length(pg.neighbor_indices)
+    N = pg.meta.N
+    M = length(pg.neighbor.indices)
     
     if length(ws.slopes) < N
         resize!.((ws.slopes, ws.curves_xx, ws.d3fdx3, ws.d4fdx4), N)
@@ -575,7 +575,7 @@ function initGI!(
     neighbor_dfs::AbstractVector    # The flat neighbor-difference buffer
 ) where D
     ws = muscl.workspace # ws will be MUSCLWorkspace2D1O or MUSCLWorkspace2D2O
-    if pg.is_boundary[i]
+    if pg.core.is_boundary[i]
         # 1. Set 1st-order slopes to zero [cite: 76]
         slopes = D == 1 ? 0. : ntuple(x -> 0., D)
         
@@ -635,18 +635,18 @@ function (muscl::MUSCL{1, ORDER})(
     pg::ParticleGrid,               # Grid object (will be 1D)
     f_neighbors::AbstractVector,    # View of neighbor f-values
     df_neighbors::AbstractVector    # View of neighbor df-values (not used by functor)
-)::Real where {ORDER<:MUSCLORDER}
+) where {ORDER<:MUSCLORDER}
     
     div = 0.0
     # Assert that the workspace is the 1D abstract type
     ws = muscl.workspace::MUSCLWorkspace1D 
     nFlux = muscl.numericalFlux
     
-    if pg.num_neighbors[i] == 0; return 0.0; end
+    if pg.neighbor.amount[i] == 0; return 0.0; end
 
     # Get refs to global 1D buffers
-    dx = pg.neighbor_xdistance
-    nb_indices = pg.neighbor_indices
+    dx = get_xdistance(pg)
+    nb_indices = pg.neighbor.indices
 
     # 1D flux
     fx = flux(eq, f_i)
@@ -689,17 +689,17 @@ function (muscl::MUSCL{2, ORDER})(
     pg::ParticleGrid,
     f_neighbors::AbstractVector,    # View of neighbor f-values
     df_neighbors::AbstractVector,   # View of neighbor df-values
-)::Real where {ORDER<:MUSCLORDER}
+) where {ORDER<:MUSCLORDER}
     
     div = 0.0
     ws = muscl.workspace
     nFlux = muscl.numericalFlux
     
-    if pg.num_neighbors[i] == 0; return 0.0; end
+    if pg.neighbor.amount[i] == 0; return 0.0; end
 
-    dx = pg.neighbor_xdistance
-    dy = pg.neighbor_ydistance
-    nb_indices = pg.neighbor_indices
+    dx = get_xdistance(pg)
+    dy = get_ydistance(pg)
+    nb_indices = pg.neighbor.indices
 
     fx, fy = flux(eq, f_i)
     # Loop over neighbors using the local index `k_local`

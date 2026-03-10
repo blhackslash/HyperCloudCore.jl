@@ -147,23 +147,24 @@ function runScalarSimulation(params::ParamDictType)::Union{AbstractSimData, Noth
             delta_relax = dx_nominal * dy_nominal * delta_relax_factor         
             upwind_alg_2d = main_grad_name == "Upwind" || fallback_grad_name == "Upwind" ? run_params["upwind_alg_2d"] : nothing
         end
-        weight_func = if weight_func_name == "exponential"; exponentialWeightFunction(interp_alpha, interp_range)
-                      elseif !isnothing(weight_func_name) error("Weight function not implemented yet!") end
-        local particleGrid
-        if dimension == 1
-            particleGrid = ParticleGrid1D(xmin, xmax, Nx, bc, interp_range_factor; rng=rng, randomness=randomness, merge_factor = merge_factor, weight_func = weight_func)
-        else
-            particleGrid = ParticleGrid2D(xmin, xmax, ymin, ymax, Nx, Ny, bc, interp_range_factor; weight_func = weight_func, rng=rng, randomness=randomness)
-        end
-        N_total_particles = particleGrid.N
-        #determineVolumes!(particleGrid)
-        setInitialConditions!(particleGrid, IC)
+        #weight_func = if weight_func_name == "exponential"; exponentialWeightFunction(interp_alpha, interp_range)
+        #              elseif !isnothing(weight_func_name) error("Weight function not implemented yet!") end
+        weight_func = exponentialWeightFunction(interp_alpha, interp_range)
+#        local pg
+#        if dimension == 1
+#            pg = createParticleGrid(Val(1), xmin, xmax, Nx, bc, interp_range_factor; rng=rng, randomness=randomness, merge_factor = merge_factor, weight_func = weight_func)
+#        else
+            pg = createParticleGrid(Val(2),xmin, xmax, ymin, ymax, Nx, Ny, bc, interp_range_factor; weight_func = weight_func, rng=rng, randomness=randomness)
+#        end
+        N_total_particles = pg.meta.N
+        #determineVolumes!(pg)
+        setInitialConditions!(pg, IC)
         
         # --- 6. Time Step and Settings ---
         if !isnothing(cfl)
             # For non-linear, use a dummy linear equation with max characteristic speed
             eq_for_dt = eq isa LinearAdvection ? eq : (dimension == 1 ? LinearAdvection(1.0) : LinearAdvection((1.,1.))) # Adjust max speed for Burgers if needed
-            dt = cfl * getTimeStep(particleGrid, eq_for_dt)
+            dt = cfl * getTimeStep(pg, eq_for_dt)
         elseif isnothing(dt)
             error("Either 'dt' or 'CFL' must be provided.")
         end
@@ -234,8 +235,8 @@ function runScalarSimulation(params::ParamDictType)::Union{AbstractSimData, Noth
 
             save_relax = false
             # --- 8. Run Simulation ---
-            elapsed_time, xs, us, ts = mainTimeIntegrator!(method, eq, particleGrid, settings; snapshots = snapshots, remove_ghosts = remove_ghosts)
-            #@profview mainTimeIntegrator!(method, eq, particleGrid, settings; snapshots = snapshots)
+            elapsed_time, xs, us, ts = mainTimeIntegrator!(method, eq, pg, settings; snapshots = snapshots, remove_ghosts = remove_ghosts)
+            #@profview mainTimeIntegrator!(method, eq, pg, settings; snapshots = snapshots)
         else
             relax_eps = run_params["relax_epsilon"]
             save_relax = run_params["save_relax"]
@@ -275,11 +276,11 @@ function runScalarSimulation(params::ParamDictType)::Union{AbstractSimData, Noth
             source_term = RelaxationSourceTerm(M_funcs_vec, relax_eps, kinetic_to_macro_map)
 
             # BUG FIX 2: Correctly initialize the kinetic particle grids to be in equilibrium.
-            pgs_vec = [deepcopy(particleGrid) for _ in 1:N_total_kinetic]
+            pgs_vec = [deepcopy(pg) for _ in 1:N_total_kinetic]
             for k in 1:N_total_kinetic
                 for p_idx in 1:pgs_vec[k].N
                     # Get the macroscopic IC at this point
-                    macro_ic_at_p = particleGrid.rhos[p_idx]
+                    macro_ic_at_p = pg.rhos[p_idx]
                     # Set the kinetic IC to be the Maxwellian evaluated at the macro IC
                     pgs_vec[k].rhos[p_idx] = M_funcs_vec[k]((macro_ic_at_p,))
                 end
@@ -338,9 +339,9 @@ function runScalarSimulation(params::ParamDictType)::Union{AbstractSimData, Noth
         sim_data_result = createSimData(xs, us, ts, run_params)
         if !save_relax
             if dimension == 1
-                calculateAllStats!(sim_data_result, (x,t) -> IC(x,t,eq,particleGrid); discontinuity_points_func = t -> get_discontinuity_points(IC, eq, t, particleGrid), quad_tol = 10e-9, dierckx_k = 4)
+                #calculateAllStats!(sim_data_result, (x,t) -> IC(x,t,eq,pg); discontinuity_points_func = t -> get_discontinuity_points(IC, eq, t, pg), quad_tol = 10e-9, dierckx_k = 4)
             elseif dimension == 2
-                calculateAllStats!(sim_data_result, (x,t) -> IC(x,t,eq,particleGrid); discontinuity_points_func = t -> get_discontinuity_points(IC, eq, t, particleGrid), quad_tol = 10e-9, dierckx_k = 4)
+                #calculateAllStats!(sim_data_result, (x,t) -> IC(x,t,eq,pg); discontinuity_points_func = t -> get_discontinuity_points(IC, eq, t, pg), quad_tol = 10e-9, dierckx_k = 4)
             end
         end         
         

@@ -15,15 +15,15 @@ function manage_particles!(pg::ParticleGrid)
     empty!(pg.split_buffer_pos)
     empty!(pg.split_buffer_rho)
 
-    if length(pg.merged_buffer) < pg.N
-        safe_resize!(pg.merged_buffer, pg.N)
+    if length(pg.merged_buffer) < pg.meta.N
+        safe_resize!(pg.merged_buffer, pg.meta.N)
     end
     visited = pg.merged_buffer 
-    fill!(view(visited, 1:pg.N), false)
+    fill!(view(visited, 1:pg.meta.N), false)
     
     lv = pg.local_voxels
 
-    for i in 1:pg.N
+    for i in 1:pg.meta.N
         if !visited[i]
             reset_voxels!(lv)
             check_occupation!(lv, pg, i, visited)
@@ -38,33 +38,33 @@ function manage_particles!(pg::ParticleGrid)
     # Append New Particles
     N_new = length(pg.split_buffer_pos)
     if N_new > 0
-        N_curr = pg.N
+        N_curr = pg.meta.N
         N_total = N_curr + N_new
         
         # Resize all persistent arrays
-        safe_resize!(pg.positions, N_total)
+        safe_resize!(get_positions(pg), N_total)
         safe_resize!(pg.rhos, N_total)
         safe_resize!(pg.curvatures, N_total)
-        safe_resize!(pg.is_boundary, N_total)
+        safe_resize!(pg.core.is_boundary, N_total)
         safe_resize!(pg.volumes, N_total)
         safe_resize!(pg.mood_events, N_total)
         
         for k in 1:N_new
             idx = N_curr + k
-            pg.positions[idx]   = pg.split_buffer_pos[k]
+            get_positions(pg)[idx]   = pg.split_buffer_pos[k]
             pg.rhos[idx]        = pg.split_buffer_rho[k]
             # Defaults
             pg.curvatures[idx]  = 0.0
-            pg.is_boundary[idx] = false 
+            pg.core.is_boundary[idx] = false 
             pg.volumes[idx]     = 0.0
             pg.mood_events[idx] = false
         end
         
-        pg.N = N_total
+        pg.meta.N = N_total
         
         # Intermediate Rebuild needed for Merge
-        safe_resize!(pg.num_neighbors, pg.N)
-        safe_resize!(pg.neighbor_pointers, pg.N + 1)
+        safe_resize!(pg.neighbor.amount, pg.meta.N)
+        safe_resize!(pg.neighbor.pointers, pg.meta.N + 1)
         
         sort_1d_particles!(pg)
         updateNeighbors!(pg)
@@ -82,8 +82,8 @@ function manage_particles!(pg::ParticleGrid)
     # PHASE 4: FINALIZE
     # =========================================================================
     
-    safe_resize!(pg.num_neighbors, pg.N)
-    safe_resize!(pg.neighbor_pointers, pg.N + 1)
+    safe_resize!(pg.neighbor.amount, pg.meta.N)
+    safe_resize!(pg.neighbor.pointers, pg.meta.N + 1)
     if pg isa ParticleGrid1D; sort_1d_particles!(pg) end
     updateNeighbors!(pg)
     if pg isa ParticleGrid1D; determineVolumes!(pg) end
@@ -93,13 +93,13 @@ function _merge_particles!(pg::ParticleGrid1D)
     # PHASE 2: MERGE (Coarsen)
     # =========================================================================
     
-    safe_resize!(pg.merged_buffer, pg.N)
-    fill!(view(pg.merged_buffer, 1:pg.N), false)
+    safe_resize!(pg.merged_buffer, pg.meta.N)
+    fill!(view(pg.merged_buffer, 1:pg.meta.N), false)
     merged = pg.merged_buffer
 
     write_idx = 0 
     
-    pos    = pg.positions
+    pos    = get_positions(pg)
     rhos   = pg.rhos
     
     # Pre-allocate a queue to track the cluster chain
@@ -107,7 +107,7 @@ function _merge_particles!(pg::ParticleGrid1D)
     queue = Int[]
     sizehint!(queue, 16)
 
-    for i in 1:pg.N
+    for i in 1:pg.meta.N
         if merged[i]; continue; end
 
         write_idx += 1
@@ -128,19 +128,19 @@ function _merge_particles!(pg::ParticleGrid1D)
             q_head += 1
             
             # Iterate neighbors of 'u' (the current link in the chain)
-            start_ptr = pg.neighbor_pointers[u]
-            n_count   = pg.num_neighbors[u]
+            start_ptr = pg.neighbor.pointers[u]
+            n_count   = pg.neighbor.amount[u]
             
             if n_count > 0
                 end_ptr = start_ptr + n_count - 1
                 for k in start_ptr:end_ptr
-                    j = pg.neighbor_indices[k]
+                    j = pg.neighbor.indices[k]
                     
                     # 1. Forward check (j > i) ensures we don't merge backwards into finished data
                     # 2. !merged[j] ensures we don't double-process
                     if j > i && !merged[j]
                         # Distance between 'u' and 'j'
-                        dist = abs(pg.neighbor_xdistance[k]) 
+                        dist = abs(get_xdistance(pg)[k]) 
                         
                         if dist < pg.min_dist
                             # --- MERGE ---
@@ -169,7 +169,7 @@ function _merge_particles!(pg::ParticleGrid1D)
         end
     end
     
-    pg.N = write_idx
+    pg.meta.N = write_idx
     return nothing
 end
 
@@ -186,25 +186,25 @@ function a_cubic(u, v)
 end
 
 function _merge_particles_conservative!(pg::ParticleGrid1D)
-    safe_resize!(pg.merged_buffer, pg.N)
-    fill!(view(pg.merged_buffer, 1:pg.N), false)
+    safe_resize!(pg.merged_buffer, pg.meta.N)
+    fill!(view(pg.merged_buffer, 1:pg.meta.N), false)
     merged = pg.merged_buffer
 
     write_idx = 0 
     
-    pos    = pg.positions
+    pos    = get_positions(pg)
     rhos   = pg.rhos
     vols   = pg.volumes
     
     # We iterate 1 to N. Since list is sorted, neighbors are i-1 and i+1.
-    for i in 1:pg.N
+    for i in 1:pg.meta.N
         if merged[i]; continue; end
 
         write_idx += 1
         
         # Check if we should merge with the NEXT particle (i+1)
         # We handle periodicity for the 'next' index
-        j = (i == pg.N) ? 1 : i + 1
+        j = (i == pg.meta.N) ? 1 : i + 1
         
         did_merge = false
         
@@ -223,16 +223,16 @@ function _merge_particles_conservative!(pg::ParticleGrid1D)
                 # P2 = i, P3 = j
                 
                 # Find P1 (Left of i)
-                idx_1 = (i == 1) ? pg.N : i - 1
+                idx_1 = (i == 1) ? pg.meta.N : i - 1
                 
                 # Find P4 (Right of j)
-                idx_4 = (j == pg.N) ? 1 : j + 1
+                idx_4 = (j == pg.meta.N) ? 1 : j + 1
                 
                 # Check Validity of Stencil
                 # In non-periodic, we can't do this at the very edges.
                 valid_stencil = true
                 if pg.bc != :periodic
-                    if i == 1 || j == pg.N; valid_stencil = false; end
+                    if i == 1 || j == pg.meta.N; valid_stencil = false; end
                 end
                 
                 if valid_stencil
@@ -300,7 +300,7 @@ function _merge_particles_conservative!(pg::ParticleGrid1D)
         end
     end
     
-    pg.N = write_idx
+    pg.meta.N = write_idx
     return
 end
 
@@ -309,20 +309,20 @@ function _merge_particles_flux_conserving!(pg::ParticleGrid1D)
     # PHASE 2: MERGE (Coarsen) - ALE CONSISTENT CONSERVATION
     # =========================================================================
     
-    safe_resize!(pg.merged_buffer, pg.N)
-    fill!(view(pg.merged_buffer, 1:pg.N), false)
+    safe_resize!(pg.merged_buffer, pg.meta.N)
+    fill!(view(pg.merged_buffer, 1:pg.meta.N), false)
     merged = pg.merged_buffer
 
     write_idx = 0 
-    pos  = pg.positions
+    pos  = get_positions(pg)
     rhos = pg.rhos
     vols = pg.volumes
     
-    for i in 1:pg.N
+    for i in 1:pg.meta.N
         if merged[i]; continue; end
 
         write_idx += 1
-        j = (i == pg.N) ? 1 : i + 1 # Sorted neighbor
+        j = (i == pg.meta.N) ? 1 : i + 1 # Sorted neighbor
         
         did_merge = false
         if !merged[j]
@@ -330,8 +330,8 @@ function _merge_particles_flux_conserving!(pg::ParticleGrid1D)
             
             if abs(dist_ij) < pg.min_dist
                 # --- Neighbors of the merging pair ---
-                idx_L = (i == 1) ? pg.N : i - 1
-                idx_R = (j == pg.N) ? 1 : j + 1
+                idx_L = (i == 1) ? pg.meta.N : i - 1
+                idx_R = (j == pg.meta.N) ? 1 : j + 1
                 
                 # 1. New Position: Arithmetic midpoint (or volume weighted)
                 new_pos = pos[i] + 0.5 * dist_ij
@@ -360,8 +360,8 @@ function _merge_particles_flux_conserving!(pg::ParticleGrid1D)
                 # Better: use the actual formula for V_k in your determineVolumes!
                 # V_i = 0.5 * (pos[i+1] - pos[i-1])
                 
-                v_L_new = abs(getDistance(pg, (idx_L==1 ? pg.N : idx_L-1), write_idx)) * 0.5
-                v_R_new = abs(getDistance(pg, write_idx, (idx_R==pg.N ? 1 : idx_R+1))) * 0.5
+                v_L_new = abs(getDistance(pg, (idx_L==1 ? pg.meta.N : idx_L-1), write_idx)) * 0.5
+                v_R_new = abs(getDistance(pg, write_idx, (idx_R==pg.meta.N ? 1 : idx_R+1))) * 0.5
                 v_new   = abs(getDistance(pg, idx_L, idx_R)) * 0.5
                 
                 # 4. Determine u_new to satisfy conservation
@@ -383,7 +383,7 @@ function _merge_particles_flux_conserving!(pg::ParticleGrid1D)
             end
         end
     end
-    pg.N = write_idx
+    pg.meta.N = write_idx
 end
 
 using Random # Ensure Random is available for rand(Bool)
@@ -393,18 +393,18 @@ function _merge_particles_pairwise!(pg::ParticleGrid1D)
     # PHASE 2: PAIRWISE MERGE (Simple Average + Random Tie Break)
     # =========================================================================
     
-    safe_resize!(pg.merged_buffer, pg.N)
-    fill!(view(pg.merged_buffer, 1:pg.N), false)
+    safe_resize!(pg.merged_buffer, pg.meta.N)
+    fill!(view(pg.merged_buffer, 1:pg.meta.N), false)
     merged = pg.merged_buffer
 
     write_idx = 0 
     
-    pos  = pg.positions
+    pos  = get_positions(pg)
     rhos = pg.rhos
     vols = pg.volumes
     # vols = pg.volumes # Not used for simple average
     
-    for i in 1:pg.N
+    for i in 1:pg.meta.N
         # If 'i' was already consumed by a previous merge, skip it.
         if merged[i]; continue; end
 
@@ -414,19 +414,19 @@ function _merge_particles_pairwise!(pg::ParticleGrid1D)
         best_j = -1
         min_dist_found = pg.min_dist # Initialize with threshold
         
-        start_ptr = pg.neighbor_pointers[i]
-        n_count   = pg.num_neighbors[i]
+        start_ptr = pg.neighbor.pointers[i]
+        n_count   = pg.neighbor.amount[i]
         
         if n_count > 0
             end_ptr = start_ptr + n_count - 1
             for k in start_ptr:end_ptr
-                j = pg.neighbor_indices[k]
+                j = pg.neighbor.indices[k]
                 
                 # Criteria:
                 # 1. Forward neighbor (j > i) to prevent double processing
                 # 2. Not already merged
                 if j > i && !merged[j]
-                    dist = abs(pg.neighbor_xdistance[k]) 
+                    dist = abs(get_xdistance(pg)[k]) 
                     
                     if dist < min_dist_found
                         # Found a strictly closer neighbor
@@ -483,7 +483,7 @@ function _merge_particles_pairwise!(pg::ParticleGrid1D)
         end
     end
     
-    pg.N = write_idx
+    pg.meta.N = write_idx
     return nothing
 end
 
@@ -505,7 +505,7 @@ function fill_empty_voxels!(lv::LocalVoxels, pg::ParticleGrid1D, i::Int, visited
             
             # Note: We calculate 'abs_pos' here only for the domain check.
             # The actual insertion position in Case A will be the physical midpoint.
-            abs_pos = pg.positions[i] + rel_pos
+            abs_pos = get_positions(pg)[i] + rel_pos
             
             # Domain Check
             if pg.bc == :periodic
@@ -519,11 +519,11 @@ function fill_empty_voxels!(lv::LocalVoxels, pg::ParticleGrid1D, i::Int, visited
             closest_L_dist = -Inf; closest_L_idx = -1
             closest_R_dist = Inf;  closest_R_idx = -1
             
-            start_ptr = pg.neighbor_pointers[i]
-            for n in 0:(pg.num_neighbors[i]-1)
+            start_ptr = pg.neighbor.pointers[i]
+            for n in 0:(pg.neighbor.amount[i]-1)
                 flat_idx = start_ptr + n
-                d_from_i = pg.neighbor_xdistance[flat_idx]
-                nb_idx   = pg.neighbor_indices[flat_idx]
+                d_from_i = get_xdistance(pg)[flat_idx]
+                nb_idx   = pg.neighbor.indices[flat_idx]
                 d_new = d_from_i - rel_pos
                 if d_new < 0 && d_new > closest_L_dist
                     closest_L_dist = d_new; closest_L_idx = nb_idx
@@ -552,7 +552,7 @@ function fill_empty_voxels!(lv::LocalVoxels, pg::ParticleGrid1D, i::Int, visited
                 # dist_LR = pos_R - pos_L (shortest path)
                 dist_LR = getDistance(pg, idx_L, idx_R)
                 
-                new_abs_pos = pg.positions[idx_L] + 0.5 * dist_LR
+                new_abs_pos = get_positions(pg)[idx_L] + 0.5 * dist_LR
                 
                 # Wrap the new position if necessary (standard periodic safety)
                 if pg.bc == :periodic
@@ -569,7 +569,7 @@ function fill_empty_voxels!(lv::LocalVoxels, pg::ParticleGrid1D, i::Int, visited
                 
             elseif closest_L_idx == -1 && closest_R_idx != -1
                 # Case B: Outer Voxel (Left Void) -> Un-visit Right Neighbor
-                if pg.is_boundary[closest_R_idx]
+                if pg.core.is_boundary[closest_R_idx]
                     push!(pg.split_buffer_pos, abs_pos)
                     push!(pg.split_buffer_rho, pg.rhos[i])
                 else
@@ -577,7 +577,7 @@ function fill_empty_voxels!(lv::LocalVoxels, pg::ParticleGrid1D, i::Int, visited
                 end
             elseif closest_L_idx != -1 && closest_R_idx == -1
                 # Case C: Outer Voxel (Right Void) -> Un-visit Left Neighbor
-                if pg.is_boundary[closest_L_idx]
+                if pg.core.is_boundary[closest_L_idx]
                     push!(pg.split_buffer_pos, abs_pos)
                     push!(pg.split_buffer_rho, pg.rhos[i])
                 else
@@ -610,16 +610,16 @@ function update_boundaries!(pg::ParticleGrid1D)
     inner_min = pg.inner_xmin
     inner_max = pg.inner_xmax
     
-    pos   = pg.positions
+    pos   = get_positions(pg)
     rhos  = pg.rhos
-    is_bd = pg.is_boundary
+    is_bd = pg.core.is_boundary
     curv  = pg.curvatures
     vols  = pg.volumes
     mood  = pg.mood_events
     
     write_idx = 0
     
-    for i in 1:pg.N
+    for i in 1:pg.meta.N
         x = pos[i]
         
         # 1. Filter: Strictly keep only those within OUTER limits
@@ -649,7 +649,7 @@ function update_boundaries!(pg::ParticleGrid1D)
         end
     end
     
-    pg.N = write_idx
+    pg.meta.N = write_idx
     return nothing
 end
 
@@ -669,14 +669,14 @@ end
 """
 function check_occupation!(lv::LocalVoxels, pg::ParticleGrid1D, i::Int, visited::BitVector)
     R = pg.max_dist
-    start_ptr = pg.neighbor_pointers[i]
-    num_nbs   = pg.num_neighbors[i]
+    start_ptr = pg.neighbor.pointers[i]
+    num_nbs   = pg.neighbor.amount[i]
     
     center_offset = lv.half_bins + 1
 
     for k in 0:(num_nbs - 1)
         flat_idx = start_ptr + k
-        dist = pg.neighbor_xdistance[flat_idx]
+        dist = get_xdistance(pg)[flat_idx]
         
         if abs(dist) > R; continue; end
         
@@ -688,7 +688,7 @@ function check_occupation!(lv::LocalVoxels, pg::ParticleGrid1D, i::Int, visited:
             lv.occupation[bin_idx] = true
             
             # Mark Global Visited
-            nb_idx = pg.neighbor_indices[flat_idx]
+            nb_idx = pg.neighbor.indices[flat_idx]
             visited[nb_idx] = true 
         end
     end

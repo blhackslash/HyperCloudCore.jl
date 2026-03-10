@@ -52,8 +52,8 @@ function (central::CentralGradient{1})(
     interp = central.interpolator
 
     # Get references to GLOBAL grid data arrays
-    dxVec = pg.neighbor_xdistance
-    wVec = pg.neighbor_weights
+    dxVec = get_xdistance(pg)
+    wVec = get_weights(pg)
 
     num_nb = length(nb_slice)
     
@@ -88,9 +88,9 @@ function (central::CentralGradient{2})(
     interp = central.interpolator
 
     # Get references to GLOBAL grid data arrays
-    dxVec = pg.neighbor_xdistance
-    dyVec = pg.neighbor_ydistance
-    wVec = pg.neighbor_weights
+    dxVec = get_xdistance(pg)
+    dyVec = get_ydistance(pg)
+    wVec = get_weights(pg)
 
     num_nb = length(nb_slice)
     

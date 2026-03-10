@@ -51,8 +51,8 @@ function _compute_coeffs!(
 )
     # Re-use the Linear Least Squares logic from Order 1
     # This computes the weights 'c' such that sum(c * dx) = 1
-    dx = pg.neighbor_xdistance
-    w = pg.neighbor_weights
+    dx = get_xdistance(pg)
+    w = get_weights(pg)
     
     N11 = 0.0
     @inbounds for k in nb_slice
@@ -78,9 +78,9 @@ function _compute_coeffs!(
     pg::ParticleGrid2D
 )
     # Re-use the Linear Least Squares logic from Order 1
-    dx = pg.neighbor_xdistance
-    dy = pg.neighbor_ydistance
-    w = pg.neighbor_weights
+    dx = get_xdistance(pg)
+    dy = get_ydistance(pg)
+    w = get_weights(pg)
     
     N11 = 0.0; N12 = 0.0; N22 = 0.0
 
@@ -127,8 +127,8 @@ function _compute_coeffs!(
     ws::MUSCLWorkspace1D1O,
     pg::ParticleGrid1D
 )
-    dx = pg.neighbor_xdistance
-    w = pg.neighbor_weights
+    dx = get_xdistance(pg)
+    w = get_weights(pg)
     
     # 1. Build 1x1 Normal Matrix N = A^T W A
     N11 = 0.0
@@ -159,8 +159,8 @@ function _compute_coeffs!(
     ws::MUSCLWorkspace1D2O,
     pg::ParticleGrid1D
 )
-    dx = pg.neighbor_xdistance
-    w = pg.neighbor_weights
+    dx = get_xdistance(pg)
+    w = get_weights(pg)
 
     N11 = 0.0; N12 = 0.0; N22 = 0.0
     @inbounds for k in nb_slice
@@ -204,8 +204,8 @@ using LinearAlgebra # Required for pinv
 #     ws::MUSCLWorkspace1D3O,
 #     pg::ParticleGrid1D
 # )
-#     dx = pg.neighbor_xdistance
-#     w = pg.neighbor_weights
+#     dx = get_xdistance(pg)
+#     w = get_weights(pg)
 #     num_nb = length(nb_slice)
 
 #     # Need at least 3 neighbors for a 3rd-order fit
@@ -273,8 +273,8 @@ using LinearAlgebra # Required for pinv
 #     ws::MUSCLWorkspace1D3O,
 #     pg::ParticleGrid1D
 # )
-#     dx = pg.neighbor_xdistance
-#     w = pg.neighbor_weights
+#     dx = get_xdistance(pg)
+#     w = get_weights(pg)
 #     num_nb = length(nb_slice)
 
 #     # Need at least 3 neighbors for a 3rd-order fit
@@ -288,7 +288,7 @@ using LinearAlgebra # Required for pinv
     
 #     # --- 2. Get Scaling Factor ---
 #     # Use the pre-calculated mean neighbor distance from the grid
-#     h_scale = pg.dx 
+#     h_scale = pg.meta.dx 
 
 #     # If h_scale is zero, the grid is degenerate.
 #     # The problem is singular, so we return zeros.
@@ -420,11 +420,11 @@ function _compute_coeffs!(
     ws::MUSCLWorkspace1D3O,
     pg::ParticleGrid1D
 )
-    dx = pg.neighbor_xdistance
-    w = pg.neighbor_weights
+    dx = get_xdistance(pg)
+    w = get_weights(pg)
 
     # --- 1. Get Scaling Factor ---
-    h_scale = pg.dx
+    h_scale = pg.meta.dx
     if h_scale < 1e-14
         _zero_coeffs!(nb_slice, ws); return;
     end
@@ -499,11 +499,11 @@ function _compute_coeffs!(
     ws::MUSCLWorkspace1D4O,
     pg::ParticleGrid1D
 )
-    dx = pg.neighbor_xdistance
-    w = pg.neighbor_weights
+    dx = get_xdistance(pg)
+    w = get_weights(pg)
 
     # --- 1. Get Scaling Factor ---
-    h_scale = pg.dx
+    h_scale = pg.meta.dx
     if h_scale < 1e-14
         _zero_coeffs!(nb_slice, ws); return;
     end
@@ -593,9 +593,9 @@ function _compute_coeffs!(
     ws::MUSCLWorkspace2D1O, # <-- Takes workspace
     pg::ParticleGrid2D
 )
-    dx = pg.neighbor_xdistance
-    dy = pg.neighbor_ydistance
-    w = pg.neighbor_weights
+    dx = get_xdistance(pg)
+    dy = get_ydistance(pg)
+    w = get_weights(pg)
     # Get views into workspace coefficient arrays
     alfaij = ws.alfaijs
     betaij = ws.betaijs
@@ -683,9 +683,9 @@ function _compute_coeffs!(
     ws::MUSCLWorkspace2D2O, # <-- Takes workspace
     pg::ParticleGrid2D
 )
-    dx = pg.neighbor_xdistance
-    dy = pg.neighbor_ydistance
-    w = pg.neighbor_weights
+    dx = get_xdistance(pg)
+    dy = get_ydistance(pg)
+    w = get_weights(pg)
     # Get views into workspace coefficient arrays
     alfaij      = ws.alfaijs
     betaij      = ws.betaijs

@@ -30,7 +30,7 @@ struct CustomGridMover{F, P} <: GridMover
 end
 
 function (gm::CustomGridMover)(pg::ParticleGrid{D, M}, dt::Real; managed=true) where {D, M}
-    positions = pg.positions
+    positions = get_positions(pg)
     rhos = pg.rhos
     vel_func = gm.vel_func
     
@@ -80,7 +80,7 @@ end
 
 function (gm::PhysicalGridMover{BurgersEquation{a}, I, Nothing, 1})(pg::ParticleGrid{1, 1}, dt::Real; managed=true) where {a, I}
     for p_idx = 1:pg.meta.N
-        pg.positions[p_idx] += SVector{1, Float64}(a * pg.rhos[p_idx, 1] * dt)
+        get_positions(pg)[p_idx] += SVector{1, Float64}(a * pg.rhos[p_idx, 1] * dt)
     end
     if managed
         reorder_particles!(pg)
@@ -92,7 +92,7 @@ end
 
 function (gm::PhysicalGridMover{TestU3Equation{a}, I, Nothing, 1})(pg::ParticleGrid{1, 1}, dt::Real; managed=true) where {a, I}
     for p_idx = 1:pg.meta.N
-        pg.positions[p_idx] += SVector{1, Float64}(a * (pg.rhos[p_idx, 1])^2 * dt)
+        get_positions(pg)[p_idx] += SVector{1, Float64}(a * (pg.rhos[p_idx, 1])^2 * dt)
     end
     if managed
         reorder_particles!(pg)
@@ -104,7 +104,7 @@ end
 
 function (gm::PhysicalGridMover{LinearAdvection{1}, I, Nothing, 1})(pg::ParticleGrid{1, 1}, dt::Real; managed=true) where {I}
     for p_idx = 1:pg.meta.N
-        pg.positions[p_idx] += SVector{1, Float64}(1.0 * dt)
+        get_positions(pg)[p_idx] += SVector{1, Float64}(1.0 * dt)
     end
     if managed
         reorder_particles!(pg)
@@ -119,7 +119,7 @@ end
 function (gm::PhysicalGridMover{E, I, V, D})(pg::ParticleGrid{D, M}, dt::Real; managed = true) where {E, I, V, D, M}
     # Move particles using the pre-computed buffer
     for p_idx in 1:pg.meta.N
-        pg.positions[p_idx] += gm.grid_velocities[p_idx] * dt
+        get_positions(pg)[p_idx] += gm.grid_velocities[p_idx] * dt
     end
     
     if managed

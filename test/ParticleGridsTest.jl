@@ -17,10 +17,10 @@ exponentialWeightFunction(alpha, beta) = (d2) -> exp(-alpha * sqrt(d2) / beta)
 # Fallback dummy for _find_neighbors_1d if it's not loaded in your test env
 function _find_neighbors_1d(pg, i, maxDist)
     neighbors = Int[]
-    pos_i = pg.core.positions[i][1]
-    for j in 1:pg.meta.N
+    pos_i = pg.core.core.positions[i][1]
+    for j in 1:pg.meta.meta.N
         if i != j
-            dist = abs(pg.core.positions[j][1] - pos_i)
+            dist = abs(pg.core.core.positions[j][1] - pos_i)
             # Simple periodic wrap for mock
             if pg.meta.bc == :periodic
                 L = pg.meta.maxs[1] - pg.meta.mins[1]
@@ -48,16 +48,16 @@ end
         pg1 = createParticleGrid(Val(1), 0.0, 1.0, 10, :periodic, 1.5; M=2)
         
         # Test Property Forwarding
-        @test pg1.N == 10
-        @test length(pg1.positions) == 10
-        @test pg1.positions[1] isa Float64
+        @test pg1.meta.N == 10
+        @test length(pg1.core.positions) == 10
+        @test pg1.core.positions[1] isa Float64
         
         # Test matrix allocations
         @test size(pg1.rhos) == (10, 2)
-        @test size(pg1.core.neighbor_data) == (0, 2) # Initially empty
+        @test size(pg1.neighbor.data) == (0, 2) # Initially empty
         
         # Test Boundaries
-        @test sum(pg1.is_boundary) == 0 # Periodic means no boundary particles
+        @test sum(pg1.core.is_boundary) == 0 # Periodic means no boundary particles
     end
 
     @testset "1D Functors: Neighbors, Sorting, and Timestep" begin
@@ -65,15 +65,15 @@ end
         
         # 1. Test Neighbor Update
         updateNeighbors!(pg1)
-        @test pg1.max_nb > 0
-        @test size(pg1.core.neighbor_data, 2) == 2 # Row 1=weight, Row 2=dx
-        @test length(pg1.core.neighbor_indices) > 0
+        @test pg1.meta.max_nb > 0
+        @test size(pg1.neighbor.data, 2) == 2 # Row 1=weight, Row 2=dx
+        @test length(pg1.neighbor.indices) > 0
         
         # 2. Test Sorting
         # Artificially scramble positions to test the sort functor
-        pg1.positions[1] = 99.0
+        pg1.core.positions[1] = 99.0
         sort_particles!(pg1)
-        @test issorted([p[1] for p in pg1.positions])
+        @test issorted([p[1] for p in pg1.core.positions])
         
         # 3. Test Timestep Calculation
         eq = LinearAdvection((1.0,))
@@ -83,10 +83,10 @@ end
         @test dt != Inf
         
         # 4. Test Boundary Conditions (1D Outflow)
-        rho_buffer = rand(pg1.N)
+        rho_buffer = rand(pg1.meta.N)
         apply_boundary_conditions!(pg1, rho_buffer)
         # For outflow, the ghost cells should match the first/last interior cells
-        interior_start = findfirst(==(false), pg1.is_boundary)
+        interior_start = findfirst(==(false), pg1.core.is_boundary)
         @test rho_buffer[1] == rho_buffer[interior_start]
 
     end
@@ -97,19 +97,19 @@ end
         # Create a 2D fixed dirichlet grid
         pg2 = createParticleGrid(Val(2), 0.0, 1.0, 0.0, 1.0, 5, 5, :fixed_dirichlet, 1.5; M=3)
         
-        @test pg2.N > 25 # 25 interior + ghost cells
-        @test pg2.positions[1] isa SVector{2, Float64}
-        @test size(pg2.rhos) == (pg2.N, 3) # M=3 variables
+        @test pg2.meta.N > 25 # 25 interior + ghost cells
+        @test pg2.core.positions[1] isa SVector{2, Float64}
+        @test size(pg2.rhos) == (pg2.meta.N, 3) # M=3 variables
         
         # 1. Test Neighbor Update
         updateNeighbors!(pg2)
-        @test pg2.max_nb > 0
-        @test size(pg2.core.neighbor_data, 2) == 3 # Row 1=weight, Row 2=dx, Row 3=dy
+        @test pg2.meta.max_nb > 0
+        @test size(pg2.neighbor.data, 2) == 3 # Row 1=weight, Row 2=dx, Row 3=dy
         
         # 2. Test Sorting (RCM Reordering)
         # RCM should generate a valid permutation containing all indices 1:N
         sort_particles!(pg2)
-        @test sort(pg2.reorder.permutation) == collect(1:pg2.N)
+        @test sort(pg2.reorder.permutation) == collect(1:pg2.meta.N)
         
         # 3. Test Timestep Calculation
         eq2 = LinearAdvection((1.0, -1.0))
@@ -120,7 +120,7 @@ end
         # 4. Test Boundary Conditions (2D Dirichlet)
         # Assign a distinct value to the grid's persistent rhos
         fill!(pg2.rhos, 5.0) 
-        rho_buffer = zeros(pg2.N, 3)
+        rho_buffer = zeros(pg2.meta.N, 3)
         apply_boundary_conditions!(pg2, rho_buffer)
         
         # Find a boundary particle and ensure the buffer received the Dirichlet value
@@ -132,30 +132,16 @@ end
 end
 pg1 = createParticleGrid(Val(1), 0.0, 1.0, 10, :periodic, 1.5; M=2)
 pg2 = createParticleGrid(Val(2), 0.0, 1.0, 0.0, 1.0, 5, 5, :fixed_dirichlet, 1.5; M=3)
-function test_access(pg)
-    return pg.positions
-end
 
 using InteractiveUtils # Required for @code_warntype in some environments
 
-function test_grid_access(pg)
-    # Test a direct property
-    a = pg.rhos
-    # Test a forwarded property (Meta)
-    b = pg.N
-    # Test a forwarded property (Core)
-    c = pg.positions
-    # Test our special view
-    d = pg.neighbor_xdistance
-    return a, b, c, d
+@inline function getNBSlice(pg::ParticleGrid, p_idx::Int)
+    num_nb = pg.neighbor.amount[p_idx]
+    pointer = pg.neighbor.pointers[p_idx]
+    neighbor_slice = pointer:(pointer + num_nb - 1)
+    return neighbor_slice
 end
 
-# Call it once to compile
-test_grid_access(pg1)
-
-# Now ask the compiler what it sees
-@code_warntype test_grid_access(pg1)
-
-@code_typed test_access(pg2)
+#@code_warntype getNBSlice(pg1)
 
 

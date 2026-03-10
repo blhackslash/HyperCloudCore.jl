@@ -22,12 +22,22 @@ abstract type MeshfreeTimeStepper <: TimeStepper end
 abstract type FixedGridTimeStepper <: TimeStepper end
 abstract type MeshfreeSystemTimeStepper <: MeshfreeTimeStepper end
 
-function (method::TimeStepper)(eq, particleGrid, settings, time, dt)
+function (method::TimeStepper)(eq, pg, settings, time, dt)
     error("Each `TimeStepper' must override the ()-operator.")
 end
 
 function initTS!(ts::MeshfreeTimeStepper, pg::ParticleGrid)
     updateNeighbors!(pg)
+end
+
+function initTSBuffer!(ts::MeshfreeTimeStepper, pg::ParticleGrid)
+    # `num_interactions` is the total length of the flat neighbor lists (M)
+    num_interactions = length(pg.neighbor.indices) 
+    # --- 3. Resize Per-Interaction Buffers (Size M) ---
+    _ensure_capacity!(ts.neighbor_fs, num_interactions)
+    _ensure_capacity!(ts.neighbor_dfs, num_interactions)
+    initAddTSBuffer!(ts, pg)
+    return nothing
 end
 
 function _ensure_capacity!(v::AbstractVector, n::Int)
@@ -73,7 +83,7 @@ function saveData!(
     N_active = pg.meta.N 
     
     if remove_ghosts
-        active_boundary_view = @view pg.is_boundary[1:N_active]
+        active_boundary_view = @view pg.core.is_boundary[1:N_active]
         indices = findall(.!active_boundary_view)
         
         N_save = length(indices)
@@ -83,7 +93,7 @@ function saveData!(
         us_storage[snap_idx] = Matrix{Float64}(undef, N_save, M)
         
         # Copy positions
-        _copy_positions!(xs_storage[snap_idx], view(pg.positions, indices))
+        _copy_positions!(xs_storage[snap_idx], view(get_positions(pg), indices))
         
         # Copy rhos using a direct matrix slice
         copyto!(us_storage[snap_idx], view(pg.rhos, indices, :))
@@ -95,7 +105,7 @@ function saveData!(
         us_storage[snap_idx] = Matrix{Float64}(undef, N_save, M)
         
         # Copy strictly 1:N_active 
-        _copy_positions!(xs_storage[snap_idx], view(pg.positions, 1:N_save))
+        _copy_positions!(xs_storage[snap_idx], view(get_positions(pg), 1:N_save))
         
         # Copy rhos using a direct matrix slice
         copyto!(us_storage[snap_idx], view(pg.rhos, 1:N_save, :))

@@ -36,17 +36,17 @@ abstract type ShockInitialCondition <: InitialCondition end
 # --- GENERALIZED, PARAMETRIC STRUCTS ---
 
 # --- Set Initial Conditions ---
-function setInitialConditions!(particleGrid::ParticleGrid{1}, IC::InitialCondition)
-    particleGrid.rhos .= IC.(particleGrid.positions)
+function setInitialConditions!(pg::ParticleGrid{1}, IC::InitialCondition)
+    pg.rhos .= IC.(get_positions(pg))
 end
-function setInitialConditions!(particleGrid::ParticleGrid{2}, IC::InitialCondition)
-    map!(x -> IC(x[1],x[2]), particleGrid.rhos, particleGrid.positions)
+function setInitialConditions!(pg::ParticleGrid{2}, IC::InitialCondition)
+    map!(x -> IC(x[1],x[2]), pg.rhos, get_positions(pg))
 end
 
 # --- Base Case: Standard PDE (No Source Term, No Systems) ---
 function setInitialConditions!(pg::ParticleGrid{D, M}, IC::InitialCondition) where {D, M}
     for i in 1:pg.meta.N
-        val = IC(pg.positions[i]...)
+        val = IC(get_positions(pg)[i]...)
         
         # Handles both scalar IC outputs and tuple IC outputs seamlessly
         if M == 1
@@ -68,7 +68,7 @@ function setInitialConditions!(
     
     for p_idx in 1:pg.meta.N
         # 1. Get macroscopic state at this position
-        u_val = IC(pg.positions[p_idx]...)
+        u_val = IC(get_positions(pg)[p_idx]...)
         
         # 2. Evaluate physical flux exactly once for the macro state
         flux_vals = flux(st.system_eq, u_val)
@@ -98,7 +98,7 @@ function setInitialConditions!(
     
     # 1. Initialize grid to LOCAL equilibrium (V_k = c_k * U_m)
     for p_idx in 1:N_particles
-        u_val = IC(pg.positions[p_idx]...) 
+        u_val = IC(get_positions(pg)[p_idx]...) 
         for k in 1:NK
             m_idx = st.kin2macro(k)
             pg.rhos[p_idx, k] = st.coefficients[m_idx] * u_val[m_idx]
@@ -110,7 +110,7 @@ function setInitialConditions!(
 
     # 3. Re-initialize kinetic grids to the NON-LOCAL equilibrium: V_0 = M(U_0, T_0)
     for p_idx in 1:N_particles
-        u_val = IC(pg.positions[p_idx]...)
+        u_val = IC(get_positions(pg)[p_idx]...)
         for k in 1:NK
             m_idx = st.kin2macro(k)
             T_val = st.T_potential[p_idx, m_idx]

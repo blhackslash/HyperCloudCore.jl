@@ -100,7 +100,7 @@ Finds the max neighbors from the grid and resizes all thread-local buffers.
 """
 function initGIBuffers!(g::WENO, pg::ParticleGrid)
     # 1. Find max neighbors
-    max_nb = pg.max_nb[]
+    max_nb = pg.meta.max_nb[]
     
     # 2. Check for thread-count changes
     n_threads = Threads.nthreads()
@@ -143,8 +143,8 @@ end
 #     interp = weno.interpolator
 #     nFlux = weno.numericalFlux 
 
-#     dx_all_full = pg.neighbor_xdistance
-#     w_all_full = pg.neighbor_weights 
+#     dx_all_full = get_xdistance(pg)
+#     w_all_full = get_weights(pg) 
     
 #     num_neighbors = length(nb_slice)
 #     if num_neighbors < weno.order; return 0.0; end 
@@ -173,7 +173,7 @@ end
 #     end
     
 #     # Interpolate the dF_C field
-#     resC_tuple = interp(1:num_neighbors, dx_s, w_s, df_s; scale=pg.dx) 
+#     resC_tuple = interp(1:num_neighbors, dx_s, w_s, df_s; scale=pg.meta.dx) 
 #     resC1, resC2 = resC_tuple[1], resC_tuple[2]
 
 #     # --- 5. COMPUTE STENCIL S (Stable Upwind Flux) ---
@@ -193,11 +193,11 @@ end
 #     end
     
 #     # Interpolate the dF_S field
-#     resS_tuple = interp(1:num_neighbors, dx_s, w_s, df_s; scale=pg.dx) 
+#     resS_tuple = interp(1:num_neighbors, dx_s, w_s, df_s; scale=pg.meta.dx) 
 #     resS1, resS2 = resS_tuple[1], resS_tuple[2]
     
 #     # --- 6. WENO Combination ---
-#     e = 1e-6; dx2 = pg.dx^2; dx4 = dx2^2 
+#     e = 1e-6; dx2 = pg.meta.dx^2; dx4 = dx2^2 
     
 #     # Smoothness indicator for Stencil S
 #     betaS = 0.5 / ((resS1^2 * dx2 + resS2^2 * dx4 + e)^2) 
@@ -224,7 +224,7 @@ function (weno::WENO{1})(
     pg::ParticleGrid1D,             # Grid object
     f_neighbors::AbstractVector,    # (Not used)
     df_neighbors::AbstractVector    # Pre-gathered diffs
-)::Real
+)
     
     # --- 1. Get Workspace, Interpolator, Velocity ---
     ws = weno.workspaces[mod1(Threads.threadid(),Threads.nthreads())]::WENOWorkspace1D # Get thread-local ws
@@ -232,8 +232,8 @@ function (weno::WENO{1})(
     vel = velocity(eq, f_i)
 
     # --- 2. Get Global Array References ---
-    dx_all_full = pg.neighbor_xdistance
-    w_all_full = pg.neighbor_weights 
+    dx_all_full = get_xdistance(pg)
+    w_all_full = get_weights(pg) 
     
     num_neighbors = length(nb_slice)
     if num_neighbors < weno.order; return 0.0; end
@@ -280,13 +280,13 @@ function (weno::WENO{1})(
         
         # Calculate beta (smoothness)
         e = 1e-6
-        dx2 = pg.dx^2; dx4 = dx2^2
+        dx2 = pg.meta.dx^2; dx4 = dx2^2
         betaS = 0.5 / ((resS1^2 * dx2 + resS2^2 * dx4 + e)^2)
     end
 
     # --- 7. Calculate Weights & Final Divergence ---
     e = 1e-6
-    dx2 = pg.dx^2; dx4 = dx2^2
+    dx2 = pg.meta.dx^2; dx4 = dx2^2
     betaC = 0.5 / ((resC1^2 * dx2 + resC2^2 * dx4 + e)^2)
     
     sum_beta = betaC + betaS
@@ -311,7 +311,7 @@ function (weno::WENO{2})(
     pg::ParticleGrid,               # Grid object
     f_neighbors::AbstractVector,    # (Not used)
     df_neighbors::AbstractVector    # Pre-gathered diffs (GLOBAL view)
-)::Real
+)
     
     vel = (eq::LinearAdvection{2}).vel
     
@@ -319,11 +319,11 @@ function (weno::WENO{2})(
     thread_idx = mod1(Threads.threadid(),Threads.nthreads())
     ws = weno.workspaces[thread_idx]
     interp = weno.interpolator
-    scale = min(pg.dx,pg.dy)
+    scale = min(pg.meta.dx,pg.dy)
     
-    dx_all_full = pg.neighbor_xdistance
-    dy_all_full = pg.neighbor_ydistance
-    w_all_full = pg.neighbor_weights 
+    dx_all_full = get_xdistance(pg)
+    dy_all_full = get_ydistance(pg)
+    w_all_full = get_weights(pg) 
 
     num_neighbors = length(nb_slice)
     
@@ -369,7 +369,7 @@ function (weno::WENO{2})(
         
         # Calculate beta (smoothness)
         e = 1e-12
-        dx2 = pg.dx^2; dx4 = dx2^2 
+        dx2 = pg.meta.dx^2; dx4 = dx2^2 
         betaH = 0.5 / ((resHx^2 + resHy^2)*dx2 + (resHxx^2 + resHyy^2 + resHxy^2)*dx4 + e)^2
     end
 
@@ -400,13 +400,13 @@ function (weno::WENO{2})(
         
         # Calculate beta (smoothness)
         e = 1e-12
-        dx2 = pg.dx^2; dx4 = dx2^2 
+        dx2 = pg.meta.dx^2; dx4 = dx2^2 
         betaV = 0.5 / ((resVx^2 + resVy^2)*dx2 + (resVxx^2 + resVyy^2 + resVxy^2)*dx4 + e)^2
     end
 
     # --- 5. Non-linear Weights ---
     e = 1e-12
-    dx2 = pg.dx^2; dx4 = dx2^2 
+    dx2 = pg.meta.dx^2; dx4 = dx2^2 
     betaC = 0.5 / ((resCx^2 + resCy^2)*dx2 + (resCxx^2 + resCyy^2 + resCxy^2)*dx4 + e)^2
     
     sum_beta_h = betaH + betaC
@@ -523,7 +523,7 @@ Finds the max neighbors from the grid and resizes all thread-local buffers.
 """
 function initGIBuffers!(g::DumbserWENO, pg::ParticleGrid)
     # 1. Find max neighbors
-    max_nb = pg.max_nb
+    max_nb = pg.meta.max_nb
     
     # 2. Check for thread-count changes
     n_threads = Threads.nthreads()
@@ -555,7 +555,7 @@ function (weno::DumbserWENO)(
     pg::ParticleGrid,               # Grid object
     f_neighbors::AbstractVector,    # (Not used)
     df_neighbors::AbstractVector    # Pre-gathered diffs (GLOBAL view)
-)::Real
+)
     
     # --- 1. Get thread-local workspace, interpolator, and global refs ---
     thread_idx = mod1(Threads.threadid(),Threads.nthreads())
@@ -569,9 +569,9 @@ function (weno::DumbserWENO)(
     if num_neighbors < 5; return 0.0; end 
 
     # --- 2. Get global data and workspace buffers ---
-    dx_all_full = pg.neighbor_xdistance
-    dy_all_full = pg.neighbor_ydistance
-    w_all_full = pg.neighbor_weights # <-- USE PRE-CALCULATED WEIGHTS
+    dx_all_full = get_xdistance(pg)
+    dy_all_full = get_ydistance(pg)
+    w_all_full = get_weights(pg) # <-- USE PRE-CALCULATED WEIGHTS
 
     # Get workspace buffers
     dx_s = ws.dx_stencil

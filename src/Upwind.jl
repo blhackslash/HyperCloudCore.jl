@@ -255,7 +255,7 @@ Buffer initialization hook for UpwindGradient. Finds the max neighbors
 [cite_start]from the grid and resizes all thread-local buffers. [cite: 30, 35]
 """
 function initGIBuffers!(g::UpwindGradient, pg::ParticleGrid)
-    max_nb = pg.max_nb
+    max_nb = pg.meta.max_nb
     _init_buffers_internal!(g.workspaces, max_nb)
 end
 
@@ -283,7 +283,7 @@ function (upwind::UpwindGradient{1, <:UpwindWorkspaceCA, <:Any, ClassicAlgorithm
     pg::ParticleGrid1D,             # Grid object
     f_neighbors::AbstractVector,    # Pre-gathered f_j
     df_neighbors::AbstractVector    # Pre-gathered f_j - f_i
-)::Real where {PDE <: HyperbolicPDE}
+ ) where {PDE <: HyperbolicPDE}
     
     # --- 1. Get thread-local workspace, interpolator ---
     thread_idx = mod1(Threads.threadid(),Threads.nthreads())
@@ -292,8 +292,8 @@ function (upwind::UpwindGradient{1, <:UpwindWorkspaceCA, <:Any, ClassicAlgorithm
     nFlux = upwind.numericalFlux
 
     # Get references to GLOBAL grid data arrays
-    dx_all_full = pg.neighbor_xdistance
-    w_all_full = pg.neighbor_weights # Use pre-gathered weights
+    dx_all_full = get_xdistance(pg)
+    w_all_full = get_weights(pg) # Use pre-gathered weights
 
     num_nb = length(nb_slice)
     if num_nb == 0; return 0.0; end
@@ -327,9 +327,9 @@ function (upwind::UpwindGradient{1, <:UpwindWorkspaceCA, <:Any, ClassicAlgorithm
     
     local res1
     if upwind.order == 1
-        res1 = interp(1:num_nb, ws.dxVec, ws.wVec, ws.dfVec; scale = pg.dx)
+        res1 = interp(1:num_nb, ws.dxVec, ws.wVec, ws.dfVec; scale = pg.meta.dx)
     elseif upwind.order == 2
-        res_tuple = interp(1:num_nb, ws.dxVec, ws.wVec, ws.dfVec; scale = pg.dx)
+        res_tuple = interp(1:num_nb, ws.dxVec, ws.wVec, ws.dfVec; scale = pg.meta.dx)
         res1 = res_tuple[1]
     end
     
@@ -371,7 +371,7 @@ function (upwind::UpwindGradient{2, <:UpwindWorkspaceCA, <:Any, ClassicAlgorithm
     pg::ParticleGrid2D,             # Grid object
     f_neighbors::AbstractVector,    # Pre-gathered f_j
     df_neighbors::AbstractVector    # Pre-gathered f_j - f_i (NOT USED)
-)::Real where {PDE <: ScalarHyperbolicPDE}
+) where {PDE <: ScalarHyperbolicPDE}
 
     # --- 1. Get workspace, interpolator, and refs ---
     thread_idx = mod1(Threads.threadid(),Threads.nthreads())
@@ -379,9 +379,9 @@ function (upwind::UpwindGradient{2, <:UpwindWorkspaceCA, <:Any, ClassicAlgorithm
     interp = upwind.interpolator
     nFlux = upwind.numericalFlux
 
-    dx_all_full = pg.neighbor_xdistance
-    dy_all_full = pg.neighbor_ydistance
-    w_all_full = pg.neighbor_weights
+    dx_all_full = get_xdistance(pg)
+    dy_all_full = get_ydistance(pg)
+    w_all_full = get_weights(pg)
 
     num_nb = length(nb_slice)
     # Need at least 2 points for 1st order 2D LSQ
@@ -418,7 +418,7 @@ function (upwind::UpwindGradient{2, <:UpwindWorkspaceCA, <:Any, ClassicAlgorithm
     end
 
     # --- 4. Calculate dFx/dx ---
-    scale = min(pg.dx, pg.dy)
+    scale = min(pg.meta.dx, pg.dy)
     # Call interpolator: res_Fx = (dFx/dx, dFx/dy)
     res_Fx = interp(1:num_nb, dx_buf, dy_buf, w_buf, df_buf; scale = scale)
     dFx_dx = res_Fx[1]
@@ -465,7 +465,7 @@ function (upwind::UpwindGradient{2, <:UpwindWorkspaceCA, <:Interpolator{1,1,1}, 
     pg::ParticleGrid2D,             # Grid object
     f_neighbors::AbstractVector,    # Pre-gathered f_j
     df_neighbors::AbstractVector    # Pre-gathered f_j - f_i (NOT USED)
-)::Real where {PDE <: ScalarHyperbolicPDE}
+) where {PDE <: ScalarHyperbolicPDE}
 
     # --- 1. Get workspace, interpolator, and refs ---
     thread_idx = mod1(Threads.threadid(),Threads.nthreads())
@@ -474,9 +474,9 @@ function (upwind::UpwindGradient{2, <:UpwindWorkspaceCA, <:Interpolator{1,1,1}, 
     interp = upwind.interpolator
     nFlux = upwind.numericalFlux
 
-    dx_all_full = pg.neighbor_xdistance
-    dy_all_full = pg.neighbor_ydistance
-    w_all_full = pg.neighbor_weights
+    dx_all_full = get_xdistance(pg)
+    dy_all_full = get_ydistance(pg)
+    w_all_full = get_weights(pg)
 
     num_nb = length(nb_slice)
     # Need at least 1 point for 1D LSQ
@@ -494,7 +494,7 @@ function (upwind::UpwindGradient{2, <:UpwindWorkspaceCA, <:Interpolator{1,1,1}, 
     flux_i_x, flux_i_y = flux(eq, f_i)
     
     # --- 2. Scaling factors ---
-    scale_x = pg.dx
+    scale_x = pg.meta.dx
     scale_y = pg.dy
     if scale_x < 1e-14; scale_x = 1.0; end
     if scale_y < 1e-14; scale_y = 1.0; end
@@ -558,7 +558,7 @@ function (upwind::UpwindGradient{2, <:UpwindWorkspaceTA, <:Any, TiwariAlgorithm}
     pg::ParticleGrid2D,             # Grid object
     f_neighbors::AbstractVector,    # (Not used)
     df_neighbors::AbstractVector,   # Pre-gathered diffs
-)::Real where {PDE <: ScalarHyperbolicPDE}
+) where {PDE <: ScalarHyperbolicPDE}
     
     vel = velocity(eq,f_i)
     
@@ -567,9 +567,9 @@ function (upwind::UpwindGradient{2, <:UpwindWorkspaceTA, <:Any, TiwariAlgorithm}
     ws = upwind.workspaces[thread_idx] 
     interp = upwind.interpolator
 
-    dx_all_full = pg.neighbor_xdistance
-    dy_all_full = pg.neighbor_ydistance
-    w_all_full = pg.neighbor_weights 
+    dx_all_full = get_xdistance(pg)
+    dy_all_full = get_ydistance(pg)
+    w_all_full = get_weights(pg) 
 
     num_neighbors = length(nb_slice)
     
@@ -577,7 +577,7 @@ function (upwind::UpwindGradient{2, <:UpwindWorkspaceTA, <:Any, TiwariAlgorithm}
          return 0.0 
     end
     
-    scale = min(pg.dx,pg.dy)
+    scale = min(pg.meta.dx,pg.dy)
     scale = 1.
     ensure_capacity!(ws, num_neighbors) 
     
@@ -656,7 +656,7 @@ function (upwind::UpwindGradient{2, <:UpwindWorkspacePA, <:Any, PraveenAlgorithm
     pg::ParticleGrid2D,             # Grid object
     f_neighbors::AbstractVector,    # (Not used directly by Praveen)
     df_neighbors::AbstractVector    # Pre-gathered view of (f_j - f_i)
-)::Real where {PDE <: ScalarHyperbolicPDE}
+) where {PDE <: ScalarHyperbolicPDE}
     
     vel = velocity(eq,f_i)
     
@@ -664,15 +664,15 @@ function (upwind::UpwindGradient{2, <:UpwindWorkspacePA, <:Any, PraveenAlgorithm
     thread_idx = mod1(Threads.threadid(),Threads.nthreads())
     ws = upwind.workspaces[thread_idx]
 
-    dx_all_full = pg.neighbor_xdistance
-    dy_all_full = pg.neighbor_ydistance
-    w_all_full = pg.neighbor_weights
+    dx_all_full = get_xdistance(pg)
+    dy_all_full = get_ydistance(pg)
+    w_all_full = get_weights(pg)
 
     num_neighbors = length(nb_slice)
     # Praveen needs at least 3 points for a non-singular 2D gradient
     if num_neighbors < 3; return 0.0; end 
     
-    scale = min(pg.dx, pg.dy)
+    scale = min(pg.meta.dx, pg.dy)
     if scale < 1e-14; return 0.0; end # Prevent division by zero
     invL = 1.0 / scale
     

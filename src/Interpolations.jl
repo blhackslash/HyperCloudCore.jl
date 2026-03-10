@@ -36,7 +36,7 @@ function initGIBuffers!(::NoFallbackGrad, kwargs...)
     return
 end
 
-function initTimeStep(g::GradientInterpolator, particleGrid::ParticleGrid) end  # Function called at the start of a time step (order RK-stage)
+function initTimeStep(g::GradientInterpolator, pg::ParticleGrid) end  # Function called at the start of a time step (order RK-stage)
 """
 Ensures a vector `v` has at least capacity `n`.
 Resizes if `length(v) < n`.
@@ -71,9 +71,9 @@ end
 #     end
 # end
 
-# function (weno::DumbserWENO)(particleGrid::ParticleGrid2D, particleIndex::Integer, fVec::AbstractVector{<:Real}, eq::LinearAdvection{2}, settings::SimSetting; setCurvature::Bool=true)::Real
-#     @assert settings.interpRange >= sqrt(5.0^2 + 3.0^2)*particleGrid.dx "Interpolation must be sufficiently larger, otherwise one cannot guarantee sufficient neighbours are found." 
-#     particle = particleGrid.grid[particleIndex]
+# function (weno::DumbserWENO)(pg::ParticleGrid2D, particleIndex::Integer, fVec::AbstractVector{<:Real}, eq::LinearAdvection{2}, settings::SimSetting; setCurvature::Bool=true)::Real
+#     @assert settings.interpRange >= sqrt(5.0^2 + 3.0^2)*pg.meta.dx "Interpolation must be sufficiently larger, otherwise one cannot guarantee sufficient neighbours are found." 
+#     particle = pg.grid[particleIndex]
 #     Npts = length(particle.neighbourIndices)
 
 #     # Divide points in stencils
@@ -82,7 +82,7 @@ end
 
 #     for i in eachindex(particle.neighbourIndices)
 #         nbIndex = particle.neighbourIndices[i]
-#         deltaX, deltaY = getDistance(particleGrid, particleIndex, nbIndex)
+#         deltaX, deltaY = getDistance(pg, particleIndex, nbIndex)
 #         particle.dxVec[i] = deltaX/settings.interpRange
 #         particle.dyVec[i] = deltaY/settings.interpRange
 #         particle.dfVec[i] = fVec[nbIndex] - fVec[particleIndex]

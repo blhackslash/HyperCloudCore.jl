@@ -40,7 +40,7 @@ using the pre-calculated flat neighbor arrays.
 - `nb_slice::UnitRange{Int}`: The slice into the global flat arrays
   corresponding to the particle's neighbors.
 - `dx_global::AbstractVector`: The global flat array of signed
-  x-distances (e.g., `pg.neighbor_xdistance`).
+  x-distances (e.g., `get_xdistance(pg)`).
 - `f_neighbors_global::AbstractVector`: The global flat array of
   pre-gathered neighbor values (e.g., `ts.neighbor_fs`).
 
@@ -99,7 +99,7 @@ function _limit_slopes(
     f_neighbors::AbstractVector,
     pg::ParticleGrid1D # Dispatches on 1D grid
 )
-    dx = pg.neighbor_xdistance
+    dx = get_xdistance(pg)
 
     # Find neighbors (using the existing 1D helper)
     val_L, dist_L, val_R, dist_R = find_closest_lr_neighbors_1D(nb_slice, dx, f_neighbors) # Needs fix
@@ -150,7 +150,7 @@ function _limit_slopes(
     f_neighbors::AbstractVector,
     pg::ParticleGrid1D # Dispatches on 1D grid
 )
-    dx = pg.neighbor_xdistance
+    dx = get_xdistance(pg)
     if isempty(nb_slice) || abs(slope_x) < 1e-12
         return 0.0
     end
@@ -195,8 +195,8 @@ function _limit_slopes(
     f_neighbors::AbstractVector, # View of neighbor f-values
     pg::ParticleGrid2D
 )
-    dx = pg.neighbor_xdistance
-    dy = pg.neighbor_ydistance
+    dx = get_xdistance(pg)
+    dy = get_ydistance(pg)
     slope_x = slopes[1]
     slope_y = slopes[2]
 

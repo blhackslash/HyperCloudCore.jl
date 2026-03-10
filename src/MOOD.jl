@@ -26,18 +26,18 @@ mutable struct MOODu1 <: MOODCriterion
     end
 end
 
-# MOODu1 functor signature now includes particleGrid
+# MOODu1 functor signature now includes pg
 function (mood::MOODu1)(
     g,        # The primary gradient interpolator
     i::Int,                         # Current particle index
     rho_i::Float64,                 # Value of rho at particle i
     nb_slice::UnitRange{Int},
     newRho::Float64,                # Proposed new value
-    particleGrid::ParticleGrid,     # Grid to access neighbor info
+    pg::ParticleGrid,     # Grid to access neighbor info
     neighbor_fs::AbstractVector{Float64} # Full neighbor rho vector
 )::Bool
     
-    num_nb = particleGrid.num_neighbors[i]
+    num_nb = pg.neighbor.amount[i]
     if num_nb == 0; return false; end # If no neighbors, DMP cannot be violated
     
     # Calculate local extrema using the helper with direct indexing
@@ -84,11 +84,11 @@ function (mood::MOODu2)(
     rho_i::Float64,                 # Value of rho at particle i
     nb_slice::UnitRange{Int},
     newRho::Float64,                # Proposed new value
-    particleGrid::ParticleGrid1D,  # Grid to access neighbor info (1D)
+    pg::ParticleGrid1D,  # Grid to access neighbor info (1D)
     neighbor_fs::AbstractVector{Float64} # Full neighbor rho vector
 )::Bool
     
-    num_nb = particleGrid.num_neighbors[i]
+    num_nb = pg.neighbor.amount[i]
     if num_nb == 0; return false; end 
 
     minU, maxU = findLocalExtrema(rho_i, nb_slice, neighbor_fs)
@@ -107,7 +107,7 @@ function (mood::MOODu2)(
         curve_i   = curve_vec[i]
         
         mini, maxi, minAbs, maxAbs = findLocalExtremaAbs( # Dispatches to 1D version
-            curve_i, nb_slice, particleGrid.neighbor_indices, curve_vec
+            curve_i, nb_slice, pg.neighbor.indices, curve_vec
         )
         
         ratio = (maxAbs < 1e-12) ? 1.0 : minAbs / maxAbs 
@@ -127,11 +127,11 @@ function (mood::MOODu2)(
     rho_i::Float64,                 # Value of rho at particle i
     nb_slice::UnitRange{Int},
     newRho::Float64,                # Proposed new value
-    particleGrid::ParticleGrid2D,  # Grid to access neighbor info (2D)
+    pg::ParticleGrid2D,  # Grid to access neighbor info (2D)
     neighbor_fs::AbstractVector{Float64} # Full neighbor rho vector
 )::Bool
     
-    num_nb = particleGrid.num_neighbors[i]
+    num_nb = pg.neighbor.amount[i]
     if num_nb == 0; return false; end
 
     minU, maxU = findLocalExtrema(rho_i, nb_slice, neighbor_fs)
@@ -152,7 +152,7 @@ function (mood::MOODu2)(
         curve_yy_i   = curve_yy_vec[i]
         
         extrema_vals = findLocalExtremaAbs( # Dispatches to 2D version
-            curve_xx_i, curve_yy_i, nb_slice, particleGrid.neighbor_indices, 
+            curve_xx_i, curve_yy_i, nb_slice, pg.neighbor.indices, 
             curve_xx_vec, curve_yy_vec
         )
         mini1, maxi1, minAbs1, maxAbs1 = extrema_vals[1:4]
