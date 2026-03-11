@@ -9,43 +9,69 @@ abstract type NumericalFluxFunction end;
 # ---------- RusanovFlux (LLF)
 struct RusanovFlux <: NumericalFluxFunction end
 
-function (rusanov::RusanovFlux)(leftState::Real, rightState::Real, eq::ScalarHyperbolicPDE{D})::Real where {D}
+# 1D or generic fallback
+@inline function (rusanov::RusanovFlux)(leftState::Float64, rightState::Float64, eq::ScalarHyperbolicPDE)
     leftFlux = flux(eq, leftState)
     rightFlux = flux(eq, rightState)
     s = max(abs(velocity(eq, leftState)), abs(velocity(eq, rightState)))
-    return 0.5*(leftFlux + rightFlux - s*(rightState - leftState))
+    return 0.5 * (leftFlux + rightFlux - s * (rightState - leftState))
 end
 
-function (rusanov::RusanovFlux)(leftState::Real, rightState::Real, eq::ScalarHyperbolicPDE{D}, ind::Int)::Real where {D} # In case of 2D, select correct velocity (1 for x, 2 for y)
-    leftFlux = flux(eq, leftState)
-    rightFlux = flux(eq, rightState) 
-    a_l = velocity(eq, leftState)
-    a_r = velocity(eq, rightState)
-    s = max(abs(a_l[ind]), abs(a_r[ind]))
-    return 0.5*(leftFlux[ind] + rightFlux[ind] - s*(rightState - leftState))
+# 2D Optimized simultaneous evaluation
+@inline function (rusanov::RusanovFlux)(fmx::Float64, fpx::Float64, fmy::Float64, fpy::Float64, eq::ScalarHyperbolicPDE{2})
+    # Evaluate and extract ONLY the X components
+    fx_l = flux(eq, fmx)[1]
+    fx_r = flux(eq, fpx)[1] 
+    vx_l = velocity(eq, fmx)[1]
+    vx_r = velocity(eq, fpx)[1]
+    sx = max(abs(vx_l), abs(vx_r))
+    num_fx = 0.5 * (fx_l + fx_r - sx * (fpx - fmx))
+    
+    # Evaluate and extract ONLY the Y components
+    fy_l = flux(eq, fmy)[2]
+    fy_r = flux(eq, fpy)[2]
+    vy_l = velocity(eq, fmy)[2]
+    vy_r = velocity(eq, fpy)[2]
+    sy = max(abs(vy_l), abs(vy_r))
+    num_fy = 0.5 * (fy_l + fy_r - sy * (fpy - fmy))
+    
+    return num_fx, num_fy
 end
 
-# ---------- UpwindFlux
+# ---------- Upwind Flux
 struct UpwindFlux <: NumericalFluxFunction end
 
-function (upwind::UpwindFlux)(leftState::Real, rightState::Real, eq::ScalarHyperbolicPDE{D}) where {D} 
+# 1D or generic fallback
+@inline function (upwind::UpwindFlux)(leftState::Float64, rightState::Float64, eq::ScalarHyperbolicPDE) 
     leftFlux = flux(eq, leftState)
     rightFlux = flux(eq, rightState)
-    a = leftState == rightState ?  velocity(eq, leftState) : (leftFlux - rightFlux)/(leftState - rightState)
-    return 0.5*(leftFlux + rightFlux - abs(a)*(rightState - leftState))
+    a = leftState == rightState ? velocity(eq, leftState) : (leftFlux - rightFlux) / (leftState - rightState)
+    return 0.5 * (leftFlux + rightFlux - abs(a) * (rightState - leftState))
 end
 
-function (upwind::UpwindFlux)(leftState::Real, rightState::Real, eq::ScalarHyperbolicPDE{D}, ind::Int) where {D} 
-    leftFlux = flux(eq, leftState)
-    rightFlux = flux(eq, rightState)
-    a = leftState == rightState ?  velocity(eq, leftState)[ind] : (leftFlux[ind] - rightFlux[ind])/(leftState - rightState)
-    return 0.5*(leftFlux[ind] + rightFlux[ind] - abs(a)*(rightState - leftState))
+# 2D Optimized simultaneous evaluation
+@inline function (upwind::UpwindFlux)(fmx::Float64, fpx::Float64, fmy::Float64, fpy::Float64, eq::ScalarHyperbolicPDE{2}) 
+    # X-direction
+    fx_l = flux(eq, fmx)[1]
+    fx_r = flux(eq, fpx)[1]
+    vx_l = velocity(eq, fmx)[1]
+    ax = fmx == fpx ? vx_l : (fx_l - fx_r) / (fmx - fpx)
+    num_fx = 0.5 * (fx_l + fx_r - abs(ax) * (fpx - fmx))
+    
+    # Y-direction
+    fy_l = flux(eq, fmy)[2]
+    fy_r = flux(eq, fpy)[2]
+    vy_l = velocity(eq, fmy)[2]
+    ay = fmy == fpy ? vy_l : (fy_l - fy_r) / (fmy - fpy)
+    num_fy = 0.5 * (fy_l + fy_r - abs(ay) * (fpy - fmy))
+    
+    return num_fx, num_fy
 end
 
 #--------------- RoeDiffusiveFlux (Lax Wendroff without λ scaling)
 struct RoeDiffusiveFlux <: NumericalFluxFunction end
 
-function (lw::RoeDiffusiveFlux)(leftState::Real, rightState::Real, eq::ScalarHyperbolicPDE{D})::Real where {D}
+function (lw::RoeDiffusiveFlux)(leftState::Real, rightState::Real, eq::ScalarHyperbolicPDE{D}) where {D}
     F_L = flux(eq, leftState)
     F_R = flux(eq, rightState)
     

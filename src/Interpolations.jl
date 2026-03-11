@@ -49,87 +49,35 @@ function _ensure_capacity!(v::AbstractVector, n::Int)
     return nothing
 end
 
-# # ------------------------------- Dumbser WENO -------------------------------
+"""
+    sortFlux(flux_ij::Real, flux_ji::Real, deltaX::Real)::Tuple{<:Real, <:Real}
 
-# function getStencil(deltaX::Real, deltaY::Real, s::Int64)
-#     stencil = convert(Int64, div(s*(atan(deltaY, deltaX) + pi)*4/pi, s))
-#     stencil = stencil == 8 ? 0 : stencil  # Negative x-axis should be contained in stencil 0
-#     return stencil
-# end
+Given a reconstruction of the state at the midpoint from the cell center flux1, and a state reconstruction from the neighbouring point, return the left and right state based on the relative orientation of the points.
+"""
+function sortFlux(flux_ij::Float64, flux_ji::Float64, deltaX::Float64)::Tuple{Float64, Float64}
+    if deltaX > 0.0
+        return (flux_ij, flux_ji)  # left state, right state
+    else
+        return (flux_ji, flux_ij)
+    end
+end
 
-# struct DumbserWENO <: GradientInterpolator
-#     order::Int64
-#     res::AbstractVector{Float64}
-#     weightFunction::MLSWeightFunction
-#     s::Integer  # amount of one-sided stencils
-#     gradients::Matrix{Float64}
-#     weights::AbstractVector{Float64}
+"""
+    sortFlux(flux_ij::Real, flux_ji::Real, deltaX::Real)::Tuple{<:Real, <:Real}
 
-#     function DumbserWENO(order::Int64 = 2; weightFunction::MLSWeightFunction = exponentialWeightFunction())
-#         @assert order == 2 "Order must be to two, since the WENO weights require a second derivative."
-#         new(order, AbstractVector{Float64}(undef, 5), weightFunction, 8, Matrix{Float64}(undef, (5, 9)), AbstractVector{Float64}(undef, 9))
-#     end
-# end
-
-# function (weno::DumbserWENO)(pg::ParticleGrid2D, particleIndex::Integer, fVec::AbstractVector{<:Real}, eq::LinearAdvection{2}, settings::SimSetting; setCurvature::Bool=true)::Real
-#     @assert settings.interpRange >= sqrt(5.0^2 + 3.0^2)*pg.meta.dx "Interpolation must be sufficiently larger, otherwise one cannot guarantee sufficient neighbours are found." 
-#     particle = pg.grid[particleIndex]
-#     Npts = length(particle.neighbourIndices)
-
-#     # Divide points in stencils
-#     windowMatrix = zeros(Bool, (Npts, weno.s+1))
-#     windowMatrix[:, 1] .= true  # First column is the central stencil
-
-#     for i in eachindex(particle.neighbourIndices)
-#         nbIndex = particle.neighbourIndices[i]
-#         deltaX, deltaY = getDistance(pg, particleIndex, nbIndex)
-#         particle.dxVec[i] = deltaX/settings.interpRange
-#         particle.dyVec[i] = deltaY/settings.interpRange
-#         particle.dfVec[i] = fVec[nbIndex] - fVec[particleIndex]
-#         stencil = getStencil(deltaX, deltaY, weno.s)  # in [0, 7]
-#         windowMatrix[i, stencil+2] = true
-#     end
-#     for stencil in 1:weno.s+1
-#         particle.wVec .= weno.weightFunction(particle.dxVec, particle.dyVec; param=settings.interpAlpha, normalisation=1.0)
-        
-#         # There should be at least 5 points in each stencil!
-#         @assert count(windowMatrix[:, stencil]) >= 5 "($(particle.pos[1]), $(particle.pos[2])), $(count(windowMatrix[:, stencil])), $(stencil)"
-#         gradInterpolation!(particle.dxVec[windowMatrix[:, stencil]], particle.dyVec[windowMatrix[:, stencil]], particle.wVec[windowMatrix[:, stencil]], particle.dfVec[windowMatrix[:, stencil]], weno.res; order=weno.order)
-
-#         # Rescale results
-#         weno.gradients[1, stencil] = weno.res[1]/settings.interpRange
-#         weno.gradients[2, stencil] = weno.res[2]/settings.interpRange  
-#         weno.gradients[3, stencil] = weno.res[3]/(settings.interpRange^2)
-#         weno.gradients[4, stencil] = weno.res[4]/(settings.interpRange^2)
-#         weno.gradients[5, stencil] = weno.res[5]/(settings.interpRange^2)
-
-#         # Compute weights
-#         r = 4
-#         eps = 1e-14
-#         lambda = (stencil == 1) ? 10^5 : 1.0
-#         weno.weights[stencil] = lambda/((eps + sum((x^2 for x in weno.gradients[:, stencil])))^r)
-#     end
-
-#     # Normalise weights
-#     weno.weights .= weno.weights ./ sum(weno.weights)
-    
-#     if setCurvature 
-#         particle.curvature[1] = 0.0
-#         particle.curvature[2] = 0.0
-#         for i in eachindex(weno.weights)  # Write out inner product
-#             particle.curvature[1] += weno.weights[i]*weno.gradients[3, i]
-#             particle.curvature[2] += weno.weights[i]*weno.gradients[4, i]
-#         end
-#     end
-
-#     # Compute divergence
-#     res = 0.0
-    
-#     for i in eachindex(weno.weights)  # Write out inner product
-#         res += weno.weights[i]*(weno.gradients[1, i]*eq.vel[1] + eq.vel[2]*weno.gradients[2, i])
-#     end
-#     return res
-# end
+Given a reconstruction of the state at the midpoint from the cell center flux1, and a state reconstruction from the neighbouring point, return the left and right state in x and y direction.
+"""
+function sortFlux(flux_ij::Float64, flux_ji::Float64, deltaX::Float64, deltaY::Float64)::Tuple{Float64, Float64, Float64, Float64}
+    if deltaX > 0.0 && deltaY > 0.0
+        return (flux_ij, flux_ji, flux_ij, flux_ji)
+    elseif deltaX > 0.0 && deltaY < 0.0 
+        return (flux_ij, flux_ji, flux_ji, flux_ij)
+    elseif deltaX < 0.0 && deltaY > 0.0
+        return (flux_ji, flux_ij, flux_ij, flux_ji)
+    else
+        return (flux_ji, flux_ij, flux_ji, flux_ij)
+    end
+end
 
 include("./CentralGradient.jl")
 include("./MUSCL.jl")

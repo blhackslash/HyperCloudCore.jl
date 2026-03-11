@@ -4,7 +4,6 @@ using LinearAlgebra
 using ProgressMeter
 using StaticArrays
 using Base.Threads
-using InteractiveUtils
 using ..CoreUtils
 using ..ParticleGrids
 using ..SimSettings

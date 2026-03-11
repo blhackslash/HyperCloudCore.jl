@@ -1,14 +1,15 @@
 using Meshfree4ScalarEq
 using IPlotPDESols
 using InteractiveUtils
+using Cthulhu
 
 # 2D simulation using your `runScalar2DSim` function.
 function main()
     params = ParamDict(
         # --- Shared Parameters ---
         "tmax" => 5.0,
-        "Nx" => 400,
-        "Ny" => 400,
+        "Nx" => 100,
+        "Ny" => 100,
         "xmin" => -5.0,
         "xmax" => 5.0,
         "ymin" => -5.0,
@@ -26,17 +27,17 @@ function main()
         "PDE" => "linear",
         "PDE_params" => (0., 2.), # 2D velocity vector (vx, vy)
         "bc" => :periodic,
-        "sim_function" => "runScalarSimulation",
+        "sim_function" => "runSimulation",
         "weight_function" => "exponential",
         #"limiter" => "VK",
 
         # --- Method-Specific Parameters for "RK4-MUSCL2-2D" ---
-        "timestepper" => "RalstonRK2",
+        "timestepper" => "ARS222",
         "main_gradient" => "MUSCL",
         "order" => 2,
         "upwind_alg_2d" => "Classic",
         "main_flux" => "Rusanov",
-        #"relax_velocities" => [ (2.0, 0.), (-2., 0.), (0., -2.), (0., 2.) ], "relax_epsilon" => 1e-6, "save_relax" => false,
+        "relax_velocities" => [[ (2.0, 0.), (-2., 0.), (0., -2.), (0., 2.) ]], "relax_epsilon" => 1e-6, "save_relax" => false,
         #"MOOD" => "U2", "delta_relax" => 0., "fallback_gradient" => "Upwind", "fallback_flux" => "Rusanov",
         #"mood" => "none", # No MOOD for this run
     )
@@ -44,12 +45,12 @@ function main()
     # params = ParamDict(
     #     # --- Shared Parameters ---
     #     "tmax" => 10.,
-    #     "N" => 50,
+    #     "N" => 1000,
     #     "xmin" => -5.0,
     #     "xmax" => 5.0,
     #     "CFL" => .1,
     #     #"dt" => .001,
-    #     "snapshots" => 200,
+    #     "snapshots" => 20,
     #     "interp_alpha" => 1.0,
     #     "interp_range" => 3.5,
     #     "init_func" => "riemann", # Using the unified struct
@@ -62,7 +63,7 @@ function main()
     #     "weight_function" => "exponential",
     #     "PDE_params" => 1., # 2D velocity vector (vx, vy)
     #     "bc" => :outflow,
-    #     "sim_function" => "runScalarSimulation",
+    #     "sim_function" => "runSimulation",
 
     #     # --- Method-Specific Parameters for "RK4-MUSCL2-2D" ---
     #     "timestepper" => "RalstonRK2",
@@ -86,13 +87,13 @@ function main()
     # 1. Configure the profiler to sample ALL threads
     #    We also give it a larger buffer (n) and a reasonable delay
     sim_data = nothing
-    #sim_data = runScalarSimulation(params);
-    @profview runScalarSimulation(params)
+    #sim_data = runSimulation(params);
+    @profview runSimulation(params)
     #@code_warntype runScalarSimulation(params)
     # 3. `sim_data` will now hold the results (a SimData2D object), which you can inspect.
     #
     test_config = SimulationConfig(
-        runScalarSimulation,
+        runSimulation,
         params,
         MethodDict(
             "Test(MOOD)" => ParamDict("MOOD" => "U2", "delta_relax" => 0., "fallback_gradient" => "Upwind", "fallback_flux" => "Rusanov",),

@@ -306,8 +306,8 @@ function reconstruct_interface_states(::MUSCLORDER2, ws::MUSCLWorkspace2D2O, f_i
     # Taylor expansion
     h = 0.5 * deltaX
     k = 0.5 * deltaY
-    fij = f_i + h*slope_ix + k*slope_iy + 0.5*(h^2*curve_xx_i + 2*h*k*curve_xy_i + k^2*curve_yy_i)
-    fji = f_j - h*slope_jx - k*slope_jy + 0.5*(h^2*curve_xx_j + 2*h*k*curve_xy_j + k^2*curve_yy_j)
+    fij = f_i + h*slope_ix + k*slope_iy + 0.5*(h*h*curve_xx_i + 2. *h*k*curve_xy_i + k*k*curve_yy_i)
+    fji = f_j - h*slope_jx - k*slope_jy + 0.5*(h*h*curve_xx_j + 2. *h*k*curve_xy_j + k*k*curve_yy_j)
     
     return fij, fji
 end

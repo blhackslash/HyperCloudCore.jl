@@ -678,15 +678,14 @@ function (muscl::MUSCL{1, ORDER})(
     # The factor of 2 is part of the 1D scheme derivation
     return 2 * div
 end
-
 function (muscl::MUSCL{2, ORDER})(
     eq::ScalarHyperbolicPDE,
     i::Int,                         # Current particle index
-    f_i::Real,
+    f_i::Float64,
     neighbor_slice::UnitRange{Int},                      # Value of f at particle i
     pg::ParticleGrid,
-    f_neighbors::AbstractVector,    # View of neighbor f-values
-    df_neighbors::AbstractVector,   # View of neighbor df-values
+    f_neighbors::AbstractVector{Float64},    # View of neighbor f-values
+    df_neighbors::AbstractVector{Float64},   # View of neighbor df-values
 ) where {ORDER<:MUSCLORDER}
     
     div = 0.0
@@ -706,22 +705,22 @@ function (muscl::MUSCL{2, ORDER})(
         nbIndex = nb_indices[k_global]
         deltaX = dx[k_global]
         deltaY = dy[k_global]
-        f_j = f_neighbors[k_global]
+        @inbounds f_j = f_neighbors[k_global]
         
         # Get pre-calculated coefficients
         alfaij = ws.alfaijs[k_global]
   
         betaij = ws.betaijs[k_global]
         
-        # This call uses pre-calculated slopes from the workspace
+# This call uses pre-calculated slopes from the workspace
         fij, fji = reconstruct_interface_states(muscl.order, ws, f_i, f_j, i, nbIndex, deltaX, deltaY)
-
         fmx, fpx, fmy, fpy = sortFlux(fij, fji, deltaX, deltaY)
         
-        div += alfaij * (nFlux(fmx, fpx, eq, 1) - fx) + 
-
-               betaij * (nFlux(fmy, fpy, eq, 2) - fy)
+        # New 2D-Simultaneous Flux Calculation
+        num_fx, num_fy = nFlux(fmx, fpx, fmy, fpy, eq)
+        
+        div += alfaij * (num_fx - fx) + betaij * (num_fy - fy)
     end
     
-    return 2 * div
+    return 2. * div
 end

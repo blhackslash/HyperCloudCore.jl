@@ -87,29 +87,32 @@ end
 
 # --- Optimized Neighbor Extraction ---
 # Extracts the neighbor function values for ALL components simultaneously 
-# using the single unified ParticleGrid structure.
+# using Column-Major cache-friendly loops.
 @inline function initFs!(
     ts::GeneralIMEXTimeStepper, 
-    p_idx::Int, 
+    nb_slice::UnitRange{Int}, 
     f_i_vec::AbstractVector{Float64}, 
     Y_sys::AbstractMatrix{Float64}, 
     pg::ParticleGrid
-)
-    nb_slice = pg.neighbor.ranges[p_idx]
+)   
+    neighbors = get_neighbors(pg)
     
-    # Cache friendly: k iterates sequentially through the neighbor flat arrays
-    @inbounds for k in nb_slice
-        j = pg.neighbor.indices[k]
+    # Outer loop over COLUMNS
+    @inbounds for c in axes(Y_sys, 2)
         
-        # Extract all species/components for this neighbor j
-        for c in 1:size(Y_sys, 2)
+        # Hoist the center particle's value out of the inner loop
+        f_ic = f_i_vec[c] 
+        
+        # Inner loop over ROWS (Sequential memory access!)
+        for k in nb_slice
+            j = neighbors[k] # This read is random, which is unavoidable
+            
             f_j = Y_sys[j, c]
             ts.all_neighbor_fs[k, c]  = f_j
-            ts.all_neighbor_dfs[k, c] = f_j - f_i_vec[c]
+            ts.all_neighbor_dfs[k, c] = f_j - f_ic
         end
     end
 end
-
 # --- REFACTORED Functor for GeneralIMEXTimeStepper ---
 function (imex_ts::GeneralIMEXTimeStepper{M_comp, G1, G2, M_crit, IS, ST_OBJ, BT, GM})(
         scalar_equations::DiagonalHyperbolicSystem{M_comp, D},
@@ -231,22 +234,21 @@ function (imex_ts::GeneralIMEXTimeStepper{M_comp, G1, G2, M_crit, IS, ST_OBJ, BT
         Threads.@threads :static for p_idx in 1:N_particles
             # Fuses extraction of all M_comp f_j values at once
             f_i_vec = @view current_Y_i_sys[p_idx, :]
-            initFs!(imex_ts, p_idx, f_i_vec, current_Y_i_sys, pg)
-            
             nb_slice = pg.neighbor.ranges[p_idx]
+
+            initFs!(imex_ts, nb_slice, f_i_vec, current_Y_i_sys, pg)
             
             for k in 1:M_comp
                 fi = current_Y_i_sys[p_idx, k]
-                neighbor_fs_k  = @view imex_ts.all_neighbor_fs[:, k]
-                neighbor_dfs_k = @view imex_ts.all_neighbor_dfs[:, k]
+                neighbor_fs_k  = @inbounds @view imex_ts.all_neighbor_fs[:, k]
+                neighbor_dfs_k = @inbounds @view imex_ts.all_neighbor_dfs[:, k]
                 
-                initGI!(imex_ts.gradientInterpolator[k], p_idx, fi, pg, neighbor_fs_k, neighbor_dfs_k)
-                initGI!(imex_ts.fallbackInterpolator[k], p_idx, fi, pg, neighbor_fs_k, neighbor_dfs_k)
+                initGI!(imex_ts.gradientInterpolator[k], p_idx, fi, nb_slice, pg, neighbor_fs_k, neighbor_dfs_k)
+                initGI!(imex_ts.fallbackInterpolator[k], p_idx, fi, nb_slice, pg, neighbor_fs_k, neighbor_dfs_k)
                 
                 if !pg.core.is_boundary[p_idx]
                     eq = scalar_equations[k] 
                     div_high = imex_ts.gradientInterpolator[k](eq, p_idx, fi, nb_slice, pg, neighbor_fs_k, neighbor_dfs_k) 
-                    
                     rho_candidate = fi - dt * div_high
                     
                     # Apply MOOD Criterion per component

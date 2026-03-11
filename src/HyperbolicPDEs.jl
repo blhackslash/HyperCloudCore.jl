@@ -22,7 +22,7 @@ abstract type ScalarHyperbolicPDE{D} <: HyperbolicPDE{D, 1} end
 abstract type HyperbolicPDESystem{D, N} <: HyperbolicPDE{D, N} end
 abstract type NCHyperbolicPDESystem{D, N} <: HyperbolicPDESystem{D, N} end
 
-const DiagonalHyperbolicSystem{N, D} = NTuple{N, <:ScalarHyperbolicPDE{D}}
+const DiagonalHyperbolicSystem{N, D} = NTuple{N, <: ScalarHyperbolicPDE{D}}
 
 abstract type AbstractPath{N} end
 
@@ -52,6 +52,8 @@ LinearAdvection(vel::Real) = LinearAdvection{1}((Float64(vel),))
 LinearAdvection(vel::Tuple{<:Real, <:Real}) = LinearAdvection{2}(Float64.(vel))
 
 # --- REFINEMENT 1: Unify `velocity` and `flux` for LinearAdvection ---
+
+@inline flux(eq, u::Tuple{Float64}) = flux(eq,u[1])
 
 # For 1D, return the scalar velocity, not a 1-tuple
 @inline velocity(eq::LinearAdvection{1}, u::Float64) = eq.vel[1]

@@ -16,7 +16,7 @@ using ..SimSettings
 using ..HyperbolicPDEs
 using ..MLSWeightFunctions
 
-export get_positions, get_weights, get_xdistance, get_ydistance
+export get_positions, get_weights, get_xdistance, get_ydistance, get_neighbors
 export ParticleGrid, GridMetadata, SharedBuffers, NeighborData, ReorderData, ManagementData, ParticleGridCore, createParticleGrid
 
 # ---------------------------------------------------------
@@ -116,6 +116,7 @@ end
 @inline get_weights(pg::ParticleGrid)   = @inbounds view(pg.neighbor.data, :, 1)
 @inline get_xdistance(pg::ParticleGrid) = @inbounds view(pg.neighbor.data, :, 2)
 @inline get_ydistance(pg::ParticleGrid) = @inbounds view(pg.neighbor.data, :, 3)
+@inline get_neighbors(pg::ParticleGrid) = pg.neighbor.indices
 
 # --- Aliases for convenience ---
 const ParticleGrid1D{M, S, WF} = ParticleGrid{1, M, S, WF}

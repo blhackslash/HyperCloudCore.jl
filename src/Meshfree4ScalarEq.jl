@@ -1,6 +1,6 @@
 module Meshfree4ScalarEq
 
-export runScalarSimulation, runSystemSimulation, GAS_GAMMA_EULER, DEBUG_TARGET_PARTICLE, DEBUG_TARGET_STEP
+export runSimulation, GAS_GAMMA_EULER, DEBUG_TARGET_PARTICLE, DEBUG_TARGET_STEP
 
 include("CoreUtils.jl")
 using .CoreUtils
@@ -54,7 +54,6 @@ using .TimeIntegration
 
 using IPlotPDESols
 
-include("../SimulationFunctions/runScalarSimulation.jl")
-include("../SimulationFunctions/runSystemSimulation.jl")
+include("../SimulationFunctions/runSimulation.jl")
 
 end  # module 

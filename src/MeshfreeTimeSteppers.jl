@@ -20,8 +20,8 @@ function initFs!(ts::MeshfreeTimeStepper, i, f_i, nb_slice, fVec, pg::ParticleGr
     # Get local aliases to the buffers for cleaner code in the loop
     neighbor_fs  = ts.neighbor_fs
     neighbor_dfs = ts.neighbor_dfs
-    nb_indices = pg.neighbor.indices
-    for k in nb_slice
+    nb_indices = get_neighbors(pg)
+    @inbounds for k in nb_slice
         # `k` is the global index into the flat neighbor arrays
         
         # 1. GATHER: Get neighbor index `j`...
