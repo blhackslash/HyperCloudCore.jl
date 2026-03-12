@@ -1,7 +1,3 @@
-using Random
-using ..HyperbolicPDEs
-using ..SourceTerms
-
 # =========================================================================
 # HELPER FUNCTIONS (Zero-Allocation State Management)
 # =========================================================================
@@ -56,7 +52,7 @@ end
 # =========================================================================
 # MAIN ROUTINE
 # =========================================================================
-
+manage_particles!(kwargs...) = return 
 function manage_particles!(pg::ParticleGrid1D, eq::HyperbolicPDE, source_term=nothing)
     # PHASE 1: VOXEL FILL (Splitting)
     if hasproperty(pg.manage, :local_voxels)

@@ -1,12 +1,34 @@
-export GradientInterpolator, NoFallbackGrad, UpwindGradient, CentralGradient, WENO, MUSCL, Interpolator
-export MUSCLORDER, MUSCLORDER1, MUSCLORDER2, MUSCLORDER3, MUSCLORDER4, AbstractSlopeLimiter, BarthJespersenLimiter, VenkatakrishnanLimiter, SuperbeeLimiter, MinmodLimiter, NoLimiter
-
 struct Interpolator{D, IO, DO}
 
     function Interpolator{D, IO, DO}() where {D, IO, DO}
         new{D, IO, DO}()
     end
 end
+
+## ------------------------------- Flux Functions -------------------------------
+abstract type NumericalFluxFunction end
+struct UpwindFlux <: NumericalFluxFunction end
+struct RusanovFlux <: NumericalFluxFunction end
+struct RoeDiffusiveFlux <: NumericalFluxFunction end
+
+"""
+    MOODCriterion
+
+Abstract MOOD Criterion type. Each MOOD criterion should overload the ()-operator, checks if the MOOD criterion at that cell is satisfied.
+Returns true for a MOOD event.
+"""
+abstract type MOODCriterion end
+
+# --- MOODu1 (Simple DMP Check) ---
+struct MOODu1 <: MOODCriterion 
+    d::Float64
+end
+# --- MOODu2 (DMP Check + Conditional Curvature Relaxation) ---
+struct MOODu2 <: MOODCriterion 
+    d::Float64
+end
+struct NoMOOD <: MOODCriterion end
+struct OnlyMOOD <: MOODCriterion end
 
 """
     GradientInterpolator
@@ -21,6 +43,7 @@ abstract type GradientInterpolator end
 # Fallback Gradient interpolator for no fallback
 struct NoFallbackGrad <: GradientInterpolator end
 
+## ------------------------------- MUSCL -------------------------------
 abstract type MUSCLORDER end
 struct MUSCLORDER0 <: MUSCLORDER end
 struct MUSCLORDER1 <: MUSCLORDER end
@@ -35,6 +58,47 @@ struct VenkatakrishnanLimiter <: RealSlopeLimiter end
 struct SuperbeeLimiter <: RealSlopeLimiter end
 struct MinmodLimiter <: RealSlopeLimiter end
 struct NoLimiter <: AbstractSlopeLimiter end
+
+abstract type MUSCLWorkspace end
+
+# --- NEW: 1D Workspaces split by order ---
+abstract type MUSCLWorkspace1D <: MUSCLWorkspace end
+
+# 1D Workspace for Order 0
+struct MUSCLWorkspace1D0O <: MUSCLWorkspace1D
+    # Only stores geometric coefficients for divergence
+    alfaij_bars::Vector{Float64} 
+end
+
+"""
+Workspace for 1D, 1st/2nd Order MUSCL.
+Stores 1st/2nd order coefficients and derivatives.
+(O1 and O2 are combined, as O1 slope limiting (MOOD) needs curvature).
+"""
+struct MUSCLWorkspace1D1O <: MUSCLWorkspace1D
+    # --- FLATTENED per-interaction coefficient storage ---
+    alfaij_bars::Vector{Float64} # for 1st-order slope
+    betaijs::Vector{Float64}     # for 2nd-order curve
+
+    # --- PER-PARTICLE derivative storage (already flat) ---
+    slopes::Vector{Float64}
+    curves_xx::Vector{Float64}
+end
+
+"""
+Workspace for 1D, 1st/2nd Order MUSCL.
+Stores 1st/2nd order coefficients and derivatives.
+(O1 and O2 are combined, as O1 slope limiting (MOOD) needs curvature).
+"""
+struct MUSCLWorkspace1D2O <: MUSCLWorkspace1D
+    # --- FLATTENED per-interaction coefficient storage ---
+    alfaij_bars::Vector{Float64} # for 1st-order slope
+    betaijs::Vector{Float64}     # for 2nd-order curve
+
+    # --- PER-PARTICLE derivative storage (already flat) ---
+    slopes::Vector{Float64}
+    curves_xx::Vector{Float64}
+end
 
 """
 Workspace for 1D, 3rd Order MUSCL.
@@ -129,6 +193,57 @@ struct MUSCL{D,ORDER<:MUSCLORDER, L<:AbstractSlopeLimiter, NFF <: NumericalFluxF
     mood::M
 end
 
+
+## ------------------------------- Upwind -------------------------------
+abstract type UpwindAlgorithm end  # Only relevant in 2D. In 1D, all algorithms are the same.
+abstract type TiwariAlgorithm <: UpwindAlgorithm end  # Split domain in left and right for d/dx, and up and down for d/dy.
+abstract type PraveenAlgorithm <: UpwindAlgorithm end  # Praveen C. postive upwind scheme.
+abstract type NonLinearPraveenAlgorithm <: UpwindAlgorithm end  # Praveen C. postive upwind scheme.
+abstract type ClassicAlgorithm <: UpwindAlgorithm end  # Take all points 'behind' center point. 
+abstract type DecompositionAlgorithm <: UpwindAlgorithm end
+
+abstract type UpwindWorkspace end
+
+
+"""
+A thread-local workspace for the Upwind TiwariAlgorithm.
+Holds temporary buffers for all neighbors and for the filtered stencils.
+"""
+struct UpwindWorkspaceTA <: UpwindWorkspace
+    # Buffers to hold ALL neighbor data initially (size num_neighbors)
+    dxVec::Vector{Float64}
+    dyVec::Vector{Float64}
+    dfVec::Vector{Float64}
+    wVec::Vector{Float64}  # For calculated weights
+
+    # BitVectors to mark upwind neighbors for each direction
+    xWindow::BitVector
+    yWindow::BitVector
+end
+
+"""
+A minimal, thread-local workspace for the Upwind ClassicAlgorithm.
+It holds temporary buffers for the filtered "upwind" neighbors.
+"""
+struct UpwindWorkspaceCA <: UpwindWorkspace
+    dxVec::Vector{Float64} # Filtered dx (upwind)
+    dyVec::Vector{Float64} # Filtered dy (upwind)
+    dfVec::Vector{Float64} # Filtered df (upwind)
+    wVec::Vector{Float64}  # Filtered w (upwind)
+end
+
+"""
+A minimal, thread-local workspace for the Upwind PraveenAlgorithm.
+Stores only essential coefficients.
+"""
+struct UpwindWorkspacePA <: UpwindWorkspace
+    # Buffers to hold calculated coefficients (size num_neighbors)
+    coeff_x_Vec::Vector{Float64}
+    coeff_y_Vec::Vector{Float64}
+    cijVec::Vector{Float64}     # Final coefficient
+end
+
+
 struct UpwindGradient{D, WS <: UpwindWorkspace, I <: Interpolator, Algorithm <: UpwindAlgorithm} <: GradientInterpolator
     order::Int
     numericalFlux::NumericalFluxFunction
@@ -138,7 +253,10 @@ struct UpwindGradient{D, WS <: UpwindWorkspace, I <: Interpolator, Algorithm <: 
 
 end
 
-## WENO
+## ------------------------------- WENO -------------------------------
+
+abstract type WENOWorkspace end
+abstract type WENOGI <:GradientInterpolator end
 
 struct WENOWorkspace1D <: WENOWorkspace
     # Scratch space for one-sided stencil calculations
@@ -184,4 +302,12 @@ struct WENO{D,WS <: WENOWorkspace, I <: Interpolator, NFF <: NumericalFluxFuncti
     workspaces::Vector{WS}
     interpolator::I
     numericalFlux::NFF
+end
+
+## ------------------------------- Central Gradient -------------------------------
+
+
+struct CentralGradient{D, I <: Interpolator} <: GradientInterpolator
+    order::Int
+    interpolator::I
 end

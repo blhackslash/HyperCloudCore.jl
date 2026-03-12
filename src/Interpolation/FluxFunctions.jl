@@ -1,14 +1,3 @@
-module FluxFunctions
-
-using ..Meshfree4ScalarEq.HyperbolicPDEs
-
-export NumericalFluxFunction, RusanovFlux, UpwindFlux, RoeDiffusiveFlux
-
-abstract type NumericalFluxFunction end;
-
-# ---------- RusanovFlux (LLF)
-struct RusanovFlux <: NumericalFluxFunction end
-
 # 1D or generic fallback
 @inline function (rusanov::RusanovFlux)(leftState::Float64, rightState::Float64, eq::ScalarHyperbolicPDE)
     leftFlux = flux(eq, leftState)
@@ -38,9 +27,6 @@ end
     return num_fx, num_fy
 end
 
-# ---------- Upwind Flux
-struct UpwindFlux <: NumericalFluxFunction end
-
 # 1D or generic fallback
 @inline function (upwind::UpwindFlux)(leftState::Float64, rightState::Float64, eq::ScalarHyperbolicPDE) 
     leftFlux = flux(eq, leftState)
@@ -68,8 +54,6 @@ end
     return num_fx, num_fy
 end
 
-#--------------- RoeDiffusiveFlux (Lax Wendroff without λ scaling)
-struct RoeDiffusiveFlux <: NumericalFluxFunction end
 
 function (lw::RoeDiffusiveFlux)(leftState::Real, rightState::Real, eq::ScalarHyperbolicPDE{D}) where {D}
     F_L = flux(eq, leftState)
@@ -84,6 +68,4 @@ function (lw::RoeDiffusiveFlux)(leftState::Real, rightState::Real, eq::ScalarHyp
         A_roe_squared_term = (F_L - F_R)^2 / diff_U # This is (-(F_R-F_L))^2 / diff_U = (F_R-F_L)^2 / diff_U
         return avg_F - A_roe_squared_term
     end
-end
-
 end

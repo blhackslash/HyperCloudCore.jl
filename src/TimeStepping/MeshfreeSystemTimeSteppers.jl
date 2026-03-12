@@ -1,63 +1,24 @@
-# ============== MeshfreeSystemTimeSteppers.jl ==============
-
-using ..ParticleGrids
-using ..HyperbolicPDEs
-using ..SourceTerms
-using ..ImplicitSolvers
-using StaticArrays
-
-export GeneralIMEXTimeStepper, ARS233, PareschiRussoIMEXSSP3, ARS222, SSP2332, RalstonRK2, ARS232
-export initAddTSBuffer!
-
-include("ButcherTableaus.jl")
-
-# --- REFACTORED GeneralIMEXTimeStepper Struct ---
-mutable struct GeneralIMEXTimeStepper{M_comp, G1, G2, M_crit, IS, ST_OBJ, BT, GM} <: TimeStepper
-    # User's modular components
-    gradientInterpolator::NTuple{M_comp, G1}
-    fallbackInterpolator::NTuple{M_comp, G2}
-    mood::M_crit
-    implicit_solver::IS
-    source_term_object::ST_OBJ
-    butcher_tableau::BT
-    grid_mover::GM  
+function GeneralIMEXTimeStepper(
+        gradientInterpolator::G1, fallbackInterpolator::G2, mood::M_crit,
+        implicit_solver::IS, source_term_object::ST_OBJ, butcher_tableau::BT, grid_mover::GM
+    ) where {G1, G2, M_crit, IS, ST_OBJ, BT, GM}
     
-    # --- Reusable Buffers (Workspace) ---
-    U_n_sys::Matrix{Float64}
-    Y_stages_sys::Vector{Matrix{Float64}}
-    K_E_stages_sys::Vector{Matrix{Float64}}
-    K_I_stages_sys::Vector{Matrix{Float64}}
+    s = size(butcher_tableau.A, 1) # Number of stages
+    M_comp = source_term_object.num_total_kinetic_components
     
-    mood_triggered::BitArray{3}
-    
-    # Buffers for explicit fused loop 
-    all_neighbor_fs::Matrix{Float64}
-    all_neighbor_dfs::Matrix{Float64}
-    
-    num_stages::Int
-
-    function GeneralIMEXTimeStepper(
-            gradientInterpolator::G1, fallbackInterpolator::G2, mood::M_crit,
-            implicit_solver::IS, source_term_object::ST_OBJ, butcher_tableau::BT, grid_mover::GM
-        ) where {G1, G2, M_crit, IS, ST_OBJ, BT, GM}
-        
-        s = size(butcher_tableau.A, 1) # Number of stages
-        M_comp = source_term_object.num_total_kinetic_components
-        
-        new{M_comp, G1, G2, M_crit, IS, ST_OBJ, BT, GM}(
-            ntuple(_ -> deepcopy(gradientInterpolator), M_comp), 
-            ntuple(_ -> deepcopy(fallbackInterpolator), M_comp), 
-            mood, implicit_solver, source_term_object, butcher_tableau, grid_mover,
-            Matrix{Float64}(undef, 0, 0), 
-            [Matrix{Float64}(undef, 0, 0) for _ in 1:s],
-            [Matrix{Float64}(undef, 0, 0) for _ in 1:s], 
-            [Matrix{Float64}(undef, 0, 0) for _ in 1:s], 
-            falses(0, M_comp, s),
-            Matrix{Float64}(undef, 0, M_comp), 
-            Matrix{Float64}(undef, 0, M_comp),
-            s
-        )
-    end
+    GeneralIMEXTimeStepper{M_comp, G1, G2, M_crit, IS, ST_OBJ, BT, GM}(
+        ntuple(_ -> deepcopy(gradientInterpolator), M_comp), 
+        ntuple(_ -> deepcopy(fallbackInterpolator), M_comp), 
+        mood, implicit_solver, source_term_object, butcher_tableau, grid_mover,
+        Matrix{Float64}(undef, 0, 0), 
+        [Matrix{Float64}(undef, 0, 0) for _ in 1:s],
+        [Matrix{Float64}(undef, 0, 0) for _ in 1:s], 
+        [Matrix{Float64}(undef, 0, 0) for _ in 1:s], 
+        falses(0, M_comp, s),
+        Matrix{Float64}(undef, 0, M_comp), 
+        Matrix{Float64}(undef, 0, M_comp),
+        s
+    )
 end
 
 function initAddTSBuffer!(imex_ts::GeneralIMEXTimeStepper{M_comp}, pg::ParticleGrid) where {M_comp}
@@ -197,7 +158,7 @@ function (imex_ts::GeneralIMEXTimeStepper{M_comp, G1, G2, M_crit, IS, ST_OBJ, BT
                 # Pass view of the particle's full multi-component state directly
                 u_particle_view = @view current_Y_i_sys[p_idx, :]
                 
-                ImplicitSolvers.solve!(
+                solve!(
                     imex_ts.implicit_solver, 
                     u_particle_view, 
                     dt * bt.A[i,i],

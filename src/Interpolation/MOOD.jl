@@ -1,30 +1,8 @@
-module MOOD
-
-using ..ParticleGrids
-
-
-export MOODCriterion, MOODu1, MOODu2, NoMOOD, MOODLoubertU2, OnlyMOOD, FirstStageNoMOOD, initMOOD!
-
-"""
-    MOODCriterion
-
-Abstract MOOD Criterion type. Each MOOD criterion should overload the ()-operator, checks if the MOOD criterion at that cell is satisfied.
-Returns true for a MOOD event.
-"""
-abstract type MOODCriterion end
-
 function initMOOD!(mood::MOODCriterion, d)
     return
 end
 
-# --- MOODu1 (Simple DMP Check) ---
-mutable struct MOODu1 <: MOODCriterion 
-    count::Int64
-    const d::Float64
-    function MOODu1(;deltaRelax::Real)
-        new(0, convert(Float64, deltaRelax))
-    end
-end
+
 
 # MOODu1 functor signature now includes pg
 function (mood::MOODu1)(
@@ -36,9 +14,6 @@ function (mood::MOODu1)(
     pg::ParticleGrid,     # Grid to access neighbor info
     neighbor_fs::AbstractVector{Float64} # Full neighbor rho vector
 )::Bool
-    
-    num_nb = pg.neighbor.amount[i]
-    if num_nb == 0; return false; end # If no neighbors, DMP cannot be violated
     
     # Calculate local extrema using the helper with direct indexing
     minU, maxU = findLocalExtrema(rho_i, nb_slice, neighbor_fs)
@@ -52,20 +27,8 @@ function (mood::MOODu1)(
     if abs(maxU - minU) < δ^3 
         moodEvent = false
     end
-
-    if moodEvent; mood.count += 1 end
     
     return moodEvent
-end
-
-
-# --- MOODu2 (DMP Check + Conditional Curvature Relaxation) ---
-mutable struct MOODu2 <: MOODCriterion 
-    count::Int64
-    const d::Float64
-    function MOODu2(;deltaRelax::Real)
-        new(0, convert(Float64, deltaRelax))
-    end
 end
 
 # Helper to check for curvature remains the same
@@ -87,9 +50,6 @@ function (mood::MOODu2)(
     pg::ParticleGrid1D,  # Grid to access neighbor info (1D)
     neighbor_fs::AbstractVector{Float64} # Full neighbor rho vector
 )::Bool
-    
-    num_nb = pg.neighbor.amount[i]
-    if num_nb == 0; return false; end 
 
     minU, maxU = findLocalExtrema(rho_i, nb_slice, neighbor_fs)
     δ = mood.d
@@ -116,7 +76,6 @@ function (mood::MOODu2)(
     # --- End Conditional u2 check ---
     
     moodEvent = DMPFail ? !u2_satisfied : false
-    if moodEvent; mood.count += 1 end
     return moodEvent
 end
 
@@ -168,40 +127,12 @@ function (mood::MOODu2)(
     # --- End Conditional u2 check ---
     
     moodEvent = DMPFail ? !u2_satisfied : false
-    if moodEvent; mood.count += 1 end
     return moodEvent
-end
-
-"""
-    NoMOOD
-
-No MOOD. Results in a standard time integration routine.
-"""
-struct NoMOOD <: MOODCriterion 
-    count::Int64
-    function NoMOOD()
-        new(0)
-    end
 end
 
 function (mood::NoMOOD)(kwargs...)::Bool
     return false
 end
-
-"""
-OnlyMOOD
-
-Test case for always using the fallback Interpolator
-"""
-struct OnlyMOOD <: MOODCriterion
-    count::Int64
-    function OnlyMOOD()
-        new(0)
-    end
-end
-
 function (mood::OnlyMOOD)(kwargs...)::Bool
     return true
-end
-
 end

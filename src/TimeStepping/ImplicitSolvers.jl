@@ -1,21 +1,5 @@
-module ImplicitSolvers
-
-using ..SourceTerms
-using ..CoreUtils
-using ..HyperbolicPDEs
-using StaticArrays
-
-export AbstractImplicitSolver, PicardIterationSolver, LinearizedRelaxationImplicitSolver, solve!
-
-abstract type AbstractImplicitSolver end
-
-struct PicardIterationSolver <: AbstractImplicitSolver
-    max_iters::Int
-    tol::Float64
-
-    function PicardIterationSolver(;max_iters::Int = 20, tol::Float64 = 1e-8)
-        new(max_iters, tol)
-    end
+function PicardIterationSolver(;max_iters::Int = 20, tol::Float64 = 1e-8)
+    PicardIterationSolver(max_iters, tol)
 end
 
 function solve!(
@@ -64,12 +48,6 @@ function solve!(
     return converged
 end
 
-struct LinearizedRelaxationImplicitSolver <: AbstractImplicitSolver
-    function LinearizedRelaxationImplicitSolver()
-        new()
-    end
-end
-
 # Solve for LOCAL Relaxation Source Term
 function solve!(
     ::LinearizedRelaxationImplicitSolver,
@@ -98,7 +76,7 @@ function solve!(
         m_idx = rs.kin2macro(k)
         dim = rs.dimensions[k]
         
-        f_val = SourceTerms.get_flux_component(flux_vals, m_idx, dim, Val(D))
+        f_val = get_flux_component(flux_vals, m_idx, dim, Val(D))
         
         # Inline Maxwellian
         Mk_val = rs.coefficients[k] * (u_macro[m_idx] + rs.interior_factors[k] * f_val / rs.relax_speeds[k])
@@ -137,5 +115,3 @@ function solve!(
     
     return true 
 end
-
-end # Module ImplicitSolvers

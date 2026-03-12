@@ -1,34 +1,3 @@
-module HyperbolicPDEs
-using ..CoreUtils
-
-export ScalarHyperbolicPDE, LinearAdvection, BurgersEquation, BurgersEquation2D, TestU3Equation,
-       velocity, flux, HyperbolicPDESystem, Euler1D, Euler2D, pressure_from_euler_conserved,
-       HyperbolicPDE, n_dimensions, DiagonalHyperbolicSystem, path_integral, LEuler1D, LinePath,
-       prim2cons, cons2prim
-
-abstract type DifferentialOrder end
-struct Order0 <: DifferentialOrder end
-struct Order1 <: DifferentialOrder end
-
-const DO0 = Order0() 
-const DO1 = Order1()
-
-# A PDE in D dimensions with N variables.
-abstract type HyperbolicPDE{D, N} end
-
-# A helper for scalar PDEs (where N is always 1)
-abstract type ScalarHyperbolicPDE{D} <: HyperbolicPDE{D, 1} end
-
-# A helper for systems of PDEs
-abstract type HyperbolicPDESystem{D, N} <: HyperbolicPDE{D, N} end
-abstract type NCHyperbolicPDESystem{D, N} <: HyperbolicPDESystem{D, N} end
-
-const DiagonalHyperbolicSystem{N, D} = NTuple{N, <: ScalarHyperbolicPDE{D}}
-
-abstract type AbstractPath{N} end
-
-struct LinePath{N} <: AbstractPath{N} end
-
 # Functor definition
 function (lp::LinePath{N})(s, ul, ur, ::Order0) where N
     # ntuple(f, N) creates a tuple (f(1), f(2), ..., f(N))
@@ -43,10 +12,6 @@ end
 #----------------------------------#
 # --- Scalar Equation Examples --- #
 #----------------------------------#
-
-struct LinearAdvection{D} <: ScalarHyperbolicPDE{D} 
-    vel::NTuple{D, Float64} # Store velocity as a tuple of length D
-end
 
 # Constructors for convenience
 LinearAdvection(vel::Real) = LinearAdvection{1}((Float64(vel),))
@@ -70,10 +35,6 @@ struct BurgersEquation2D <: ScalarHyperbolicPDE{2} end
 @inline velocity(eq::BurgersEquation2D, u::Float64) = (u, u)
 @inline flux(eq::BurgersEquation2D, u::Float64) = (0.5 * u^2, 0.5 * u^2)
 
-# 1. Define the Parametric Struct
-# The 'A' parameter is part of the type definition.
-struct BurgersEquation{a} <: ScalarHyperbolicPDE{1} end
-
 # 2. Define Outer Constructors
 # This allows you to call BurgersEquation(0.5)
 BurgersEquation(a::Float64) = BurgersEquation{a}()
@@ -95,7 +56,6 @@ end
     # Generalized case: returns 0.5 * (1-A) * u^2
     return .5 * (1.0 - a) * u^2
 end
-struct TestU3Equation{a} <: ScalarHyperbolicPDE{1} end
 
 TestU3Equation(a::Float64) = TestU3Equation{a}()
 
@@ -118,7 +78,6 @@ end
 const GAS_GAMMA_EULER = 1.4 # --- REFINEMENT 2: Use a single constant ---
 
 # --- 1D Euler Equations ---
-struct Euler1D <: HyperbolicPDESystem{1, 3} end
 
 function pressure_from_euler_conserved(rho::Float64, m::Float64, E::Float64)::Float64
     if rho < 1e-9; return 1e-9; end
@@ -311,4 +270,3 @@ end
     
     return integral
 end
-end # Module

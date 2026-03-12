@@ -1,12 +1,3 @@
-# ------------------------------- Upwind -------------------------------
-abstract type UpwindAlgorithm end  # Only relevant in 2D. In 1D, all algorithms are the same.
-abstract type TiwariAlgorithm <: UpwindAlgorithm end  # Split domain in left and right for d/dx, and up and down for d/dy.
-abstract type PraveenAlgorithm <: UpwindAlgorithm end  # Praveen C. postive upwind scheme.
-abstract type NonLinearPraveenAlgorithm <: UpwindAlgorithm end  # Praveen C. postive upwind scheme.
-abstract type ClassicAlgorithm <: UpwindAlgorithm end  # Take all points 'behind' center point. 
-abstract type DecompositionAlgorithm <: UpwindAlgorithm end
-
-abstract type UpwindWorkspace end
 
 function populate_buffers!(dxVec, dyVec, dfVec, neighbors, xdist, ydist, fVec, vel, particleIndex)
     
@@ -38,70 +29,34 @@ function populate_buffers!(dxVec, dyVec, dfVec, neighbors, xdist, ydist, fVec, v
     return count
 end
 
-"""
-A thread-local workspace for the Upwind TiwariAlgorithm.
-Holds temporary buffers for all neighbors and for the filtered stencils.
-"""
-struct UpwindWorkspaceTA <: UpwindWorkspace
-    # Buffers to hold ALL neighbor data initially (size num_neighbors)
-    dxVec::Vector{Float64}
-    dyVec::Vector{Float64}
-    dfVec::Vector{Float64}
-    wVec::Vector{Float64}  # For calculated weights
 
-    # BitVectors to mark upwind neighbors for each direction
-    xWindow::BitVector
-    yWindow::BitVector
 
-    function UpwindWorkspaceTA(max_neighbors::Int=100) # Preallocate
-        new(
-            Vector{Float64}(undef, max_neighbors),
-            Vector{Float64}(undef, max_neighbors),
-            Vector{Float64}(undef, max_neighbors),
-            Vector{Float64}(undef, max_neighbors),
-            falses(max_neighbors),
-            falses(max_neighbors)
-        )
-    end
+function UpwindWorkspaceTA(max_neighbors::Int=100) # Preallocate
+    UpwindWorkspaceTA(
+        Vector{Float64}(undef, max_neighbors),
+        Vector{Float64}(undef, max_neighbors),
+        Vector{Float64}(undef, max_neighbors),
+        Vector{Float64}(undef, max_neighbors),
+        falses(max_neighbors),
+        falses(max_neighbors)
+    )
 end
 
-"""
-A minimal, thread-local workspace for the Upwind ClassicAlgorithm.
-It holds temporary buffers for the filtered "upwind" neighbors.
-"""
-struct UpwindWorkspaceCA <: UpwindWorkspace
-    dxVec::Vector{Float64} # Filtered dx (upwind)
-    dyVec::Vector{Float64} # Filtered dy (upwind)
-    dfVec::Vector{Float64} # Filtered df (upwind)
-    wVec::Vector{Float64}  # Filtered w (upwind)
-
-    function UpwindWorkspaceCA(max_neighbors::Int=100) # Preallocate
-        new(
-            Vector{Float64}(undef, max_neighbors),
-            Vector{Float64}(undef, max_neighbors),
-            Vector{Float64}(undef, max_neighbors),
-            Vector{Float64}(undef, max_neighbors)
-        )
-    end
+function UpwindWorkspaceCA(max_neighbors::Int=100) # Preallocate
+    UpwindWorkspaceCA(
+        Vector{Float64}(undef, max_neighbors),
+        Vector{Float64}(undef, max_neighbors),
+        Vector{Float64}(undef, max_neighbors),
+        Vector{Float64}(undef, max_neighbors)
+    )
 end
 
-"""
-A minimal, thread-local workspace for the Upwind PraveenAlgorithm.
-Stores only essential coefficients.
-"""
-struct UpwindWorkspacePA <: UpwindWorkspace
-    # Buffers to hold calculated coefficients (size num_neighbors)
-    coeff_x_Vec::Vector{Float64}
-    coeff_y_Vec::Vector{Float64}
-    cijVec::Vector{Float64}     # Final coefficient
-
-    function UpwindWorkspacePA(max_neighbors::Int=100) # Preallocate
-        new(
-            Vector{Float64}(undef, max_neighbors),
-            Vector{Float64}(undef, max_neighbors),
-            Vector{Float64}(undef, max_neighbors)
-        )
-    end
+function UpwindWorkspacePA(max_neighbors::Int=100) # Preallocate
+    UpwindWorkspacePA(
+        Vector{Float64}(undef, max_neighbors),
+        Vector{Float64}(undef, max_neighbors),
+        Vector{Float64}(undef, max_neighbors)
+    )
 end
 
 

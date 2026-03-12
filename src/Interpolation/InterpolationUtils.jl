@@ -1,4 +1,3 @@
-
 function (interp::Interpolator{1, 0, 0})(
     nb_slice::UnitRange{Int},
     wVec::AbstractVector{Float64},  # Full AbstractVector

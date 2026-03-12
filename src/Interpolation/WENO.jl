@@ -1,7 +1,3 @@
-
-abstract type WENOWorkspace end
-abstract type WENOGI <:GradientInterpolator end
-
 function initGI!(weno::WENOGI, kwargs...)
     return
 end

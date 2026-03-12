@@ -35,20 +35,6 @@ end
 
 Finds the closest neighbor to the left and right of a particle,
 using the pre-calculated flat neighbor arrays.
-
-# Arguments
-- `nb_slice::UnitRange{Int}`: The slice into the global flat arrays
-  corresponding to the particle's neighbors.
-- `dx_global::AbstractVector`: The global flat array of signed
-  x-distances (e.g., `get_xdistance(pg)`).
-- `f_neighbors_global::AbstractVector`: The global flat array of
-  pre-gathered neighbor values (e.g., `ts.neighbor_fs`).
-
-# Returns
-- `(val_L, dist_L, val_R, dist_R)`: The solution value and signed distance for the
-  closest left and right neighbors.
-- Returns `0.0` for values and distances if a 
-  neighbor is not found on a given side.
 """
 function find_closest_lr_neighbors_1D(
     nb_slice::UnitRange{Int},

@@ -1,22 +1,3 @@
-module Interpolations
-
-using LinearAlgebra
-using Statistics
-using Base.Threads
-using ..Meshfree4ScalarEq.ParticleGrids
-using ..Meshfree4ScalarEq.SimSettings
-using ..Meshfree4ScalarEq.HyperbolicPDEs
-using ..Meshfree4ScalarEq.FluxFunctions
-using ..Meshfree4ScalarEq.MLSWeightFunctions
-using ..Meshfree4ScalarEq.MOOD
-using ..InterpolationUtils
-
-export functionInterpolation!, gradInterpolation!, setCurvatures!, initTimeStep, getStencil, LaxFriedrichsGradient,
-     initGI!, initGIBuffers!
-
-
-include("InterpolationUtils.jl")
-
 function initGI!(::NoFallbackGrad, kwargs...)
     return
 end
@@ -68,9 +49,18 @@ function sortFlux(flux_ij::Float64, flux_ji::Float64, deltaX::Float64, deltaY::F
     end
 end
 
-include("./CentralGradient.jl")
-include("./MUSCL.jl")
-include("./Upwind.jl")
-include("./WENO.jl")
+include("FluxFunctions.jl")
+include("MOOD.jl")
+include("InterpolationUtils.jl")
 
-end # End Module Interpolations
+include("CentralGradient.jl")
+
+include("MUSCLCoeffs.jl")
+include("MUSCLLimiter.jl")
+include("MUSCLWorkspace.jl")
+include("MUSCLUtils.jl")
+include("MUSCL.jl")
+
+include("Upwind.jl")
+
+include("WENO.jl")

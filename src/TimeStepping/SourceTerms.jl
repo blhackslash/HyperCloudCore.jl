@@ -1,26 +1,3 @@
-module SourceTerms
-
-using ..HyperbolicPDEs
-using ..ParticleGrids
-using ..CoreUtils
-using StaticArrays 
-
-export AbstractSourceTerm, RelaxationSourceTerm, update_nonlocal_potential!, NonLocalRelaxationSourceTerm, Kin2Macro
-export ensure_buffer_size!
-
-abstract type AbstractSourceTerm end
-
-struct NoSourceTerm <: AbstractSourceTerm end
-
-"""
-    Kin2Macro{NM}
-
-A simplified mapper storing the ranges for each of the NM macro variables.
-"""
-struct Kin2Macro{NM}
-    ranges::NTuple{NM, UnitRange{Int}}
-end
-
 function Kin2Macro(edges::Union{AbstractVector{Int},Tuple})
     NM = length(edges) - 1
     ranges = ntuple(i -> edges[i]:(edges[i+1]-1), NM)
@@ -53,21 +30,7 @@ end
 # =========================================================================
 # LOCAL RELAXATION SOURCE TERM
 # =========================================================================
-struct RelaxationSourceTerm{D, N, NK, PDE <: HyperbolicPDE{D, N}} <: AbstractSourceTerm
-    system_eq::PDE
-    epsilon::Float64
-    inv_epsilon::Float64
-    kin2macro::Kin2Macro{N}
 
-    # Parameters stored as flat tuples of length NK (Number of Kinetic components)
-    coefficients::NTuple{NK, Float64}
-    relax_speeds::NTuple{NK, Float64}
-    interior_factors::NTuple{NK, Float64}
-    dimensions::NTuple{NK, Int} # which spatial dimension (flux) this component advects in
-
-    num_total_kinetic_components::Int64
-    num_macro_variables::Int64
-end
 
 function RelaxationSourceTerm(
     system_eq::PDE,
@@ -119,28 +82,16 @@ end
 # =========================================================================
 # NON-LOCAL RELAXATION SOURCE TERM
 # =========================================================================
-mutable struct NonLocalRelaxationSourceTerm{D, N, NK, PDE <: HyperbolicPDE{D, N}} <: AbstractSourceTerm
-    system_eq::PDE
-    epsilon::Float64
-    inv_epsilon::Float64
-    kin2macro::Kin2Macro{N}
 
-    coefficients::NTuple{N, Float64}
-    relax_speeds::NTuple{NK, Float64}
-    interior_factor::Float64
 
-    T_potential::Matrix{Float64}
-    num_total_kinetic_components::Int
-
-    function NonLocalRelaxationSourceTerm(
-        eq::PDE, epsilon::Float64, km::Kin2Macro{N},
-        coeffs::NTuple{N, Float64}, speeds::NTuple{NK, Float64}, int_factor::Float64
-    ) where {D, N, NK, PDE <: HyperbolicPDE{D, N}}
-        new{D, N, NK, PDE}(
-            eq, epsilon, 1.0/epsilon, km, coeffs, speeds, int_factor,
-            Matrix{Float64}(undef, 0, 0), NK
-        )
-    end
+function NonLocalRelaxationSourceTerm(
+    eq::PDE, epsilon::Float64, km::Kin2Macro{N},
+    coeffs::NTuple{N, Float64}, speeds::NTuple{NK, Float64}, int_factor::Float64
+) where {D, N, NK, PDE <: HyperbolicPDE{D, N}}
+    NonLocalRelaxationSourceTerm{D, N, NK, PDE}(
+        eq, epsilon, 1.0/epsilon, km, coeffs, speeds, int_factor,
+        Matrix{Float64}(undef, 0, 0), NK
+    )
 end
 
 function ensure_buffer_size!(st::NonLocalRelaxationSourceTerm{D,N,NK,PDE}, N_particles::Int) where {D,N,NK,PDE}
@@ -203,5 +154,3 @@ function (st::NonLocalRelaxationSourceTerm{D, N, NK})(
         S_out[k] = (Mk_val - V_kin[k]) * st.inv_epsilon
     end
 end
-
-end # Module SourceTerms

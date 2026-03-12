@@ -1,9 +1,3 @@
-# --- In MUSCL.jl ---
-
-# --- In MUSCLUtils.jl ---
-
-# --- _calculate_slopes (1D) ---
-
 """
 (1D Order 1-4) Calculate only slope_x using alfaij_bar.
 Returns (slope_x, 0.0) to match the 2D signature.
@@ -20,23 +14,6 @@ Returns (slope_x, 0.0) to match the 2D signature.
     end
     return slope_x
 end
-
-# """
-# (1D Order 1-4) Calculate only slope_x using alfaij_bar.
-# Returns (slope_x, 0.0) to match the 2D signature.
-# """
-# @inline function _calculate_slopes(
-#     nb_slice::UnitRange{Int},
-#     df_neighbors::AbstractVector,
-#     ws::Union{MUSCLWorkspace1D3O,MUSCLWorkspace1D4O}
-# )
-#     slope_x = 0.0
-#     @inbounds for k in nb_slice
-#         # 1D slope always comes from alfaij_bar (the c1 coefficient)
-#         slope_x += ws.alfaijs[k] * df_neighbors[k]
-#     end
-#     return slope_x
-# end
 
 # --- _calculate_higher_derivatives (1D) ---
 

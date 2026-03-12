@@ -1,20 +1,3 @@
-module InitialConditions
-
-# Import necessary types from your main module. Adjust the path as needed.
-using ..HyperbolicPDEs
-using ..ParticleGrids
-using ..SourceTerms
-using LinearAlgebra
-using StaticArrays
-
-export InitialCondition, SmoothInitialCondition, ShockInitialCondition, setInitialConditions!,
-       Gauss, Box, Sine, Riemann, EulerSmooth, EulerShockTube,SRiemann,
-       getInitialCondition, get_discontinuity_points, euler1D_physical_fluxes, GAS_GAMMA_EULER
-
-
-# --- Helper functions for Euler Equations ---
-const GAS_GAMMA_EULER = 1.4
-
 function pressure_from_euler_conserved(rho::Real, m::Real, E::Real)::Float64
     if rho < 1e-9; return 1e-9; end
     pressure = (GAS_GAMMA_EULER - 1.0) * (E - 0.5 * m^2 / rho)
@@ -27,11 +10,6 @@ function euler1D_physical_fluxes(rho::Real, m::Real, E::Real)::NTuple{3, Float64
     p = pressure_from_euler_conserved(rho, m, E)
     return (m, m * ux + p, (E + p) * ux)
 end
-
-# --- 1. Abstract Type Hierarchy ---
-abstract type InitialCondition end
-abstract type SmoothInitialCondition <: InitialCondition end
-abstract type ShockInitialCondition <: InitialCondition end
 # --- 2. Concrete Structs and Functors for t=0 ---
 # --- GENERALIZED, PARAMETRIC STRUCTS ---
 
@@ -78,7 +56,7 @@ function setInitialConditions!(
             m_idx = st.kin2macro(k)
             dim = st.dimensions[k]
             
-            f_val = SourceTerms.get_flux_component(flux_vals, m_idx, dim, Val(D))
+            f_val = get_flux_component(flux_vals, m_idx, dim, Val(D))
             
             # Inline Maxwellian Initialization
             Mk = st.coefficients[k] * (u_val[m_idx] + st.interior_factors[k] * f_val / st.relax_speeds[k])
@@ -149,75 +127,41 @@ function update_potential_from_matrix!(st, system_pg, U_matrix)
     end
 end
 
-"Gaussian distribution for scalar or system states."
-struct Gauss{T, S} <: SmoothInitialCondition
-    a::S      # Amplitude (can be a scalar or a vector/tuple)
-    b::T      # Center (Float64 for 1D, NTuple for 2D)
-    width::Float64
-end
 # Functors work for both scalar and system types due to broadcasting (vector * scalar)
 (ic::Gauss{Float64, S})(x::Real) where S = ic.a .* exp(-((x - ic.b) / ic.width)^2)
 (ic::Gauss{NTuple{2, Float64}, S})(x::Real, y::Real) where S = ic.a .* exp(-(((x - ic.b[1])^2 + (y - ic.b[2])^2) / ic.width^2))
 
 
-"Box (Top-hat) distribution for scalar or system states."
-struct Box{S} <: ShockInitialCondition
-    u_background::S
-    u_box::S
-    x_start::Float64
-    x_end::Float64
-    y_start::Union{Float64, Nothing}
-    y_end::Union{Float64, Nothing}
+# 1D Constructor
+Box(bg::S, val::S, xs, xe) where S = Box{S}(bg, val, xs, xe, nothing, nothing)
+# 2D Constructor
+Box(bg::S, val::S, xs, xe, ys, ye) where S = Box{S}(bg, val, xs, xe, ys, ye)
 
-    # 1D Constructor
-    Box(bg::S, val::S, xs, xe) where S = new{S}(bg, val, xs, xe, nothing, nothing)
-    # 2D Constructor
-    Box(bg::S, val::S, xs, xe, ys, ye) where S = new{S}(bg, val, xs, xe, ys, ye)
-end
 (ic::Box)(x::Real) = ic.x_start <= x <= ic.x_end ? ic.u_box : ic.u_background
 (ic::Box)(x::Real, y::Real) = (ic.x_start <= x <= ic.x_end && !isnothing(ic.y_start) && ic.y_start <= y <= ic.y_end) ? ic.u_box : ic.u_background
 
 
-"Sine wave for scalar states (systems would require more specific definition)."
-struct Sine <: SmoothInitialCondition
-    a::Float64
-    b_period::Float64
-    c_offset::Float64
-end
+
 (ic::Sine)(x::Real) = ic.a * sin(2.0 * pi * x / ic.b_period) + ic.c_offset
 
 
-"Riemann problem (shock/rarefaction) for scalar or system states in 1D or 2D."
-struct Riemann{T, S} <: ShockInitialCondition
-    uL::S
-    uR::S
-    p0::T  # 1D: x0 position. 2D: point on line.
-    n::T   # 1D: defaults to 1.0. 2D: normal vector.
 
-    # 1D Constructor
-    function Riemann(uL::S, uR::S, x0::Real) where S
-        new{Float64, S}(uL, uR, Float64(x0), 1.0)
-    end
 
-    # 2D Constructor
-    function Riemann(uL::S, uR::S, p0::NTuple{2, Real}, n_vec::NTuple{2, Real}) where S
-        norm_n = LinearAlgebra.norm(n_vec)
-        if norm_n < 1e-14; error("Normal vector for Riemann cannot be a zero vector."); end
-        n_normalized = (n_vec[1] / norm_n, n_vec[2] / norm_n)
-        p0_float = (Float64(p0[1]), Float64(p0[2]))
-        new{NTuple{2, Float64}, S}(uL, uR, p0_float, n_normalized)
-    end
+# 1D Constructor
+function Riemann(uL::S, uR::S, x0::Real) where S
+    Riemann{Float64, S}(uL, uR, Float64(x0), 1.0)
+end
+
+# 2D Constructor
+function Riemann(uL::S, uR::S, p0::NTuple{2, Real}, n_vec::NTuple{2, Real}) where S
+    norm_n = LinearAlgebra.norm(n_vec)
+    if norm_n < 1e-14; error("Normal vector for Riemann cannot be a zero vector."); end
+    n_normalized = (n_vec[1] / norm_n, n_vec[2] / norm_n)
+    p0_float = (Float64(p0[1]), Float64(p0[2]))
+    Riemann{NTuple{2, Float64}, S}(uL, uR, p0_float, n_normalized)
 end
 (ic::Riemann{Float64, S})(x::Real) where S = x < ic.p0 ? ic.uL : ic.uR
 (ic::Riemann{NTuple{2, Float64}, S})(x::Real, y::Real) where S = dot((x - ic.p0[1], y - ic.p0[2]), ic.n) < 0 ? ic.uL : ic.uR
-
-"Smoothed Riemann problem (arctan) for scalar or system states."
-struct SRiemann{T, S} <: SmoothInitialCondition
-    uL::S
-    uR::S
-    x0::T      # Center of the transition
-    width::T   # Smoothing width (steepness)
-end
 
 # Functor for t=0
 # Uses broadcasting (.*, .+, .-) to handle both scalar (Burgers) and vector (Euler) states
@@ -228,16 +172,13 @@ function (ic::SRiemann)(x::Real)
 end
 
 # --- NEW: Generalized Quadrant-based Riemann Problem ---
-struct QuadrantRiemann{D, M, T} <: ShockInitialCondition
-    u_states::NTuple{D,NTuple{M,Float64}} # Vector of states for each quadrant
-    p0::T               # Center point of the quadrants
 
-    function QuadrantRiemann(u_states::NTuple{D,NTuple{M,Float64}}, p0::T) where {D, M, T}
-        if D != 2^(length(p0))
-            error("For a D-dimensional problem!")
-        end
-        new{D, M, T}(u_states, p0)
+
+function QuadrantRiemann(u_states::NTuple{D,NTuple{M,Float64}}, p0::T) where {D, M, T}
+    if D != 2^(length(p0))
+        error("For a D-dimensional problem!")
     end
+    QuadrantRiemann{D, M, T}(u_states, p0)
 end
 
 # 1D Functor (2 states: left, right)
@@ -259,30 +200,8 @@ function (ic::QuadrantRiemann{4, M, NTuple{2, Float64}})(x::Real, y::Real) where
     end
 end
 
-# --- EULER SYSTEM ICS (1D) ---
-struct EulerSmooth <: SmoothInitialCondition
-    rho_spec::NamedTuple
-    u_spec::NamedTuple
-    p_spec::NamedTuple
-end
-function (ic::EulerSmooth)(x::Real)
-    rho_s, u_s, p_s = ic.rho_spec, ic.u_spec, ic.p_spec
-    rho_val = rho_s.off + rho_s.amp * exp(-((x - rho_s.mean) / rho_s.width)^2)
-    u_val   = u_s.off   + u_s.amp   * aexp(-((x - u_s.mean) / u_s.width)^2)
-    p_val   = p_s.off   + p_s.amp   * exp(-((x - p_s.mean) / p_s.width)^2)
-    rho_val = max(rho_val, 1e-6); p_val = max(p_val, 1e-6)
-    m_val = rho_val * u_val
-    E_val = p_val / (GAS_GAMMA_EULER - 1.0) + 0.5 * rho_val * u_val^2
-    return (rho_val, m_val, E_val)
-end
-
-struct EulerShockTube <: ShockInitialCondition
-    stateL::NTuple{3, Float64} # (rho, u, p)
-    stateR::NTuple{3, Float64} # (rho, u, p)
-    x0::Float64
-end
 function (ic::EulerShockTube)(x::Real)
-    rho_val, u_val, p_val = x < ic.x0 ? ic.stateL : ic.stateR
+    rho_val, u_val, p_val = x < ic.x0 ? ic.uL : ic.uR
     rho_val = max(rho_val, 1e-6); p_val = max(p_val, 1e-6)
     m_val = rho_val * u_val
     E_val = p_val / (GAS_GAMMA_EULER - 1.0) + 0.5 * rho_val * u_val^2
@@ -633,8 +552,8 @@ function (ic::EulerShockTube)(x::Real, t::Real, eq::Euler1D, pg::ParticleGrid1D)
 
     # --- 1. Extract Initial States and Parameters ---
     gamma = GAS_GAMMA_EULER
-    rho_L, u_L, p_L = ic.stateL
-    rho_R, u_R, p_R = ic.stateR
+    rho_L, u_L, p_L = ic.uL
+    rho_R, u_R, p_R = ic.uR
     x0 = ic.x0
     
     # --- 2. Solve for Pressure in the Star Region (p_star) ---
@@ -770,8 +689,8 @@ providing accurate integration points to `QuadGK`.
 function get_discontinuity_points(ic::EulerShockTube, eq::Euler1D, t::Real, pg::ParticleGrid1D)
     # --- 1. Extract Initial States and Parameters ---
     gamma = GAS_GAMMA_EULER
-    rho_L, u_L, p_L = ic.stateL
-    rho_R, u_R, p_R = ic.stateR
+    rho_L, u_L, p_L = ic.uL
+    rho_R, u_R, p_R = ic.uR
     x0 = ic.x0
     
     # --- 2. Solve for Pressure and Velocity in the Star Region ---
@@ -919,6 +838,3 @@ function get_discontinuity_points(ic::Gauss, eq::BurgersEquation, t::Real, pg::P
     u_at_break = ic(x_break)
     return [x_break + u_at_break * t]
 end
-
-
-end # module InitialConditions

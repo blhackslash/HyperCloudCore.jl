@@ -1,18 +1,3 @@
-export Upwind, LaxFriedrich, ClassicalTimeStepper, ClassicalRK2LWTimeStepper, ClassicalRichtmyerLWMOOD
-using ..Meshfree4ScalarEq.FluxFunctions
-
-# --- In your TimeIntegration.jl file ---
-
-#==============================================================================
-  Fixed-Grid Time Steppers (Optimized for SoA Grids)
-==============================================================================#
-
-# --- Upwind Method ---
-mutable struct Upwind <: FixedGridTimeStepper 
-    rho_n::Vector{Float64} # Reusable buffer for the state at time n
-    Upwind() = new(Float64[])
-end
-
 function (upwind::Upwind)(eq::LinearAdvection{1}, pg::ParticleGrid1D, settings::SimSetting, time::Real, dt::Real)
     @assert pg.regular "Upwind fixed-grid method requires a regular grid."
     N = pg.meta.N
@@ -36,12 +21,6 @@ function (upwind::Upwind)(eq::LinearAdvection{1}, pg::ParticleGrid1D, settings::
     end
 end
 
-# --- Lax-Friedrichs Method ---
-mutable struct LaxFriedrich <: FixedGridTimeStepper 
-    rho_n::Vector{Float64}
-    LaxFriedrich() = new(Float64[])
-end
-
 function (lf::LaxFriedrich)(eq::ScalarHyperbolicPDE{1}, pg::ParticleGrid1D, settings::SimSetting, time::Real, dt::Real)
     @assert pg.regular "Lax-Friedrich fixed-grid method requires a regular grid."
     N = pg.meta.N
@@ -59,15 +38,8 @@ function (lf::LaxFriedrich)(eq::ScalarHyperbolicPDE{1}, pg::ParticleGrid1D, sett
     pg.rhos[N] = 0.5 * (lf.rho_n[1] + lf.rho_n[N-1]) - λ * (flux(eq, lf.rho_n[1]) - flux(eq, lf.rho_n[N-1]))
 end
 
-# --- Classical Finite Volume Method ---
-mutable struct ClassicalTimeStepper <: FixedGridTimeStepper
-    numericalFlux::NumericalFluxFunction
-    rho_n::Vector{Float64}
-    flux_interfaces::Vector{Float64}
-
-    function ClassicalTimeStepper(numFlux::NumericalFluxFunction)
-        new(numFlux, Float64[], Float64[])
-    end
+function ClassicalTimeStepper(numFlux::NumericalFluxFunction)
+    ClassicalTimeStepper(numFlux, Float64[], Float64[])
 end
 
 function (cts::ClassicalTimeStepper)(eq::ScalarHyperbolicPDE{1}, pg::ParticleGrid1D, settings::SimSetting, time::Real, dt::Real)
@@ -94,19 +66,8 @@ function (cts::ClassicalTimeStepper)(eq::ScalarHyperbolicPDE{1}, pg::ParticleGri
     end
 end
 
-
-
-# --- NEW: ClassicalRK2LWTimeStepper (Richtmyer two-step Lax-Wendroff) ---
-# This one remains the same as it uses the physical flux F(U) on predicted states,
-# not a generic NumericalFluxFunction for its core logic.
-struct ClassicalRK2LWTimeStepper <: FixedGridTimeStepper
-    rhoOld::Vector{Float64}
-    rhoPredict_interface::Vector{Float64} # U_{i+1/2}^{n+1/2} - N values for N interfaces
-    # No need for fluxPredict as a field, can be local
-
-    function ClassicalRK2LWTimeStepper(Nx::Integer)
-        new(Vector{Float64}(undef, Nx), Vector{Float64}(undef, Nx))
-    end
+function ClassicalRK2LWTimeStepper(Nx::Integer)
+    ClassicalRK2LWTimeStepper(Vector{Float64}(undef, Nx), Vector{Float64}(undef, Nx))
 end
 
 function (crk2::ClassicalRK2LWTimeStepper)(eq::ScalarHyperbolicPDE{1}, pg::ParticleGrid1D, settings::SimSetting, time::Real, dt::Real)
@@ -178,18 +139,8 @@ function _max_abs_speed_classical(eq::ScalarHyperbolicPDE, u_L, u_R)
     return max(abs(vel_L), abs(vel_R))
 end
 
-
-mutable struct ClassicalRichtmyerLWMOOD{M <: MOODCriterion} <: FixedGridTimeStepper
-    mood::M
-    # --- Reusable Buffers (Workspace) ---
-    rho_n::Vector{Float64}
-    rho_candidate::Vector{Float64}
-    rho_predict_interface::Vector{Float64}
-    flux_predict::Vector{Float64}
-
-    function ClassicalRichtmyerLWMOOD(; mood::M = NoMOOD()) where {M <: MOODCriterion}
-        new{M}(mood, Float64[], Float64[], Float64[], Float64[])
-    end
+function ClassicalRichtmyerLWMOOD(; mood::M = NoMOOD()) where {M <: MOODCriterion}
+    ClassicalRichtmyerLWMOOD{M}(mood, Float64[], Float64[], Float64[], Float64[])
 end
 
 function initTimeStepper(cts_mood::ClassicalRichtmyerLWMOOD, pg::ParticleGrid, settings::SimSetting)

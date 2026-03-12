@@ -1,5 +1,3 @@
-export ParticleGrid, NeighborData, ReorderData, GridMetadata, ManagementData, ParticleGridCore, GridMover, NoGridMover, CustomGridMover, PhysicalGridMover
-
 mutable struct LocalVoxels
     num_bins::Int
     half_bins::Int
@@ -11,6 +9,34 @@ mutable struct LocalVoxels
         occupation = zeros(Bool, num_bins)
         new(num_bins, min_nb, voxel_size, occupation)
     end
+end
+
+## ------------------------------- Weight Functions -------------------------------
+abstract type MLSWeightFunction end
+
+"""
+    exponentialWeightFunction(alpha::Real, range::Real)
+
+Functor that calculates an exponential weight based on distance.
+The parameters `alpha` (shape parameter) and `range` (normalization distance)
+are stored directly in the struct.
+"""
+struct exponentialWeightFunction <: MLSWeightFunction
+    alpha::Float64
+    range::Float64
+    inv_range_sq::Float64
+end
+
+"""
+    inverseWeightFunction(alpha::Real=0.0, range::Real=0.0)
+
+Functor that calculates an inverse-square distance weight.
+The parameters `alpha` and `range` are included for a consistent
+interface but are not used in the calculation.
+"""
+struct inverseWeightFunction <: MLSWeightFunction
+    alpha::Float64
+    range::Float64
 end
 
 # ---------------------------------------------------------
@@ -97,12 +123,18 @@ mutable struct ParticleGrid{D, M, S, WF}
     shared::SharedBuffers{D, M}
     neighbor::NeighborData{D, S, WF}
     reorder::ReorderData{D}
-    manage::ManagementData{D}
+    manage::ManagementData{D,M}
     
     rhos::Matrix{Float64}
     mood_events::Matrix{Bool}
     curvatures::Matrix{Float64}
 end
+
+# --- Aliases for convenience ---
+const ParticleGrid1D{M, S, WF} = ParticleGrid{1, M, S, WF}
+const ParticleGrid2D{M, S, WF} = ParticleGrid{2, M, S, WF}
+
+
 
 abstract type GridMover end
 

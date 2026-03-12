@@ -1,23 +1,6 @@
-module ParticleGrids
-
-export ParticleGrid, ParticleGrid1D, ParticleGrid2D, getPeriodicDistance, saveGrid, plotDensity, 
-       animateDensity, getTimeStep, findLocalExtrema, updateVoxelInformation!, gridToLinearIndex, linearIndexToGrid, 
-       findneighboringVoxels, updateNeighbors!, getEuclideanDistance, logMOODEvents!, findLocalExtremaAbs, sort_1d_particles!,
-       determineVolumes!, getDistance, apply_boundary_conditions!, set_df!, getNBSlice, reorder_particles_for_locality!,
-       manage_particles!, sort_particles!
-
-using Random
-using LinearAlgebra
-using CellListMap
-using StaticArrays
-using Base.Threads # For Atomic operations
-using ProgressMeter
-using ..SimSettings
-using ..HyperbolicPDEs
-using ..MLSWeightFunctions
-
-export get_positions, get_weights, get_xdistance, get_ydistance, get_neighbors
-export ParticleGrid, GridMetadata, SharedBuffers, NeighborData, ReorderData, ManagementData, ParticleGridCore, createParticleGrid
+include("MLSWeightFunctions.jl")
+include("GridMovement.jl")
+include("ParticleManagement.jl")
 
 # 1D Intercept
 @inline get_positions(pg::ParticleGrid{1}) = reinterpret(Float64, pg.core.positions)
@@ -29,10 +12,6 @@ export ParticleGrid, GridMetadata, SharedBuffers, NeighborData, ReorderData, Man
 @inline get_xdistance(pg::ParticleGrid) = @inbounds view(pg.neighbor.data, :, 2)
 @inline get_ydistance(pg::ParticleGrid) = @inbounds view(pg.neighbor.data, :, 3)
 @inline get_neighbors(pg::ParticleGrid) = pg.neighbor.indices
-
-# --- Aliases for convenience ---
-const ParticleGrid1D{M, S, WF} = ParticleGrid{1, M, S, WF}
-const ParticleGrid2D{M, S, WF} = ParticleGrid{2, M, S, WF}
 
 function createParticleGrid(
     ::Val{1}, xmin::Real, xmax::Real, N_interior::Integer, bc::Symbol,
@@ -99,7 +78,7 @@ function createParticleGrid(
     min_nb = floor(Int, interp_range_factor)
     R = dx * interp_range_factor
     voxels = LocalVoxels(min_nb, R)
-    manage = ManagementData{1}(zeros(Bool,N), Int[], SVector{D, Float64}[], NTuple{M, Float64}[], voxels)
+    manage = ManagementData{1,M}(zeros(Bool,N), Int[], SVector{1, Float64}[], NTuple{M, Float64}[], voxels)
 
     pg = ParticleGrid{1, M, Nothing, typeof(weight_func)}(
         meta, core, shared, neighbor, reorder, manage,
@@ -163,7 +142,11 @@ function createParticleGrid(
         )
 
         reorder = ReorderData{2}(collect(1:N), collect(1:N), zeros(Int, N), zeros(Bool,N))
-        manage = ManagementData{2}(zeros(Bool,N), Int[])
+
+        min_nb = floor(Int, interp_range_factor)
+        R = max(dx_nominal,dy_nominal) * interp_range_factor
+        voxels = LocalVoxels(min_nb, R)
+        manage = ManagementData{2,M}(zeros(Bool,N), Int[], SVector{2, Float64}[], NTuple{M, Float64}[], voxels)
 
         return ParticleGrid{2, M, typeof(sys), typeof(weight_func)}(
             meta, core, shared, neighbors, reorder, manage,
@@ -720,7 +703,3 @@ function getTimeStep(pg::ParticleGrid{2}, eq)
     end
     return dtMax
 end
-
-include("ParticleManagement.jl")
-
-end  # module ParticleGrids

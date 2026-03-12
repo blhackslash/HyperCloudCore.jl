@@ -1,11 +1,3 @@
-module GridMovement
-
-using ..ParticleGrids
-using ..HyperbolicPDEs
-using StaticArrays
-
-export update_grid_velocities!, get_Lagrange_Correction, get_effective_vel
-
 function (gm::NoGridMover)(pg::ParticleGrid, dt::Real; managed=false)
     return
 end
@@ -142,5 +134,3 @@ function update_grid_velocities!(pg::ParticleGrid{D, M}, gm::PhysicalGridMover{B
         end
     end
 end
-
-end # module

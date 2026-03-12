@@ -1,6 +1,3 @@
-module CoreUtils
-using Logging
-
 export @pebug, DEBUG_TARGET_PARTICLE
 
 # 1. Define a global, type-stable Reference to hold our debug state.
@@ -48,6 +45,4 @@ macro pebug(p_idx, msg, args...)
             $(esc(debug_call))
         end
     end
-end
-
 end

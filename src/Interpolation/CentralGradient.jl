@@ -1,19 +1,11 @@
+function CentralGradient(order::Int, dimension::Int)
+    @assert order >= 1 "Order must be 1 or greater."       
 
+    interpolator = Interpolator{dimension, order, 1}()
+    I = typeof(interpolator)
 
-struct CentralGradient{D, I <: Interpolator} <: GradientInterpolator
-    order::Int
-    interpolator::I
-
-    function CentralGradient(order::Int, dimension::Int)
-        @assert order >= 1 "Order must be 1 or greater."       
-
-        interpolator = Interpolator{dimension, order, 1}()
-        I = typeof(interpolator)
-
-        new{dimension, I}(order, interpolator)
-    end
+    new{dimension, I}(order, interpolator)
 end
-
 # --- 4. Buffer Initialization Hooks (Adapted from Upwind.jl) ---
 
 """

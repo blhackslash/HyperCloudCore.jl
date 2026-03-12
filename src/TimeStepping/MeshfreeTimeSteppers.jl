@@ -1,13 +1,3 @@
-export EulerUpwind, Upwind, RalstonRK2, RK3, RK4, RalstonRK2Limiter, RalstonRK2SmoothSwitch, RalstonRK2SmoothSwitch2
-
-include("./TestUtils.jl")
-using Base.Threads
-# This assumes your ParticleGrid abstract type is accessible, e.g., via:
-# using ..ParticleGrids 
-
-# This function assumes that any timestepper `ts` you pass to it will have 
-# mutable fields `neighbor_fs::Vector{Float64}` and `neighbor_dfs::Vector{Float64}`.
-
 """
     initFs!(ts::MeshfreeTimeStepper, pg::ParticleGrid, fVec::AbstractVector)
 
@@ -42,6 +32,11 @@ function initAddTSBuffer!(eu::EulerUpwind, pg::ParticleGrid)
     _ensure_capacity!(eu.rhoInit, num_particles)
 end
 
+
+function EulerUpwind(gradientInterpolator::G1, gm::GM; fallbackInterpolator::G2 = NoFallbackGrad(), mood::M = NoMOOD()) where {G1 <: GradientInterpolator, G2 <: GradientInterpolator, M <: MOODCriterion, GM <: GridMover}
+    # Initialize with empty buffers
+    EulerUpwind{G1, G2, M, GM}(gradientInterpolator, fallbackInterpolator, mood, gm, Float64[], Float64[], Float64[])
+end
 
 """
 Functor for the EulerUpwind time stepper using the fused-loop structure.
@@ -124,7 +119,6 @@ function (eu::EulerUpwind)(
     end
     # --- 4. Final Boundary Conditions ---
     apply_boundary_conditions!(pg, pg.rhos)
-    
 end
 
 # """
@@ -246,32 +240,14 @@ function (ralston::RalstonRK2)(eq::ScalarHyperbolicPDE, pg::ParticleGrid{D, M, S
     
 end
 
-struct RK3{G1 <: GradientInterpolator, G2 <: GradientInterpolator, MOOD <: MOODCriterion} <: MeshfreeTimeStepper
-    gradientInterpolator::G1
-    fallbackInterpolator::G2
-    mood::MOOD
-    
-    # --- Reusable Buffers (Workspace) ---
-    rho_n::Vector{Float64}      # Stores the solution at the start of the step
-    rho_stage1::Vector{Float64} # Stores the result of the first stage
-    rho_stage2::Vector{Float64} # Stores the result of the second stage
-    
-    div1::Vector{Float64} # Stores divergence from stage 1
-    div2::Vector{Float64} # Stores divergence from stage 2
-    div3::Vector{Float64} # Stores divergence from stage 3
-
-    # --- Buffers for efficient calculations (like in RK4) ---
-    neighbor_fs::Vector{Float64}
-    neighbor_dfs::Vector{Float64}
-
-    function RK3(grad::G1, fallback::G2, mood::M) where {G1, G2, M}
-        new{G1, G2, M}(grad, fallback, mood, 
-            Float64[], Float64[], Float64[], # rho_n, rho_stage1, rho_stage2
-            Float64[], Float64[], Float64[], # div1, div2, div3
-            Float64[], Float64[]  # neighbor_fs, neighbor_dfs
-        )
-    end
+function RK3(grad::G1, fallback::G2, mood::M) where {G1, G2, M}
+    RK3{G1, G2, M}(grad, fallback, mood, 
+        Float64[], Float64[], Float64[], # rho_n, rho_stage1, rho_stage2
+        Float64[], Float64[], Float64[], # div1, div2, div3
+        Float64[], Float64[]  # neighbor_fs, neighbor_dfs
+    )
 end
+
 # --- User-Friendly Constructor ---
 function RK3(gradientInterpolator::G1; fallbackInterpolator::G2 = NoFallbackGrad(), mood::M = NoMOOD()) where {G1, G2, M}
     RK3(gradientInterpolator, fallbackInterpolator, mood)
@@ -434,31 +410,12 @@ function (rk3::RK3)(eq::ScalarHyperbolicPDE, pg::ParticleGrid, settings::SimSett
     
 end
 
-struct RK4{G1, G2, MOOD} <: MeshfreeTimeStepper
-    gradientInterpolator::G1
-    fallbackInterpolator::G2
-    mood::MOOD
-    
-    # --- Reusable Buffers (Workspace) ---
-    rho_n::Vector{Float64}
-    rho_stage::Vector{Float64} # A single buffer for all intermediate stages
-    
-    k1::Vector{Float64} # Stores divergence from stage 1
-    k2::Vector{Float64} # Stores divergence from stage 2
-    k3::Vector{Float64} # Stores divergence from stage 3
-    k4::Vector{Float64} # Stores divergence from stage 4
-
-    # --- Buffers for efficient calculations (like in RK2) ---
-    neighbor_fs::Vector{Float64}
-    neighbor_dfs::Vector{Float64}
-
-    function RK4(grad::G1, fallback::G2, mood::M) where {G1, G2, M}
-        new{G1, G2, M}(grad, fallback, mood, 
-            Float64[], Float64[], # rho_n, rho_stage
-            Float64[], Float64[], Float64[], Float64[], # k1-k4
-            Float64[], Float64[]  # neighbor_fs, neighbor_dfs
-        )
-    end
+function RK4(grad::G1, fallback::G2, mood::M) where {G1, G2, M}
+    RK4{G1, G2, M}(grad, fallback, mood, 
+        Float64[], Float64[], # rho_n, rho_stage
+        Float64[], Float64[], Float64[], Float64[], # k1-k4
+        Float64[], Float64[]  # neighbor_fs, neighbor_dfs
+    )
 end
 
 # --- User-Friendly Constructor ---
@@ -657,39 +614,13 @@ function (rk4::RK4)(eq::ScalarHyperbolicPDE, pg::ParticleGrid, settings::SimSett
     
 end
 
-
-
-struct RalstonRK2SmoothSwitch{G1, G2, MOOD} <: MeshfreeTimeStepper
-    gradientInterpolator::G1
-    fallbackInterpolator::G2
-    mood::MOOD
-    tol::Float64
-    
-    # --- Reusable Buffers (Workspace) ---
-    rho_n::Vector{Float64}
-    rho_stage::Vector{Float64}
-    rho_fallback::Vector{Float64}
-    div1::Vector{Float64}
-    
-    # --- Propagation Buffers ---
-    mood_indices::Vector{Int}
-    prop_indices::Vector{Int}
-    
-    # Per-step flag to track which particles have been switched to fallback
-    switched_to_fallback::BitVector
-
-    # --- Buffers for efficient calculations (like in RK4) ---
-    neighbor_fs::Vector{Float64}
-    neighbor_dfs::Vector{Float64}
-
-    function RalstonRK2SmoothSwitch(grad::G1, fallback::G2, mood::M; tol=1e-7) where {G1, G2, M}
-        new{G1, G2, M}(grad, fallback, mood, tol,
-            Float64[], Float64[], Float64[], Float64[], # Main buffers
-            Int[], Int[], # Propagation buffers
-            falses(0),    # Flag buffer
-            Float64[], Float64[] # neighbor_fs, neighbor_dfs
-        )
-    end
+function RalstonRK2SmoothSwitch(grad::G1, fallback::G2, mood::M; tol=1e-7) where {G1, G2, M}
+    RalstonRK2SmoothSwitch{G1, G2, M}(grad, fallback, mood, tol,
+        Float64[], Float64[], Float64[], Float64[], # Main buffers
+        Int[], Int[], # Propagation buffers
+        falses(0),    # Flag buffer
+        Float64[], Float64[] # neighbor_fs, neighbor_dfs
+    )
 end
 
 # --- User-Friendly Constructor ---

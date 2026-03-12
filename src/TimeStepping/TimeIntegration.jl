@@ -1,23 +1,3 @@
-module TimeIntegration
-
-using LinearAlgebra
-using ProgressMeter
-using StaticArrays
-using Base.Threads
-using ..CoreUtils
-using ..ParticleGrids
-using ..SimSettings
-using ..HyperbolicPDEs
-using ..Interpolations
-using ..SourceTerms
-using ..ImplicitSolvers
-using ..MOOD
-using ..MLSWeightFunctions
-using ..GridMovement
-
-export mainTimeIntegrator!
-
-
 function (method::TimeStepper)(eq, pg, settings, time, dt)
     error("Each `TimeStepper' must override the ()-operator.")
 end
@@ -45,6 +25,11 @@ end
 
 include("MeshfreeTimeSteppers.jl")
 include("FixedGridTimeSteppers.jl")
+
+
+include("ButcherTableaus.jl")
+include("SourceTerms.jl")
+include("ImplicitSolvers.jl")
 include("MeshfreeSystemTimeSteppers.jl")
 
 # --- Low-Level `saveData!` Helpers ---
@@ -163,5 +148,3 @@ function mainTimeIntegrator!(
     num_saved = snap_counter - 1
     return elapsed_time, xs[1:num_saved], us[1:num_saved], ts[1:num_saved]
 end
-
-end  # module TimeIntegration
