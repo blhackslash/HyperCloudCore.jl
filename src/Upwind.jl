@@ -121,52 +121,47 @@ function ensure_capacity!(ws::UpwindWorkspaceCA, n::Int)
     _ensure_capacity!(ws.dfVec, n)
     _ensure_capacity!(ws.wVec, n)
 end
-struct UpwindGradient{D, WS <: UpwindWorkspace, I <: Interpolator, Algorithm <: UpwindAlgorithm} <: GradientInterpolator
-    order::Int
-    numericalFlux::NumericalFluxFunction
-    workspaces::Vector{WS}
-    interpolator::I
-    # --- Modify the UpwindGradient Constructor ---
-    function UpwindGradient(order, dimension; numericalFlux::NumericalFluxFunction=UpwindFlux(), algType::String="Classic")
-        @assert order >= 1 "Order must be larger or equal to one."
-        
-        local alg_type
-        local WS_eltype::Type 
-        
-        if algType == "Classic"
-            alg_type = ClassicAlgorithm
-            WS_eltype = UpwindWorkspaceCA 
-        elseif algType == "Tiwari"
-            alg_type = TiwariAlgorithm
-            WS_eltype = UpwindWorkspaceTA 
-        elseif algType == "Praveen"
-            alg_type = PraveenAlgorithm # <-- NEW
-            WS_eltype = UpwindWorkspacePA # <-- NEW
-            @assert order == 1
-        elseif algType == "Decomposition" # <-- ADD THIS CASE
-            alg_type = DecompositionAlgorithm
-            WS_eltype = UpwindWorkspaceCA
-            @assert dimension == 2 "DecompositionAlgorithm is for 2D only."
-            @assert order == 1 "DecompositionAlgorithm currently only supports order 1."
-        else
-            error("Algorithm type $algType not fully configured for workspace selection.")
-        end
 
-        n_threads = Threads.nthreads()
-        workspaces = [WS_eltype(100) for _ in 1:n_threads] 
 
-        local interpolator
-        if algType == "Decomposition"
-            # This algorithm is 2D, but it MUST use a 1D interpolator
-            interpolator = Interpolator{1, order, 1}()
-        else
-            # Default behavior
-            interpolator = Interpolator{dimension, order, 1}()
-        end
-        I = typeof(interpolator)
-
-        new{dimension, WS_eltype, I, alg_type}(order, numericalFlux, workspaces, interpolator)
+function UpwindGradient(order, dimension; numericalFlux::NumericalFluxFunction=UpwindFlux(), algType::String="Classic")
+    @assert order >= 1 "Order must be larger or equal to one."
+    
+    local alg_type
+    local WS_eltype::Type 
+    
+    if algType == "Classic"
+        alg_type = ClassicAlgorithm
+        WS_eltype = UpwindWorkspaceCA 
+    elseif algType == "Tiwari"
+        alg_type = TiwariAlgorithm
+        WS_eltype = UpwindWorkspaceTA 
+    elseif algType == "Praveen"
+        alg_type = PraveenAlgorithm # <-- NEW
+        WS_eltype = UpwindWorkspacePA # <-- NEW
+        @assert order == 1
+    elseif algType == "Decomposition" # <-- ADD THIS CASE
+        alg_type = DecompositionAlgorithm
+        WS_eltype = UpwindWorkspaceCA
+        @assert dimension == 2 "DecompositionAlgorithm is for 2D only."
+        @assert order == 1 "DecompositionAlgorithm currently only supports order 1."
+    else
+        error("Algorithm type $algType not fully configured for workspace selection.")
     end
+
+    n_threads = Threads.nthreads()
+    workspaces = [WS_eltype(100) for _ in 1:n_threads] 
+
+    local interpolator
+    if algType == "Decomposition"
+        # This algorithm is 2D, but it MUST use a 1D interpolator
+        interpolator = Interpolator{1, order, 1}()
+    else
+        # Default behavior
+        interpolator = Interpolator{dimension, order, 1}()
+    end
+    I = typeof(interpolator)
+
+    UpwindGradient{dimension, WS_eltype, I, alg_type}(order, numericalFlux, workspaces, interpolator)
 end
 
 # Uses the simple _ensure_capacity! helper from your code

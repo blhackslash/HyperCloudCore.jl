@@ -19,94 +19,6 @@ using ..MLSWeightFunctions
 export get_positions, get_weights, get_xdistance, get_ydistance, get_neighbors
 export ParticleGrid, GridMetadata, SharedBuffers, NeighborData, ReorderData, ManagementData, ParticleGridCore, createParticleGrid
 
-# ---------------------------------------------------------
-# 1. Grid Metadata
-# ---------------------------------------------------------
-mutable struct GridMetadata{D}
-    N::Int                  
-    N_interior::Int         
-    N_ghost::Int            
-    mins::SVector{D, Float64}
-    maxs::SVector{D, Float64}
-    h::Float64              
-    dx::SVector{D, Float64} 
-    regular::Bool
-    bc::Symbol              
-    range_factor::Float64
-    max_nb::Int       
-end
-
-# ---------------------------------------------------------
-# 2. Shared Workspace Buffers
-# ---------------------------------------------------------
-mutable struct SharedBuffers{D, M}
-    rho_buffer::Matrix{Float64}      
-    pos_buffer::Vector{SVector{D, Float64}} 
-    bit_buffer::Vector{Bool}
-    int_buffer::Vector{Int}
-end
-
-# ---------------------------------------------------------
-# 3. Neighbor Search Context
-# ---------------------------------------------------------
-mutable struct NeighborData{D, S, WF}
-    system::S      
-    weight_func::WF
-
-    # CSR format using native UnitRanges
-    ranges::Vector{UnitRange{Int}}
-    indices::Vector{Int}
-    
-    # Matrix holding (Weight, dx, [dy, dz])
-    data::Matrix{Float64} 
-
-    atomic_counts::Vector{Atomic{Int}}
-    atomic_offsets::Vector{Atomic{Int}}
-end
-
-# ---------------------------------------------------------
-# 4. Reordering / Sorting Context
-# ---------------------------------------------------------
-struct ReorderData{D}
-    permutation::Vector{Int}          
-    inv_permutation::Vector{Int}      
-    new_permutation_buffer::Vector{Int} 
-    seen_buffer::Vector{Bool}            
-end
-
-# ---------------------------------------------------------
-# 5. Particle Management Context
-# ---------------------------------------------------------
-struct ManagementData{D}
-    merge_flags::Vector{Bool}
-    split_targets::Vector{Int}
-end
-
-# ---------------------------------------------------------
-# 6. Particle Grid Core (Geometry & Topology)
-# ---------------------------------------------------------
-mutable struct ParticleGridCore{D}
-    positions::Vector{SVector{D, Float64}}
-    is_boundary::Vector{Bool}
-    volumes::Vector{Float64}
-end
-
-# ---------------------------------------------------------
-# 7. The Top-Level Particle Grid
-# ---------------------------------------------------------
-mutable struct ParticleGrid{D, M, S, WF}
-    meta::GridMetadata{D}
-    core::ParticleGridCore{D}
-    shared::SharedBuffers{D, M}
-    neighbor::NeighborData{D, S, WF}
-    reorder::ReorderData{D}
-    manage::ManagementData{D}
-    
-    rhos::Matrix{Float64}
-    mood_events::Matrix{Bool}
-    curvatures::Matrix{Float64}
-end
-
 # 1D Intercept
 @inline get_positions(pg::ParticleGrid{1}) = reinterpret(Float64, pg.core.positions)
 # 2D Normal Access
@@ -183,7 +95,11 @@ function createParticleGrid(
 
     permutation = collect(1:N)
     reorder = ReorderData{1}(permutation, copy(permutation), zeros(Int, N), zeros(Bool,N))
-    manage = ManagementData{1}(zeros(Bool,N), Int[])
+
+    min_nb = floor(Int, interp_range_factor)
+    R = dx * interp_range_factor
+    voxels = LocalVoxels(min_nb, R)
+    manage = ManagementData{1}(zeros(Bool,N), Int[], SVector{D, Float64}[], NTuple{M, Float64}[], voxels)
 
     pg = ParticleGrid{1, M, Nothing, typeof(weight_func)}(
         meta, core, shared, neighbor, reorder, manage,
@@ -284,20 +200,6 @@ function createParticleGrid(
     pg.reorder(pg)
     pg.neighbor(pg)
     return pg
-end
-
-mutable struct LocalVoxels
-    num_bins::Int
-    half_bins::Int
-    voxel_size::Float64
-    occupation::Vector{Bool}
-
-    function LocalVoxels(min_nb::Int, R::Float64)
-        num_bins = 2 * min_nb + 1
-        voxel_size = (2.0 * R) / num_bins
-        occupation = zeros(Bool, num_bins)
-        new(num_bins, min_nb, voxel_size, occupation)
-    end
 end
 
 # Extractor simply returns the cached UnitRange

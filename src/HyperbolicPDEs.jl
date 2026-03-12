@@ -3,7 +3,8 @@ using ..CoreUtils
 
 export ScalarHyperbolicPDE, LinearAdvection, BurgersEquation, BurgersEquation2D, TestU3Equation,
        velocity, flux, HyperbolicPDESystem, Euler1D, Euler2D, pressure_from_euler_conserved,
-       HyperbolicPDE, n_dimensions, DiagonalHyperbolicSystem, path_integral, LEuler1D, LinePath
+       HyperbolicPDE, n_dimensions, DiagonalHyperbolicSystem, path_integral, LEuler1D, LinePath,
+       prim2cons, cons2prim
 
 abstract type DifferentialOrder end
 struct Order0 <: DifferentialOrder end
@@ -250,14 +251,23 @@ This version is specialized for N-component systems to ensure zero allocation.
     if maximum(abs.(integral)) > 1000; error("Integral too large!") end
     return integral
 end
+
+@inline function prim2cons(eq, U)
+    return U
+end
+
+@inline function cons2prim(eq, U)
+    return U
+end
+
 # Add these helpers to convert between states
-@inline function primitive_to_conservative(U::Tuple)
+@inline function prim2cons(::LEuler1D{P}, U::Tuple) where {P}
     rho, u, p = U
     E = p / (GAS_GAMMA_EULER - 1.0) + 0.5 * rho * u^2
     return (rho, rho * u, E)
 end
 
-@inline function conservative_to_primitive(W::Tuple)
+@inline function cons2prim(::LEuler1D{P}, W::Tuple) where {P}
     rho, m, E = W
     safe_rho = max(rho, 1e-7)
     u = m / safe_rho
@@ -270,8 +280,8 @@ end
     nodes, weights = gauss_lobatto_5() 
     
     # 1. Convert endpoints to Conservative variables
-    wL = primitive_to_conservative(uL)
-    wR = primitive_to_conservative(uR)
+    wL = prim2cons(eq, uL)
+    wR = prim2cons(eq, uR)
 
     integral = (0.0, 0.0, 0.0)
 
@@ -290,8 +300,8 @@ end
         eps_fd = 1e-6
         w_s_plus = ntuple(k -> w_s[k] + eps_fd * dw_s[k], Val(3))
         
-        U_s = conservative_to_primitive(w_s)
-        U_s_plus = conservative_to_primitive(w_s_plus)
+        U_s = cons2prim(eq,w_s)
+        U_s_plus = cons2prim(eq,w_s_plus)
         dU_s = ntuple(k -> (U_s_plus[k] - U_s[k]) / eps_fd, Val(3))
         
         # 4. Calculate the non-conservative product using the mapped path

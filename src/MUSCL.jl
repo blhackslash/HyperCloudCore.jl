@@ -1,19 +1,5 @@
-export MUSCLORDER, MUSCLORDER1, MUSCLORDER2, MUSCLORDER3, MUSCLORDER4, AbstractSlopeLimiter, BarthJespersenLimiter, VenkatakrishnanLimiter, SuperbeeLimiter, MinmodLimiter, NoLimiter
 
-abstract type MUSCLORDER end
-struct MUSCLORDER0 <: MUSCLORDER end
-struct MUSCLORDER1 <: MUSCLORDER end
-struct MUSCLORDER2 <: MUSCLORDER end
-struct MUSCLORDER3 <: MUSCLORDER end
-struct MUSCLORDER4 <: MUSCLORDER end
 
-abstract type AbstractSlopeLimiter end
-abstract type RealSlopeLimiter <: AbstractSlopeLimiter end
-struct BarthJespersenLimiter <: RealSlopeLimiter end
-struct VenkatakrishnanLimiter <: RealSlopeLimiter end
-struct SuperbeeLimiter <: RealSlopeLimiter end
-struct MinmodLimiter <: RealSlopeLimiter end
-struct NoLimiter <: AbstractSlopeLimiter end
 
 # --- In Interpolations.jl, near your other interpolator definitions ---
 
@@ -88,154 +74,65 @@ struct MUSCLWorkspace1D2O <: MUSCLWorkspace1D
     end
 end
 
-"""
-Workspace for 1D, 3rd Order MUSCL.
-Includes thread-local buffers for stable QR decomposition.
-"""
-struct MUSCLWorkspace1D3O <: MUSCLWorkspace1D
-    # --- Coeffs ---
-    alfaijs::Vector{Float64}     # for d3 [cite: 9]
-    alfaij_bars::Vector{Float64} # for d1 [cite: 9]
-    betaijs::Vector{Float64}     # for d2 [cite: 9]
-    
-    # --- Derivatives ---
-    slopes::Vector{Float64}
-    curves_xx::Vector{Float64}
-    d3fdx3::Vector{Float64}
 
-    # --- Thread-Local Temporary Buffers (for MGS QR) ---
-    # One M x 3 matrix per thread
-    #thread_Q_buffers::Vector{Matrix{Float64}} 
 
-    function MUSCLWorkspace1D3O(
-        initial_particle_cap::Int = 100, 
-        initial_flat_cap::Int = 1000,
-        initial_neighbor_cap::Int = 30 # Max neighbors for temp buffer
+function MUSCLWorkspace1D3O(
+    initial_particle_cap::Int = 100, 
+    initial_flat_cap::Int = 1000,
+    initial_neighbor_cap::Int = 30 # Max neighbors for temp buffer
+)
+
+    MUSCLWorkspace1D3O(
+        zeros(initial_flat_cap), zeros(initial_flat_cap), zeros(initial_flat_cap), # [cite: 10]
+        zeros(initial_particle_cap), zeros(initial_particle_cap), zeros(initial_particle_cap), # [cite: 10]
+        #thread_Q_buffers
     )
-        # # Create one Q_buffer for each thread
-        # n_threads = Threads.nthreads()
-        # thread_Q_buffers = [
-        #     zeros(Float64, initial_neighbor_cap, 3) for _ in 1:n_threads
-        # ]
-
-        new(
-            zeros(initial_flat_cap), zeros(initial_flat_cap), zeros(initial_flat_cap), # [cite: 10]
-            zeros(initial_particle_cap), zeros(initial_particle_cap), zeros(initial_particle_cap), # [cite: 10]
-            #thread_Q_buffers
-        )
-    end
 end
 
-"""
-Workspace for 1D, 4th Order MUSCL.
-"""
-struct MUSCLWorkspace1D4O <: MUSCLWorkspace1D
-    # --- Coeffs ---
-    alfaijs::Vector{Float64}     # for d3
-    alfaij_bars::Vector{Float64} # for d1
-    betaijs::Vector{Float64}     # for d2
-    gammaijs::Vector{Float64}    # for d4
-    
-    # --- Derivatives ---
-    slopes::Vector{Float64}
-    curves_xx::Vector{Float64}
-    d3fdx3::Vector{Float64}
-    d4fdx4::Vector{Float64} # Field for 4th derivative
-
-    function MUSCLWorkspace1D4O(
-        initial_particle_cap::Int = 100, 
-        initial_flat_cap::Int = 1000
+function MUSCLWorkspace1D4O(
+    initial_particle_cap::Int = 100, 
+    initial_flat_cap::Int = 1000
+)
+    MUSCLWorkspace1D4O(
+        zeros(initial_flat_cap), zeros(initial_flat_cap), 
+        zeros(initial_flat_cap), zeros(initial_flat_cap),
+        zeros(initial_particle_cap), zeros(initial_particle_cap), 
+        zeros(initial_particle_cap), zeros(initial_particle_cap)
     )
-        new(
-            zeros(initial_flat_cap), zeros(initial_flat_cap), 
-            zeros(initial_flat_cap), zeros(initial_flat_cap),
-            zeros(initial_particle_cap), zeros(initial_particle_cap), 
-            zeros(initial_particle_cap), zeros(initial_particle_cap)
-        )
-    end
 end
 
-# --- NEW: 2D Workspaces split by order ---
-abstract type MUSCLWorkspace2D <: MUSCLWorkspace end
 
-# 2D Workspace for Order 0
-struct MUSCLWorkspace2D0O <: MUSCLWorkspace2D
-    # Only stores geometric coefficients for divergence
-    alfaijs::Vector{Float64}
-    betaijs::Vector{Float64}
 
-    function MUSCLWorkspace2D0O(initial_flat_cap::Int = 1000)
-        new(zeros(initial_flat_cap), zeros(initial_flat_cap))
-    end
+function MUSCLWorkspace2D0O(initial_flat_cap::Int = 1000)
+    MUSCLWorkspace2D0O(zeros(initial_flat_cap), zeros(initial_flat_cap))
 end
 
-"""
-Workspace for 2D, 1st Order MUSCL.
-Contains flat buffers for coefficients and per-particle slope storage.
-"""
-struct MUSCLWorkspace2D1O <: MUSCLWorkspace2D
-    # --- FLATTENED per-interaction coefficient storage ---
-    alfaijs::Vector{Float64}
-    betaijs::Vector{Float64}
 
-    # --- PER-PARTICLE slope storage (already flat) ---
-    slopes_x::Vector{Float64}
-    
-    slopes_y::Vector{Float64}
 
-    function MUSCLWorkspace2D1O(
-        initial_particle_cap::Int = 100, 
-        initial_flat_cap::Int = 1000 # Capacity for total interactions
-    )
+function MUSCLWorkspace2D1O(
+    initial_particle_cap::Int = 100, 
+    initial_flat_cap::Int = 1000 # Capacity for total interactions
+)
     
-new(
+    MUSCLWorkspace2D1O(
             zeros(initial_flat_cap), zeros(initial_flat_cap), # alfaijs, betaijs
             zeros(initial_particle_cap), zeros(initial_particle_cap) # slopes_x, slopes_y
         )
-    end
 end
 
-"""
-Workspace for 2D, 2nd Order MUSCL.
-Contains extended flat buffers for coefficients, per-particle derivative storage,
-and a temporary matrix buffer for the pseudo-inverse calculation.
-"""
-struct MUSCLWorkspace2D2O <: MUSCLWorkspace2D
-    # --- FLATTENED per-interaction coefficient storage ---
-    alfaijs::Vector{Float64}     # for fx
-    betaijs::Vector{Float64}     # for fy
-    alfaij_bars::Vector{Float64} # for fxx
-    betaij_bars::Vector{Float64} # for fyy
-    gammaijs::Vector{Float64}    # for fxy
 
-    # --- PER-PARTICLE derivative storage (already flat) ---
-    slopes_x::Vector{Float64}
-    slopes_y::Vector{Float64}
-    curves_xx::Vector{Float64} 
-    curves_yy::Vector{Float64} 
-    curves_xy::Vector{Float64} 
-
-    function MUSCLWorkspace2D2O(
-        initial_particle_cap::Int = 100, 
-        initial_neighbor_cap::Int = 20, # Max neighbors for temp A_buffer
-        initial_flat_cap::Int = 1000 # Capacity for total interactions
-    )
-        
-        # Create one A_buffer for each thread
-        n_threads = Threads.nthreads()
-        thread_buffers = [
-            zeros(Float64, initial_neighbor_cap, 5) for _ in 1:n_threads
-        ]
-
-new(
-            zeros(initial_flat_cap), zeros(initial_flat_cap), # alfaijs, betaijs
-            zeros(initial_flat_cap), zeros(initial_flat_cap), # alfaij_bars, betaij_bars
-            zeros(initial_flat_cap), # gammaijs
-            zeros(initial_particle_cap), zeros(initial_particle_cap), # slopes_x, slopes_y
-            zeros(initial_particle_cap), zeros(initial_particle_cap), # curves_xx, curves_yy
-            zeros(initial_particle_cap), # curves_xy
-        )
-    end
+function MUSCLWorkspace2D2O(
+    initial_particle_cap::Int = 100, 
+    initial_flat_cap::Int = 1000 # Capacity for total interactions
+)
+MUSCLWorkspace2D2O(
+        zeros(initial_flat_cap), zeros(initial_flat_cap), # alfaijs, betaijs
+        zeros(initial_flat_cap), zeros(initial_flat_cap), # alfaij_bars, betaij_bars
+        zeros(initial_flat_cap), # gammaijs
+        zeros(initial_particle_cap), zeros(initial_particle_cap), # slopes_x, slopes_y
+        zeros(initial_particle_cap), zeros(initial_particle_cap), # curves_xx, curves_yy
+        zeros(initial_particle_cap), # curves_xy
+    ) 
 end
 
 """
@@ -376,15 +273,6 @@ function ensure_capacity!(ws::MUSCLWorkspace2D1O, n::Int)
     return nothing # No temp buffers to resize
 end
 
-
-struct MUSCL{D,ORDER<:MUSCLORDER, L<:AbstractSlopeLimiter, NFF <: NumericalFluxFunction, WS<:MUSCLWorkspace, M<:MOODCriterion} <: GradientInterpolator
-    order::ORDER
-    limiter::L
-    res::Vector{Float64}
-    numericalFlux::NFF
-    workspace::WS
-    mood::M
-end
 # --- In MUSCL.jl, replace the old Constructor ---
 
 function MUSCL(

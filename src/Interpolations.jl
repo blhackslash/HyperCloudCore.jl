@@ -11,22 +11,11 @@ using ..Meshfree4ScalarEq.MLSWeightFunctions
 using ..Meshfree4ScalarEq.MOOD
 using ..InterpolationUtils
 
-export functionInterpolation!, gradInterpolation!, setCurvatures!, GradientInterpolator, initTimeStep, UpwindGradient, CentralGradient, WENO, MUSCL, AxelMUSCL, DumbserWENO, getStencil, LaxFriedrichsGradient, MUSCLlimited,
-    NoFallbackGrad, initGI!, initGIBuffers!
+export functionInterpolation!, gradInterpolation!, setCurvatures!, initTimeStep, getStencil, LaxFriedrichsGradient,
+     initGI!, initGIBuffers!
 
 
-"""
-    GradientInterpolator
-
-In case of unstructured grids, the spatial gradient is approximated using a moving least squares (MLS) method based on Taylor polynomials.
-These algorithms are implemented as follows. Each method is a struct that is a subtype of GradientInterpolator. The gradient 
-at a gridpoint can then be computed using the ()-operator; see for example UpwindGradient and CentralGradient. These objects select
-the correct stencil and then call the MLS routine (gradInterpolation).
-"""
-abstract type GradientInterpolator end
-
-# Fallback Gradient interpolator for no fallback
-struct NoFallbackGrad <: GradientInterpolator end
+include("InterpolationUtils.jl")
 
 function initGI!(::NoFallbackGrad, kwargs...)
     return

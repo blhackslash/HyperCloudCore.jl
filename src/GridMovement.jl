@@ -4,14 +4,7 @@ using ..ParticleGrids
 using ..HyperbolicPDEs
 using StaticArrays
 
-export GridMover, NoGridMover, CustomGridMover, PhysicalGridMover, update_grid_velocities!, get_Lagrange_Correction, get_effective_vel
-
-abstract type GridMover end
-
-# ---------------------------------------------------------
-# 1. NoGridMover
-# ---------------------------------------------------------
-struct NoGridMover <: GridMover end
+export update_grid_velocities!, get_Lagrange_Correction, get_effective_vel
 
 function (gm::NoGridMover)(pg::ParticleGrid, dt::Real; managed=false)
     return
@@ -19,14 +12,6 @@ end
 
 function update_grid_velocities!(pg::ParticleGrid, ::NoGridMover)
     return
-end
-
-# ---------------------------------------------------------
-# 2. CustomGridMover
-# ---------------------------------------------------------
-struct CustomGridMover{F, P} <: GridMover
-    vel_func::F
-    params::P
 end
 
 function (gm::CustomGridMover)(pg::ParticleGrid{D, M}, dt::Real; managed=true) where {D, M}
@@ -54,26 +39,6 @@ end
 
 function update_grid_velocities!(pg::ParticleGrid, ::CustomGridMover)
     return
-end
-
-# ---------------------------------------------------------
-# 3. PhysicalGridMover
-# ---------------------------------------------------------
-mutable struct PhysicalGridMover{E, I, V, D} <: GridMover
-    pde::E
-    interpolator::I
-    vel_kinetic_indices::V                       # Indices of the driving kinetic variables
-    grid_velocities::Vector{SVector{D, Float64}} # Pre-allocated workspace buffer
-
-    # Constructor 1: For Scalar Equations (No indices needed)
-    function PhysicalGridMover(pde::E, interp::I) where {E, I}
-        new{E, I, Nothing, 1}(pde, interp, nothing, Vector{SVector{1, Float64}}(undef, 0))
-    end
-
-    # Constructor 2: For Systems (Takes driving indices and Dimension)
-    function PhysicalGridMover(pde::E, interp::I, vel_indices::V, ::Val{D}) where {E, I, V, D}
-        new{E, I, V, D}(pde, interp, vel_indices, Vector{SVector{D, Float64}}(undef, 0))
-    end
 end
 
 # --- 3a. SCALAR PDE MOVEMENTS (Inline Updates, No Buffer Needed) ---

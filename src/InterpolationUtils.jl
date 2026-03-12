@@ -1,17 +1,3 @@
-module InterpolationUtils
-
-export Interpolator
-
-using LinearAlgebra # For dot, pinv
-
-struct Interpolator{D, IO, DO}
-
-    function Interpolator{D, IO, DO}() where {D, IO, DO}
-        new{D, IO, DO}()
-    end
-end
-
-### Bufferless versions
 
 function (interp::Interpolator{1, 0, 0})(
     nb_slice::UnitRange{Int},
@@ -425,6 +411,4 @@ function (interp::Interpolator{2, 2, 1})(
         c4_s * invL2, # c4 = c'4 / L^2
         c5_s * invL2  # c5 = c'5 / L^2
     )
-end
-
 end

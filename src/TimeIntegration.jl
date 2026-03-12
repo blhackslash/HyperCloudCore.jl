@@ -17,10 +17,6 @@ using ..GridMovement
 
 export mainTimeIntegrator!
 
-abstract type TimeStepper end
-abstract type MeshfreeTimeStepper <: TimeStepper end
-abstract type FixedGridTimeStepper <: TimeStepper end
-abstract type MeshfreeSystemTimeStepper <: MeshfreeTimeStepper end
 
 function (method::TimeStepper)(eq, pg, settings, time, dt)
     error("Each `TimeStepper' must override the ()-operator.")

@@ -6,21 +6,6 @@ function initGI!(weno::WENOGI, kwargs...)
     return
 end
 
-struct WENOWorkspace1D <: WENOWorkspace
-    # Scratch space for one-sided stencil calculations
-    dx_stencil::Vector{Float64}
-    df_stencil::Vector{Float64}
-    w_stencil::Vector{Float64}
-
-    function WENOWorkspace1D(max_neighbors::Int=30)
-        new(
-            Vector{Float64}(undef, max_neighbors),
-            Vector{Float64}(undef, max_neighbors),
-            Vector{Float64}(undef, max_neighbors)
-        )
-    end
-end
-
 # --- 2. ensure_capacity! (Simplified) ---
 # This now only needs to resize the scratch buffers.
 function ensure_capacity!(ws::WENOWorkspace1D, n::Int)
@@ -30,28 +15,6 @@ function ensure_capacity!(ws::WENOWorkspace1D, n::Int)
     end
     return nothing
 end
-
-"""
-A minimal, thread-local workspace for the 2D WENO algorithm.
-Holds a single set of "scratch" buffers to build stencils in.
-"""
-struct WENOWorkspace2D <: WENOWorkspace
-    # Scratch space for stencil calculations
-    dx_stencil::Vector{Float64}
-    dy_stencil::Vector{Float64}
-    df_stencil::Vector{Float64}
-    w_stencil::Vector{Float64}
-
-    function WENOWorkspace2D(max_neighbors::Int=30)
-        new(
-            Vector{Float64}(undef, max_neighbors),
-            Vector{Float64}(undef, max_neighbors),
-            Vector{Float64}(undef, max_neighbors),
-            Vector{Float64}(undef, max_neighbors)
-        )
-    end
-end
-
 
 
 """
@@ -65,32 +28,24 @@ function ensure_capacity!(ws::WENOWorkspace2D, n::Int)
     return nothing
 end
 
-"""
-Refactored WENO struct to hold thread-local workspaces.
-"""
-struct WENO{D,WS <: WENOWorkspace, I <: Interpolator, NFF <: NumericalFluxFunction} <: WENOGI
-    order::Int
-    workspaces::Vector{WS}
-    interpolator::I
-    numericalFlux::NFF
 
-    function WENO(order::Int, dimension::Int; numericalFlux::NumericalFluxFunction = RusanovFlux())
-        @assert order >= 2 "WENO requires order >= 2 for second derivatives."
-        
-        # Determine the workspace type based on dimension
-        WS_eltype = dimension == 1 ? WENOWorkspace1D : WENOWorkspace2D
-        
-        # --- NEW: Create a workspace for each thread ---
-        n_threads = Threads.nthreads()
-        workspaces = [WS_eltype() for _ in 1:n_threads]
-        # --- END NEW ---
-        
-        interpolator = Interpolator{dimension, order, 1}() 
-        I = typeof(interpolator)
-        
-        # Note: The struct parameter WS is WS_eltype (e.g., WENOWorkspace2D)
-        new{dimension, WS_eltype, I, typeof(numericalFlux)}(order, workspaces, interpolator, numericalFlux)
-    end
+
+function WENO(order::Int, dimension::Int; numericalFlux::NumericalFluxFunction = RusanovFlux())
+    @assert order >= 2 "WENO requires order >= 2 for second derivatives."
+    
+    # Determine the workspace type based on dimension
+    WS_eltype = dimension == 1 ? WENOWorkspace1D : WENOWorkspace2D
+    
+    # --- NEW: Create a workspace for each thread ---
+    n_threads = Threads.nthreads()
+    workspaces = [WS_eltype() for _ in 1:n_threads]
+    # --- END NEW ---
+    
+    interpolator = Interpolator{dimension, order, 1}() 
+    I = typeof(interpolator)
+    
+    # Note: The struct parameter WS is WS_eltype (e.g., WENOWorkspace2D)
+    WENO{dimension, WS_eltype, I, typeof(numericalFlux)}(order, workspaces, interpolator, numericalFlux)
 end
 
 """
@@ -117,105 +72,7 @@ function initGIBuffers!(g::WENO, pg::ParticleGrid)
         ensure_capacity!(ws, max_nb) 
     end
 end
-# --- 2. Refactored WENO Functors (Dispatched for 1D and 2D) ---
 
-# """
-# Functor for 1D WENO (nonlinear) using the 'fused' signature.
-# Calculates the divergence by interpolating two different flux-difference
-# fields:
-# 1. (S) A stable upwind numerical flux stencil (dissipative)
-# 2. (C) A central analytical flux stencil (non-dissipative)
-# ...and combining them with WENO weights.
-# """
-# function (weno::WENO{1, <:WENOWorkspace1D, <:Interpolator, <:NumericalFluxFunction})(
-#     eq::ScalarHyperbolicPDE,
-#     i::Int,                         # Current particle index
-#     f_i::Real,                      # Value of f at particle i
-#     nb_slice::UnitRange{Int},       # Slice into GLOBAL neighbor arrays
-#     pg::ParticleGrid1D,             # Grid object
-#     f_neighbors::AbstractVector,    # Pre-gathered f_j
-#     df_neighbors::AbstractVector    # Pre-gathered f_j - f_i (NOT USED)
-# )::Real
-    
-#     # --- 1. Get Workspace, Interpolator, and Global Refs ---
-#     thread_idx = mod1(Threads.threadid(),Threads.nthreads())
-#     ws = weno.workspaces[thread_idx] 
-#     interp = weno.interpolator
-#     nFlux = weno.numericalFlux 
-
-#     dx_all_full = get_xdistance(pg)
-#     w_all_full = get_weights(pg) 
-    
-#     num_neighbors = length(nb_slice)
-#     if num_neighbors < weno.order; return 0.0; end 
-    
-#     ensure_capacity!(ws, num_neighbors)
-
-#     # --- 2. Get central flux ---
-#     flux_i = flux(eq, f_i) 
-
-#     # --- 3. Get workspace buffers ---
-#     dx_s = ws.dx_stencil
-#     df_s = ws.df_stencil
-#     w_s  = ws.w_stencil 
-    
-#     # --- 4. COMPUTE STENCIL C (Central Analytical Flux) ---
-#     # This stencil is non-dissipative and is used in smooth regions.
-#     # It interpolates the difference of the ANALYTICAL flux.
-#     @inbounds for (local_idx, global_idx) in enumerate(nb_slice)
-#         f_j = f_neighbors[global_idx]
-        
-#         flux_j = flux(eq, f_j) #nFlux(f_i, f_j, eq) # Get analytical flux at neighbor
-
-#         dx_s[local_idx] = dx_all_full[global_idx]
-#         df_s[local_idx] = flux_j - flux_i # Store F(f_j) - F(f_i)
-#         w_s[local_idx]  = w_all_full[global_idx] 
-#     end
-    
-#     # Interpolate the dF_C field
-#     resC_tuple = interp(1:num_neighbors, dx_s, w_s, df_s; scale=pg.meta.dx) 
-#     resC1, resC2 = resC_tuple[1], resC_tuple[2]
-
-#     # --- 5. COMPUTE STENCIL S (Stable Upwind Flux) ---
-#     # This stencil is dissipative and used at shocks.
-#     # It interpolates the difference of the NUMERICAL flux.
-#     @inbounds for (local_idx, global_idx) in enumerate(nb_slice)
-#         dx_k = dx_all_full[global_idx]
-#         f_j = f_neighbors[global_idx]
-
-#         # Sort states correctly for a stable upwind flux
-#         f_L, f_R = sortFlux(f_i, f_j, dx_k) 
-#         flux_num_S = nFlux(f_L, f_R, eq) 
-
-#         # Overwrite the buffer with the new flux difference
-#         # dx_s and w_s are the same as before
-#         df_s[local_idx] = flux_num_S - flux_i 
-#     end
-    
-#     # Interpolate the dF_S field
-#     resS_tuple = interp(1:num_neighbors, dx_s, w_s, df_s; scale=pg.meta.dx) 
-#     resS1, resS2 = resS_tuple[1], resS_tuple[2]
-    
-#     # --- 6. WENO Combination ---
-#     e = 1e-6; dx2 = pg.meta.dx^2; dx4 = dx2^2 
-    
-#     # Smoothness indicator for Stencil S
-#     betaS = 0.5 / ((resS1^2 * dx2 + resS2^2 * dx4 + e)^2) 
-    
-#     # Smoothness indicator for Stencil C
-#     betaC = 0.5 / ((resC1^2 * dx2 + resC2^2 * dx4 + e)^2) 
-    
-#     sum_beta = betaC + betaS
-    
-#     ω_s, ω_c = if sum_beta < 1e-14
-#         (1.0, 0.0) # Fallback to stable stencil
-#     else
-#         (betaS / sum_beta, betaC / sum_beta) 
-#     end
-#     #ω_s, ω_c = (0. ,1.)
-#     # --- !! FIX: Return the combined gradient WITHOUT the 2.0 factor !! ---
-#     return ( 2. * resS1*ω_s + resC1*ω_c)
-# end
 function (weno::WENO{1})(
     eq, #::LinearAdvection{1}
     i::Int,                         # Current particle index

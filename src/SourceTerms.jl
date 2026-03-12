@@ -10,6 +10,8 @@ export ensure_buffer_size!
 
 abstract type AbstractSourceTerm end
 
+struct NoSourceTerm <: AbstractSourceTerm end
+
 """
     Kin2Macro{NM}
 
