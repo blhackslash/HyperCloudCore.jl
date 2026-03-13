@@ -241,10 +241,10 @@ function runSimulation(params::ParamDictType)::Union{AbstractSimData, Nothing}
             @info "  Computing analytical solution for a D=$dimension PDE..."
             local grid_analytic
             if dimension == 1
-                grid_analytic = ParticleGrid1D(xmin, xmax, run_params["N"] , bc, 0.; rng = MersenneTwister(1))
+                grid_analytic = createParticleGrid(Val(1), xmin, xmax, run_params["N"] , bc, 0.; rng = MersenneTwister(1))
             else 
                 Nx, Ny = haskey(run_params, "N") ? (run_params["N"], run_params["N"]) : (run_params["Nx"], run_params["Ny"])
-                grid_analytic = ParticleGrid2D(xmin, xmax, run_params["ymin"], run_params["ymax"], Nx, Ny, bc, 0.)
+                grid_analytic = createParticleGrid(Val(1), xmin, xmax, run_params["ymin"], run_params["ymax"], Nx, Ny, bc, 0.)
             end
             return _execute_analytic_sim(IC, eq, grid_analytic, tmax, snapshots, run_params)
         end

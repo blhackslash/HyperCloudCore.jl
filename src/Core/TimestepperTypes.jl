@@ -9,7 +9,7 @@ struct EulerUpwind{G1 <: GradientInterpolator, G2 <: GradientInterpolator, M <: 
     gradientInterpolator::G1
     fallbackInterpolator::G2
     mood::M
-    moveGrid::GM
+    grid_mover::GM
     
     # Buffers are now part of the struct to be reused
     rhoInit::Vector{Float64}      # Stores the state at the beginning of the step
@@ -22,7 +22,7 @@ struct RalstonRK2{G1, G2, MOOD, GM} <: MeshfreeTimeStepper
     gradientInterpolator::G1
     fallbackInterpolator::G2
     mood::MOOD
-    moveGrid::GM
+    grid_mover::GM
     
     # Buffers are now part of the struct to be reused
     rhoInit::Vector{Float64}
@@ -39,10 +39,11 @@ struct RalstonRK2{G1, G2, MOOD, GM} <: MeshfreeTimeStepper
     end
 end
 
-struct RalstonRK2SmoothSwitch{G1, G2, MOOD} <: MeshfreeTimeStepper
+struct RalstonRK2SmoothSwitch{G1, G2, MOOD, GM} <: MeshfreeTimeStepper
     gradientInterpolator::G1
     fallbackInterpolator::G2
     mood::MOOD
+    grid_mover::GM
     tol::Float64
     
     # --- Reusable Buffers (Workspace) ---
@@ -63,10 +64,11 @@ struct RalstonRK2SmoothSwitch{G1, G2, MOOD} <: MeshfreeTimeStepper
     neighbor_dfs::Vector{Float64}
 end
 
-struct RK3{G1 <: GradientInterpolator, G2 <: GradientInterpolator, MOOD <: MOODCriterion} <: MeshfreeTimeStepper
+struct RK3{G1 <: GradientInterpolator, G2 <: GradientInterpolator, MOOD <: MOODCriterion, GM} <: MeshfreeTimeStepper
     gradientInterpolator::G1
     fallbackInterpolator::G2
     mood::MOOD
+    grid_mover::GM
     
     # --- Reusable Buffers (Workspace) ---
     rho_n::Vector{Float64}      # Stores the solution at the start of the step
@@ -82,10 +84,11 @@ struct RK3{G1 <: GradientInterpolator, G2 <: GradientInterpolator, MOOD <: MOODC
     neighbor_dfs::Vector{Float64}
 end
 
-struct RK4{G1, G2, MOOD} <: MeshfreeTimeStepper
+struct RK4{G1, G2, MOOD, GM} <: MeshfreeTimeStepper
     gradientInterpolator::G1
     fallbackInterpolator::G2
     mood::MOOD
+    grid_mover::GM
     
     # --- Reusable Buffers (Workspace) ---
     rho_n::Vector{Float64}

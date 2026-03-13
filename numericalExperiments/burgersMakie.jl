@@ -7,7 +7,7 @@ end
 
 # Example SimulationConfig for Burgers
 sim_config_burgers = SimulationConfig(
-    runScalarSimulation,
+    runSimulation,
     ParamDict(
         "tmax" => 10., "N" => 200, "xmin" => -5.0, "xmax" => 5.0,
         "dt" => .01, "snapshots" => 25, "interp_alpha" => 1.0,
@@ -18,9 +18,9 @@ sim_config_burgers = SimulationConfig(
         "init_params" => (1., 0., -2.),
         #"init_params" => (2., 0., -2., .1),
         "randomness_factor" => 0.,
-        "SEED" => 10, "sim_function" => (:const, "runScalarSimulation"),
+        "SEED" => 10, "sim_function" => (:const, "runSimulation"),
         "bc" => :fixed_dirichlet, "weight_function" => "exponential",
-        "order" => 1, "PDE" => "testU3", "PDE_params" => 1., "merge_factor" => .3,
+        "order" => 1, "PDE" => "burgers", "PDE_params" => 1., "merge_factor" => .3,
         "grid_mover" => "physical", # "grid_mover_func" => grid_velocity, "grid_mover_params" => Tuple([]),
     ),
 

@@ -48,7 +48,10 @@ mutable struct GridMetadata{D}
     N_ghost::Int            
     mins::SVector{D, Float64}
     maxs::SVector{D, Float64}
-    h::Float64              
+    inner_mins::SVector{D, Float64}
+    inner_maxs::SVector{D, Float64}
+    R::Float64
+    r::Float64
     dx::SVector{D, Float64} 
     regular::Bool
     bc::Symbol              
@@ -98,10 +101,6 @@ end
 # 5. Particle Management Context
 # ---------------------------------------------------------
 struct ManagementData{D, M}
-    merge_flags::Vector{Bool}
-    split_targets::Vector{Int}
-    split_buffer_pos::Vector{SVector{D, Float64}}
-    split_buffer_rho::Vector{NTuple{M, Float64}} # M-sized Tuples for N x M matrix rows
     local_voxels::LocalVoxels
 end
 

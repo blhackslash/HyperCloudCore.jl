@@ -45,11 +45,14 @@ function main()
     params = ParamDict(
         # --- Shared Parameters ---
         "tmax" => 10.,
-        "N" => 1000,
+        "N" => 200,
+
+
+        
         "xmin" => -5.0,
         "xmax" => 5.0,
-        "CFL" => .1,
-        #"dt" => .001,
+        #"CFL" => .1,
+        "dt" => .01,
         "snapshots" => 20,
         "interp_alpha" => 1.0,
         "interp_range" => 3.5,
@@ -59,9 +62,9 @@ function main()
         #"init_params" => (0.,1.,-2.,2.),
         "randomness_factor" => 0.0, # (x_rand_factor, y_rand_factor)
         "SEED_value" => 42,
-        "PDE" => "linear",
+        "PDE" => "burgers", "PDE_params" => 1., "merge_factor" => .3,
         "weight_function" => "exponential",
-        "PDE_params" => 1., # 2D velocity vector (vx, vy)
+        "grid_mover" => "physical",
         "bc" => :outflow,
         "sim_function" => "runSimulation",
 
@@ -70,7 +73,6 @@ function main()
         "main_gradient" => "Upwind",
         "order" =>1,
         "main_flux" => "Rusanov",
-        "grid_mover" => "none",
         "remove_ghosts" => false
         #"MOOD" => "U2", "delta_relax" => 0., "fallback_gradient" => "Upwind", "fallback_flux" => "Rusanov",
         #"switch_tol" => 5.
@@ -110,7 +112,7 @@ end
 
 sim_data, test_config = main()
 
-show1DSolutionFig(test_config)
+#show1DSolutionFig(test_config)
 #scene_options = Dict{String, Any}("line_vector" => (1.,0.), "deviation" => 2)
 #show2DCutFig(test_config;scene_options = scene_options)
 #show2DSolutionFig(test_config)

@@ -51,8 +51,8 @@ function (eu::EulerUpwind)(
     N = pg.meta.N
     #initTS!(eu.pg)
 
-    moveGrid = eu.moveGrid
-    moveGrid(pg, dt)
+    grid_mover = eu.grid_mover
+    grid_mover(pg, dt)
     # --- 1. Preparation ---
     # Ensure buffers are correctly sized (only resizes if needed)
     initGIBuffers!(eu.gradientInterpolator, pg)
@@ -156,8 +156,9 @@ end
 
 function (ralston::RalstonRK2)(eq::ScalarHyperbolicPDE, pg::ParticleGrid{D, M, S, WF}, settings::SimSetting, time::Real, dt::Real) where {D, M, S, WF}
     
-    moveGrid = ralston.moveGrid
-    moveGrid(pg, dt)
+    grid_mover = ralston.grid_mover
+    grid_mover(pg, dt)
+    manage_particles!(ralston.grid_mover, pg)
     #initTS!(ralston.pg)
     # --- Resize buffers only if necessary, using N ---
     initGIBuffers!(ralston.gradientInterpolator, pg)
@@ -202,7 +203,7 @@ function (ralston::RalstonRK2)(eq::ScalarHyperbolicPDE, pg::ParticleGrid{D, M, S
     # 4. Apply boundary conditions to the intermediate result stored in the buffer
     apply_boundary_conditions!(pg, ralston.rhos)
 
-    #moveGrid(pg, 1/3 * dt)
+    #grid_mover(pg, 1/3 * dt)
 
     N = pg.meta.N
     #updateNeighbors!(pg)

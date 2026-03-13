@@ -1,3 +1,27 @@
+
+# =========================================================================
+# SHARED BUFFER ACCESSORS & SAFE RESIZING
+# =========================================================================
+
+# Allows get_positions to work natively on the SharedBuffers struct
+@inline get_positions(sb::SharedBuffers{1}) = reinterpret(Float64, sb.pos_buffer)
+@inline get_positions(sb::SharedBuffers{D}) where {D} = sb.pos_buffer
+
+@inline function ensure_shared_capacity!(pg::ParticleGrid, required_capacity::Int)
+    if length(pg.shared.pos_buffer) < required_capacity
+        new_cap = ceil(Int, required_capacity * 1.25)
+        resize!(pg.shared.pos_buffer, new_cap)
+        resize!(pg.shared.bit_buffer, new_cap)
+        resize!(pg.shared.int_buffer, new_cap)
+        
+        # Explicit Matrix resize to avoid MethodErrors on standard resize!
+        M = size(pg.rhos, 2)
+        if size(pg.shared.rho_buffer, 1) < new_cap
+            pg.shared.rho_buffer = Matrix{Float64}(undef, new_cap, M)
+        end
+    end
+end
+
 # =========================================================================
 # HELPER FUNCTIONS (Zero-Allocation State Management)
 # =========================================================================
@@ -30,7 +54,10 @@ end
     return cons2prim(eq, W_new)
 end
 
-# --- Kinetic State Reconstruction ---
+# =========================================================================
+# MULTIPLE DISPATCH KINETIC RECONSTRUCTION
+# =========================================================================
+
 @inline function reconstruct_kinetic(U_macro::Tuple, st::RelaxationSourceTerm{D, N, NK, PDE}) where {D, N, NK, PDE}
     flux_vals = flux(st.system_eq, U_macro)
     return ntuple(Val(NK)) do k
@@ -49,11 +76,60 @@ end
     end
 end
 
+# --- Dispatched Splitting Extractors ---
+@inline function compute_split_state(rhos::AbstractMatrix, idx_L::Int, idx_R::Int, eq::HyperbolicPDE, ::NoSourceTerm, M::Int)
+    U_L = _extract_state(rhos, idx_L, M)
+    U_R = _extract_state(rhos, idx_R, M)
+    return split_states_conservative(U_L, U_R, eq)
+end
+
+@inline function compute_split_state(rhos::AbstractMatrix, idx_L::Int, idx_R::Int, eq::HyperbolicPDE, st::AbstractSourceTerm, M::Int)
+    U_macro_L = _sum_kinetic(rhos, idx_L, st.kin2macro)
+    U_macro_R = _sum_kinetic(rhos, idx_R, st.kin2macro)
+    U_macro_new = split_states_conservative(U_macro_L, U_macro_R, eq)
+    return _get_split_kinetic_state(U_macro_new, idx_L, idx_R, st)
+end
+
+@inline _get_split_kinetic_state(U_new::Tuple, idx_L::Int, idx_R::Int, st::RelaxationSourceTerm) = reconstruct_kinetic(U_new, st)
+@inline function _get_split_kinetic_state(U_new::Tuple, idx_L::Int, idx_R::Int, st::NonLocalRelaxationSourceTerm)
+    T_L = ntuple(c -> st.T_potential[idx_L, c], Val(length(U_new)))
+    T_R = ntuple(c -> st.T_potential[idx_R, c], Val(length(U_new)))
+    T_new = ntuple(c -> 0.5 * (T_L[c] + T_R[c]), length(T_L))
+    return reconstruct_kinetic(U_new, st, T_new)
+end
+
+# --- Dispatched Merging Extractors ---
+@inline function compute_merged_state(rhos::AbstractMatrix, i::Int, j::Int, V_i::Float64, V_j::Float64, eq::HyperbolicPDE, ::NoSourceTerm, M::Int)
+    U_i = _extract_state(rhos, i, M)
+    U_j = _extract_state(rhos, j, M)
+    return average_states_conservative(U_i, U_j, V_i, V_j, eq)
+end
+
+@inline function compute_merged_state(rhos::AbstractMatrix, i::Int, j::Int, V_i::Float64, V_j::Float64, eq::HyperbolicPDE, st::AbstractSourceTerm, M::Int)
+    U_macro_i = _sum_kinetic(rhos, i, st.kin2macro)
+    U_macro_j = _sum_kinetic(rhos, j, st.kin2macro)
+    U_macro_new = average_states_conservative(U_macro_i, U_macro_j, V_i, V_j, eq)
+    return _get_merged_kinetic_state(U_macro_new, i, j, V_i, V_j, st)
+end
+
+@inline _get_merged_kinetic_state(U_new::Tuple, i::Int, j::Int, V_i::Float64, V_j::Float64, st::RelaxationSourceTerm) = reconstruct_kinetic(U_new, st)
+@inline function _get_merged_kinetic_state(U_new::Tuple, i::Int, j::Int, V_i::Float64, V_j::Float64, st::NonLocalRelaxationSourceTerm)
+    T_i = ntuple(c -> st.T_potential[i, c], Val(length(U_new)))
+    T_j = ntuple(c -> st.T_potential[j, c], Val(length(U_new)))
+    T_new = ntuple(c -> (T_i[c]*V_i + T_j[c]*V_j)/(V_i+V_j), length(T_i))
+    return reconstruct_kinetic(U_new, st, T_new)
+end
+
 # =========================================================================
 # MAIN ROUTINE
 # =========================================================================
-manage_particles!(kwargs...) = return 
-function manage_particles!(pg::ParticleGrid1D, eq::HyperbolicPDE, source_term=nothing)
+function manage_particles!(::NoGridMover, kwargs...)
+    return
+end
+
+function manage_particles!(gm::PhysicalGridMover, pg::ParticleGrid1D, source_term::AbstractSourceTerm=NoSourceTerm())
+
+    eq = gm.pde
     # PHASE 1: VOXEL FILL (Splitting)
     if hasproperty(pg.manage, :local_voxels)
         _split_particles!(pg, eq, source_term)
@@ -67,8 +143,8 @@ function manage_particles!(pg::ParticleGrid1D, eq::HyperbolicPDE, source_term=no
 
     # PHASE 4: FINALIZE
     safe_resize!(pg.neighbor.ranges, pg.meta.N)
-    sort_1d_particles!(pg)
-    updateNeighbors!(pg)
+    pg.reorder(pg)
+    pg.neighbor(pg)
     determineVolumes!(pg)
 end
 
@@ -76,57 +152,59 @@ end
 # PHASE 1: SPLITTING
 # =========================================================================
 
-function _split_particles!(pg::ParticleGrid1D, eq::HyperbolicPDE, source_term)
-    empty!(pg.manage.split_buffer_pos)
-    empty!(pg.manage.split_buffer_rho)
+function _split_particles!(pg::ParticleGrid1D, eq::HyperbolicPDE, source_term::AbstractSourceTerm)
+    N = pg.meta.N
+    ensure_capacity!(pg.shared, N)
     
-    visited = pg.manage.merge_flags
-    if length(visited) < pg.meta.N; safe_resize!(visited, pg.meta.N); end
-    fill!(view(visited, 1:pg.meta.N), false)
+    visited = pg.shared.bit_buffer
+    fill!(view(visited, 1:N), false)
     
     lv = pg.manage.local_voxels
     M = size(pg.rhos, 2)
     
-    for i in 1:pg.meta.N
+    num_new = Ref(0) # Track how many new particles we generate
+    
+    for i in 1:N
         if !visited[i]
             reset_voxels!(lv)
             check_occupation!(lv, pg, i, visited)
-            fill_empty_voxels!(lv, pg, i, visited, eq, source_term)
+            fill_empty_voxels!(lv, pg, i, visited, eq, source_term, num_new)
             visited[i] = true
         end
     end
     
-    N_new = length(pg.manage.split_buffer_pos)
+    N_new = num_new[]
     if N_new > 0
         N_curr = pg.meta.N
         N_total = N_curr + N_new
         
-        safe_resize!(get_positions(pg), N_total)
-        safe_resize!(pg.rhos, N_total)
-        safe_resize!(pg.curvatures, N_total)
-        safe_resize!(pg.core.is_boundary, N_total)
-        safe_resize!(pg.volumes, N_total)
-        safe_resize!(pg.mood_events, N_total)
+        ensure_capacity!(pg, N_total)
+        
+        grid_pos = get_positions(pg)
+        shared_pos = get_positions(pg.shared)
         
         for k in 1:N_new
             idx = N_curr + k
-            get_positions(pg)[idx] = pg.manage.split_buffer_pos[k]
-            _write_state!(pg.rhos, idx, pg.manage.split_buffer_rho[k], M)
+            grid_pos[idx] = shared_pos[k]
+            
+            for c in 1:M
+                pg.rhos[idx, c] = pg.shared.rho_buffer[k, c]
+            end
             
             pg.curvatures[idx] = 0.0
             pg.core.is_boundary[idx] = false 
-            pg.volumes[idx] = 0.0
+            pg.core.volumes[idx] = 0.0
             pg.mood_events[idx] = false
         end
         
         pg.meta.N = N_total
         safe_resize!(pg.neighbor.ranges, pg.meta.N)
-        sort_1d_particles!(pg)
-        updateNeighbors!(pg)
+        pg.reorder(pg)
+        pg.neighbor(pg)
     end
 end
 
-function fill_empty_voxels!(lv::LocalVoxels, pg::ParticleGrid1D, i::Int, visited::AbstractVector{Bool}, eq::HyperbolicPDE, source_term)
+function fill_empty_voxels!(lv::LocalVoxels, pg::ParticleGrid1D, i::Int, visited::AbstractVector{Bool}, eq::HyperbolicPDE, source_term::AbstractSourceTerm, num_new::Ref{Int})
     center_offset = lv.half_bins + 1
     M = size(pg.rhos, 2)
     
@@ -178,55 +256,52 @@ function fill_empty_voxels!(lv::LocalVoxels, pg::ParticleGrid1D, i::Int, visited
                     if new_abs_pos < pg.meta.mins[1]; new_abs_pos += L_domain; end
                 end
                 
-                # --- State Reconstruction for New Particle ---
-                local new_state_tuple
-                if isnothing(source_term)
-                    U_L = _extract_state(pg.rhos, idx_L, M)
-                    U_R = _extract_state(pg.rhos, idx_R, M)
-                    new_state_tuple = split_states_conservative(U_L, U_R, eq)
-                else
-                    U_macro_L = _sum_kinetic(pg.rhos, idx_L, source_term.kin2macro)
-                    U_macro_R = _sum_kinetic(pg.rhos, idx_R, source_term.kin2macro)
-                    U_macro_new = split_states_conservative(U_macro_L, U_macro_R, eq)
-                    
-                    if source_term isa NonLocalRelaxationSourceTerm
-                        T_L = ntuple(c -> source_term.T_potential[idx_L, c], Val(length(U_macro_L)))
-                        T_R = ntuple(c -> source_term.T_potential[idx_R, c], Val(length(U_macro_R)))
-                        T_new = ntuple(c -> 0.5 * (T_L[c] + T_R[c]), length(T_L))
-                        new_state_tuple = reconstruct_kinetic(U_macro_new, source_term, T_new)
-                    else
-                        new_state_tuple = reconstruct_kinetic(U_macro_new, source_term)
-                    end
-                end
+                # We are officially creating a particle!
+                new_state_tuple = compute_split_state(pg.rhos, idx_L, idx_R, eq, source_term, M)
                 
-                push!(pg.manage.split_buffer_pos, new_abs_pos)
-                push!(pg.manage.split_buffer_rho, new_state_tuple)
+                idx_new = num_new[] + 1
+                ensure_shared_capacity!(pg, idx_new)
+                num_new[] = idx_new
+                
+                get_positions(pg.shared)[idx_new] = new_abs_pos
+                _write_state!(pg.shared.rho_buffer, idx_new, new_state_tuple, M)
                 
             elseif closest_L_idx == -1 && closest_R_idx != -1
-                if pg.core.is_boundary[closest_R_idx]
-                    push!(pg.manage.split_buffer_pos, abs_pos)
-                    push!(pg.manage.split_buffer_rho, _extract_state(pg.rhos, i, M))
+                if pg.core.is_boundary[i]
+                    idx_new = num_new[] + 1
+                    ensure_shared_capacity!(pg, idx_new)
+                    num_new[] = idx_new
+                    
+                    get_positions(pg.shared)[idx_new] = abs_pos
+                    _write_state!(pg.shared.rho_buffer, idx_new, _extract_state(pg.rhos, i, M), M)
                 else
                     visited[closest_R_idx] = false
                 end
             elseif closest_L_idx != -1 && closest_R_idx == -1
-                if pg.core.is_boundary[closest_L_idx]
-                    push!(pg.manage.split_buffer_pos, abs_pos)
-                    push!(pg.manage.split_buffer_rho, _extract_state(pg.rhos, i, M))
+                if pg.core.is_boundary[i]
+                    idx_new = num_new[] + 1
+                    ensure_shared_capacity!(pg, idx_new)
+                    num_new[] = idx_new
+                    
+                    get_positions(pg.shared)[idx_new] = abs_pos
+                    _write_state!(pg.shared.rho_buffer, idx_new, _extract_state(pg.rhos, i, M), M)
                 else
                     visited[closest_L_idx] = false
                 end
             else
-                push!(pg.manage.split_buffer_pos, abs_pos)
-                push!(pg.manage.split_buffer_rho, _extract_state(pg.rhos, i, M))
+                idx_new = num_new[] + 1
+                ensure_shared_capacity!(pg, idx_new)
+                num_new[] = idx_new
+                
+                get_positions(pg.shared)[idx_new] = abs_pos
+                _write_state!(pg.shared.rho_buffer, idx_new, _extract_state(pg.rhos, i, M), M)
             end
         end
     end
 end
 
 function check_occupation!(lv::LocalVoxels, pg::ParticleGrid1D, i::Int, visited::AbstractVector{Bool})
-    # Uses dx[1] as proxy for max_dist if not defined
-    R = hasproperty(pg, :min_dist) ? pg.min_dist : pg.meta.dx[1] * 0.8 
+    R = pg.meta.R
     center_offset = lv.half_bins + 1
 
     for flat_idx in pg.neighbor.ranges[i]
@@ -254,16 +329,17 @@ end
 # PHASE 2: MERGING
 # =========================================================================
 
-function _merge_particles_pairwise!(pg::ParticleGrid1D, eq::HyperbolicPDE, source_term)
+function _merge_particles_pairwise!(pg::ParticleGrid1D, eq::HyperbolicPDE, source_term::AbstractSourceTerm)
     N = pg.meta.N
-    merged = pg.manage.merge_flags
-    if length(merged) < N; safe_resize!(merged, N); end
+    ensure_shared_capacity!(pg, N)
+    
+    merged = pg.shared.bit_buffer
     fill!(view(merged, 1:N), false)
 
     write_idx = 0 
     pos  = get_positions(pg)
     rhos = pg.rhos
-    vols = pg.volumes
+    vols = pg.core.volumes
     M    = size(rhos, 2)
     min_dist_thresh = hasproperty(pg, :min_dist) ? pg.min_dist : pg.meta.dx[1] * 0.25
     
@@ -296,28 +372,9 @@ function _merge_particles_pairwise!(pg::ParticleGrid1D, eq::HyperbolicPDE, sourc
             # 1. New Position: Geometric Average
             pos[write_idx] = 0.5 * (pos[i] + pos[best_j])
             
-            # 2. Conservative State Averaging
-            if isnothing(source_term)
-                U_i = _extract_state(rhos, i, M)
-                U_j = _extract_state(rhos, best_j, M)
-                U_new = average_states_conservative(U_i, U_j, V_i, V_j, eq)
-                _write_state!(rhos, write_idx, U_new, M)
-            else
-                U_macro_i = _sum_kinetic(rhos, i, source_term.kin2macro)
-                U_macro_j = _sum_kinetic(rhos, best_j, source_term.kin2macro)
-                U_macro_new = average_states_conservative(U_macro_i, U_macro_j, V_i, V_j, eq)
-                
-                local V_kin_new
-                if source_term isa NonLocalRelaxationSourceTerm
-                    T_i = ntuple(c -> source_term.T_potential[i, c], Val(length(U_macro_i)))
-                    T_j = ntuple(c -> source_term.T_potential[best_j, c], Val(length(U_macro_j)))
-                    T_new = ntuple(c -> (T_i[c]*V_i + T_j[c]*V_j)/(V_i+V_j), length(T_i))
-                    V_kin_new = reconstruct_kinetic(U_macro_new, source_term, T_new)
-                else
-                    V_kin_new = reconstruct_kinetic(U_macro_new, source_term)
-                end
-                _write_state!(rhos, write_idx, V_kin_new, M)
-            end
+            # 2. Fully Dispatched State Averaging
+            new_state_tuple = compute_merged_state(rhos, i, best_j, V_i, V_j, eq, source_term, M)
+            _write_state!(rhos, write_idx, new_state_tuple, M)
             
             # 3. Update Volumes
             vols[write_idx] = V_i + V_j
@@ -339,19 +396,17 @@ end
 # =========================================================================
 
 function update_boundaries!(pg::ParticleGrid1D)
-    # Derive boundary limits dynamically from the grid metadata 
     outer_min = pg.meta.mins[1]
     outer_max = pg.meta.maxs[1]
     
-    # Inner interior bounds
-    inner_min = outer_min + pg.meta.N_ghost * pg.meta.dx[1]
-    inner_max = outer_max - pg.meta.N_ghost * pg.meta.dx[1]
+    inner_min = pg.meta.inner_mins[1]
+    inner_max = pg.meta.inner_maxs[1]
     
     pos   = get_positions(pg)
     rhos  = pg.rhos
     is_bd = pg.core.is_boundary
     curv  = pg.curvatures
-    vols  = pg.volumes
+    vols  = pg.core.volumes
     mood  = pg.mood_events
     M     = size(rhos, 2)
     
@@ -360,14 +415,12 @@ function update_boundaries!(pg::ParticleGrid1D)
     for i in 1:pg.meta.N
         x = pos[i] 
         
-        # 1. Filter: Strictly keep only those within OUTER limits
         if x < outer_min || x > outer_max
             continue
         end
         
         write_idx += 1
         
-        # 2. Compaction
         if i != write_idx
             pos[write_idx]   = x
             _write_state!(rhos, write_idx, _extract_state(rhos, i, M), M)
@@ -376,7 +429,6 @@ function update_boundaries!(pg::ParticleGrid1D)
             mood[write_idx]  = mood[i]
         end
         
-        # 3. Classify: Interior vs Ghost Boundary
         if x >= inner_min && x <= inner_max
             is_bd[write_idx] = false
         else

@@ -16,7 +16,7 @@ include("ParticleManagement.jl")
 function createParticleGrid(
     ::Val{1}, xmin::Real, xmax::Real, N_interior::Integer, bc::Symbol,
     interp_range_factor::Real;
-    M::Int = 1, randomness::Real = 0.0, rng = Random.default_rng(), merge_factor = 0.2,
+    M::Int = 1, randomness::Real = 0.0, rng = Random.default_rng(), merge_factor = 0.3,
     weight_func = exponentialWeightFunction(1.,1.)
 )
     N_ghost::Int = bc == :periodic ? 0 : ceil(Int, interp_range_factor)
@@ -32,7 +32,8 @@ function createParticleGrid(
 
     xmin_tot = xmin - N_ghost * dx
     xmax_tot = xmax + N_ghost * dx
-    h = dx * interp_range_factor
+    R = dx * interp_range_factor
+    r = merge_factor * R
     regular = (randomness == 0.0)
 
     positions = Vector{SVector{1, Float64}}(undef, N)
@@ -58,8 +59,8 @@ function createParticleGrid(
     end
 
     meta = GridMetadata{1}(
-        N, N_interior, N_ghost, SVector(xmin_tot), SVector(xmax_tot), 
-        h, SVector(dx), regular, bc, Float64(interp_range_factor), 0
+        N, N_interior, N_ghost, SVector(xmin_tot), SVector(xmax_tot), SVector(xmin), SVector(xmax), 
+        R, r, SVector(dx), regular, bc, Float64(interp_range_factor), 0
     )
 
     core = ParticleGridCore{1}(positions, is_boundary, zeros(Int, N))
@@ -78,7 +79,7 @@ function createParticleGrid(
     min_nb = floor(Int, interp_range_factor)
     R = dx * interp_range_factor
     voxels = LocalVoxels(min_nb, R)
-    manage = ManagementData{1,M}(zeros(Bool,N), Int[], SVector{1, Float64}[], NTuple{M, Float64}[], voxels)
+    manage = ManagementData{1,M}(voxels)
 
     pg = ParticleGrid{1, M, Nothing, typeof(weight_func)}(
         meta, core, shared, neighbor, reorder, manage,
@@ -95,7 +96,7 @@ function createParticleGrid(
     ::Val{2}, xmin::Real, xmax::Real, ymin::Real, ymax::Real, 
     Nx_interior::Int, Ny_interior::Int, bc::Symbol, interp_range_factor::Real;
     M::Int = 1, randomness::NTuple{2, Float64} = (0.0, 0.0), rng = Random.default_rng(), 
-    weight_func = exponentialWeightFunction(1.,1.)
+    weight_func = exponentialWeightFunction(1.,1.), merge_factor = .3,
 )
     xmin_f, xmax_f = Float64(xmin), Float64(xmax)
     ymin_f, ymax_f = Float64(ymin), Float64(ymax)
@@ -118,7 +119,8 @@ function createParticleGrid(
     end
     
     N = Nx_total * Ny_total
-    interp_range = range_factor_f < 1e-10 ? max(dx_nominal, dy_nominal) : range_factor_f * max(dx_nominal, dy_nominal)
+    R = range_factor_f < 1e-10 ? max(dx_nominal, dy_nominal) : range_factor_f * max(dx_nominal, dy_nominal)
+    r = merge_factor * R
 
     positions = Vector{SVector{2, Float64}}(undef, N)
     is_boundary = zeros(Bool,N)
@@ -127,7 +129,8 @@ function createParticleGrid(
         meta = GridMetadata{2}(
             N, Nx_interior * Ny_interior, N - (Nx_interior * Ny_interior), 
             SVector{2, Float64}(xmin_f, ymin_f), SVector{2, Float64}(xmax_f, ymax_f), 
-            interp_range, SVector{2, Float64}(dx_nominal, dy_nominal), 
+            SVector{2, Float64}(xmin, ymin), SVector{2, Float64}(xmax, ymax), 
+            R, r, SVector{2, Float64}(dx_nominal, dy_nominal), 
             (randomness == (0.0, 0.0)), bc, range_factor_f, 0
         )
 
@@ -146,7 +149,7 @@ function createParticleGrid(
         min_nb = floor(Int, interp_range_factor)
         R = max(dx_nominal,dy_nominal) * interp_range_factor
         voxels = LocalVoxels(min_nb, R)
-        manage = ManagementData{2,M}(zeros(Bool,N), Int[], SVector{2, Float64}[], NTuple{M, Float64}[], voxels)
+        manage = ManagementData{2,M}(voxels)
 
         return ParticleGrid{2, M, typeof(sys), typeof(weight_func)}(
             meta, core, shared, neighbors, reorder, manage,
@@ -162,7 +165,7 @@ function createParticleGrid(
             positions[index] = SVector{2, Float64}(posX, posY)
         end
         unit_cell = SVector{2, Float64}(xmax_f - xmin_f, ymax_f - ymin_f)
-        system = InPlaceNeighborList(x=positions, cutoff=interp_range, unitcell=unit_cell, parallel=true)
+        system = InPlaceNeighborList(x=positions, cutoff=R, unitcell=unit_cell, parallel=true)
         pg =  _build_grid(system)
     else
         for i in 1:Nx_total, j in 1:Ny_total
@@ -176,7 +179,7 @@ function createParticleGrid(
             is_boundary[index] = !is_interior
         end
         
-        system = InPlaceNeighborList(x=positions, cutoff=interp_range, parallel=true)
+        system = InPlaceNeighborList(x=positions, cutoff=R, parallel=true)
         pg = _build_grid(system)
     end
     pg.neighbor(pg)
@@ -553,6 +556,8 @@ function apply_boundary_conditions!(pg::ParticleGrid{2}, rhos_buffer::AbstractVe
     return nothing
 end
 
+determineVolumes!(pg) = return
+
 function determineVolumes!(pg::ParticleGrid1D)
     N = pg.meta.N
     if N == 0; return; end
@@ -702,4 +707,128 @@ function getTimeStep(pg::ParticleGrid{2}, eq)
         end
     end
     return dtMax
+end
+
+using Base.Threads: Atomic
+
+# =========================================================================
+# HELPER: Safe Matrix Resizing
+# =========================================================================
+# 2D Matrices cannot use `resize!` natively in Julia. This creates a new
+# matrix with the required rows and copies the old data over.
+function _resize_matrix(mat::Matrix{T}, new_rows::Int) where T
+    rows, cols = size(mat)
+    if rows >= new_rows
+        return mat
+    end
+    
+    new_mat = Matrix{T}(undef, new_rows, cols)
+    if rows > 0 && cols > 0
+        new_mat[1:rows, :] .= mat
+    end
+    return new_mat
+end
+
+# =========================================================================
+# OVERLOADED CAPACITY MANAGERS
+# =========================================================================
+
+"""
+    ensure_capacity!(sb::SharedBuffers, req_capacity::Int)
+"""
+@inline function ensure_capacity!(sb::SharedBuffers, req_capacity::Int)
+    if length(sb.pos_buffer) < req_capacity
+        new_cap = ceil(Int, req_capacity * 1.25)
+        
+        resize!(sb.pos_buffer, new_cap)
+        resize!(sb.bit_buffer, new_cap)
+        resize!(sb.int_buffer, new_cap)
+        
+        sb.rho_buffer = _resize_matrix(sb.rho_buffer, new_cap)
+    end
+    return nothing
+end
+
+"""
+    ensure_capacity!(rd::ReorderData, req_capacity::Int)
+"""
+@inline function ensure_capacity!(rd::ReorderData, req_capacity::Int)
+    if length(rd.permutation) < req_capacity
+        new_cap = ceil(Int, req_capacity * 1.25)
+        
+        resize!(rd.permutation, new_cap)
+        resize!(rd.inv_permutation, new_cap)
+        resize!(rd.new_permutation_buffer, new_cap)
+        resize!(rd.seen_buffer, new_cap)
+    end
+    return nothing
+end
+
+"""
+    ensure_capacity!(core::ParticleGridCore, req_capacity::Int)
+"""
+@inline function ensure_capacity!(core::ParticleGridCore, req_capacity::Int)
+    if length(core.positions) < req_capacity
+        new_cap = ceil(Int, req_capacity * 1.25)
+        
+        resize!(core.positions, new_cap)
+        resize!(core.is_boundary, new_cap)
+        resize!(core.volumes, new_cap)
+    end
+    return nothing
+end
+
+"""
+    ensure_capacity!(nd::NeighborData, req_particles::Int)
+    
+Note: This only resizes the arrays mapped to the number of PARTICLES (N). 
+The `indices` and `data` arrays map to the number of NEIGHBORS, which scales 
+differently and must be resized separately during the neighbor search.
+"""
+@inline function ensure_capacity!(nd::NeighborData, req_particles::Int)
+    old_cap = length(nd.atomic_counts)
+    
+    if old_cap < req_particles
+        new_cap = ceil(Int, req_particles * 1.25)
+        
+        # Ranges requires N+1
+        resize!(nd.ranges, new_cap + 1)
+        
+        resize!(nd.atomic_counts, new_cap)
+        resize!(nd.atomic_offsets, new_cap)
+        
+        # Newly added Atomic elements must be explicitly initialized
+        for i in (old_cap + 1):new_cap
+            nd.atomic_counts[i] = Atomic{Int}(0)
+            nd.atomic_offsets[i] = Atomic{Int}(0)
+        end
+        
+        # Ensure the new range pointer is safe
+        nd.ranges[new_cap + 1] = 1:0
+    end
+    return nothing
+end
+
+"""
+    ensure_capacity!(pg::ParticleGrid, req_capacity::Int)
+
+Top-level capacity manager. Checks the core fields and delegates to substructs.
+"""
+@inline function ensure_capacity!(pg::ParticleGrid, req_capacity::Int)
+    if size(pg.rhos, 1) < req_capacity
+        new_cap = ceil(Int, req_capacity * 1.25)
+        
+        # Resize top-level matrices
+        pg.rhos        = _resize_matrix(pg.rhos, new_cap)
+        pg.mood_events = _resize_matrix(pg.mood_events, new_cap)
+        pg.curvatures  = _resize_matrix(pg.curvatures, new_cap)
+    end
+    
+    # Safely delegate down the chain
+    ensure_capacity!(pg.core, req_capacity)
+    ensure_capacity!(pg.shared, req_capacity)
+    ensure_capacity!(pg.reorder, req_capacity)
+    ensure_capacity!(pg.neighbor, req_capacity)
+    
+    return nothing
 end

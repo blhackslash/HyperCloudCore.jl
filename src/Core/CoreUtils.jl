@@ -46,3 +46,10 @@ macro pebug(p_idx, msg, args...)
         end
     end
 end
+
+function safe_resize!(vec::AbstractVector, N::Int)
+    if length(vec) < N
+        N_new = N + N ÷ 4
+        resize!(vec, N_new)
+    end
+end
