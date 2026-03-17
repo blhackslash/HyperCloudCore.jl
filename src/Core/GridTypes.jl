@@ -43,6 +43,29 @@ struct Kin2Macro{NM}
     ranges::NTuple{NM, UnitRange{Int}}
 end
 
+abstract type GridMover end
+
+# ---------------------------------------------------------
+# 1. NoGridMover
+# ---------------------------------------------------------
+struct NoGridMover <: GridMover end
+
+# ---------------------------------------------------------
+# 2. CustomGridMover
+# ---------------------------------------------------------
+struct CustomGridMover{F, P} <: GridMover
+    vel_func::F
+    params::P
+end
+
+# ---------------------------------------------------------
+# 3. PhysicalGridMover
+# ---------------------------------------------------------
+mutable struct PhysicalGridMover{D} <: GridMover
+    vel_indices::SVector{D,Float64}
+    grid_velocities::Vector{SVector{D, Float64}} # Pre-allocated workspace buffer
+end
+
 # ---------------------------------------------------------
 # 1. Grid Metadata
 # ---------------------------------------------------------
@@ -67,7 +90,7 @@ end
 # 2. Shared Workspace Buffers
 # ---------------------------------------------------------
 mutable struct SharedBuffers{D, M}
-    rho_buffer::Matrix{Float64}      
+    rho_buffer::Vector{SVector{M, Float64}}      
     pos_buffer::Vector{SVector{D, Float64}} 
     bit_buffer::Vector{Bool}
     int_buffer::Vector{Int}
@@ -84,8 +107,9 @@ mutable struct NeighborData{D, S, WF}
     ranges::Vector{UnitRange{Int}}
     indices::Vector{Int}
     
-    # Matrix holding (Weight, dx, [dy, dz])
-    data::Matrix{Float64} 
+    # --- THE MASSIVE CHANGE ---
+    weights::Vector{Float64}
+    distances::Vector{SVector{D, Float64}} 
 
     atomic_counts::Vector{Atomic{Int}}
     atomic_offsets::Vector{Atomic{Int}}
@@ -120,57 +144,23 @@ end
 # ---------------------------------------------------------
 # 7. The Top-Level Particle Grid
 # ---------------------------------------------------------
-mutable struct ParticleGrid{D, M, S, WF}
+mutable struct ParticleGrid{D, M, S, WF, GM}
     meta::GridMetadata{D}
     core::ParticleGridCore{D}
     shared::SharedBuffers{D, M}
     neighbor::NeighborData{D, S, WF}
     reorder::ReorderData{D}
-    manage::ManagementData{D,M}
+    manage::ManagementData{D, M}
+    kin2macro::Kin2Macro{M}
+    mover::GM
+
+    rhos::Vector{SVector{M, Float64}}
+    mood_events::Vector{SVector{M, Bool}}
+    curvatures::Vector{SVector{M, Float64}}
     
-    rhos::Matrix{Float64}
-    mood_events::Matrix{Bool}
-    curvatures::Matrix{Float64}
-    km::Kin2Macro{M}
 end
 
 # --- Aliases for convenience ---
-const ParticleGrid1D{M, S, WF} = ParticleGrid{1, M, S, WF}
-const ParticleGrid2D{M, S, WF} = ParticleGrid{2, M, S, WF}
+const ParticleGrid1D{M, S, WF, GM} = ParticleGrid{1, M, S, WF, GM}
+const ParticleGrid2D{M, S, WF, GM} = ParticleGrid{2, M, S, WF, GM}
 
-
-
-abstract type GridMover end
-
-# ---------------------------------------------------------
-# 1. NoGridMover
-# ---------------------------------------------------------
-struct NoGridMover <: GridMover end
-
-# ---------------------------------------------------------
-# 2. CustomGridMover
-# ---------------------------------------------------------
-struct CustomGridMover{F, P} <: GridMover
-    vel_func::F
-    params::P
-end
-
-# ---------------------------------------------------------
-# 3. PhysicalGridMover
-# ---------------------------------------------------------
-mutable struct PhysicalGridMover{E, I, V, D} <: GridMover
-    pde::E
-    interpolator::I
-    vel_kinetic_indices::V                       # Indices of the driving kinetic variables
-    grid_velocities::Vector{SVector{D, Float64}} # Pre-allocated workspace buffer
-
-    # Constructor 1: For Scalar Equations (No indices needed)
-    function PhysicalGridMover(pde::E, interp::I) where {E, I}
-        new{E, I, Nothing, 1}(pde, interp, nothing, Vector{SVector{1, Float64}}(undef, 0))
-    end
-
-    # Constructor 2: For Systems (Takes driving indices and Dimension)
-    function PhysicalGridMover(pde::E, interp::I, vel_indices::V, ::Val{D}) where {E, I, V, D}
-        new{E, I, V, D}(pde, interp, vel_indices, Vector{SVector{D, Float64}}(undef, 0))
-    end
-end

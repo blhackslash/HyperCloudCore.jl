@@ -2,27 +2,69 @@ include("MLSWeightFunctions.jl")
 include("GridMovement.jl")
 include("ParticleManagement.jl")
 
-# 1D Intercept
-@inline get_positions(pg::ParticleGrid{1}) = reinterpret(Float64, pg.core.positions)
-# 2D Normal Access
-@inline get_positions(pg::ParticleGrid{2}) = pg.core.positions
-# Allows get_positions to work natively on the SharedBuffers struct
-@inline get_positions(sb::SharedBuffers{1}) = reinterpret(Float64, sb.pos_buffer)
-@inline get_positions(sb::SharedBuffers{D}) where {D} = sb.pos_buffer
+# --- 1. Unified Position Accessors (No more reinterpret hacks!) ---
+@inline get_positions(pg::ParticleGrid) = pg.core.positions
+@inline get_positions(sb::SharedBuffers) = sb.pos_buffer
 
-# Column-Major Views for Neighbors
-@inline get_weights(pg::ParticleGrid)   = @inbounds view(pg.neighbor.data, :, 1)
-@inline get_xdistance(pg::ParticleGrid) = @inbounds view(pg.neighbor.data, :, 2)
-@inline get_ydistance(pg::ParticleGrid) = @inbounds view(pg.neighbor.data, :, 3)
+# --- 2. Unified Neighbor Accessors ---
+@inline get_weights(pg::ParticleGrid)   = pg.neighbor.weights
+@inline get_distances(pg::ParticleGrid) = pg.neighbor.distances # Returns SVector{D, Float64}
 @inline get_neighbors(pg::ParticleGrid) = pg.neighbor.indices
+
+function Kin2Macro(edges::Union{AbstractVector{Int},Tuple})
+    NM = length(edges) - 1
+    ranges = ntuple(i -> edges[i]:(edges[i+1]-1), NM)
+    return Kin2Macro{NM}(ranges)
+end
+
+# Functor 1: Reconstruct Macro Tuple (v_kinetic -> u_macro)
+@inline function (km::Kin2Macro{NM})(v::AbstractVector) where {NM}
+    return ntuple(i -> sum(v[k] for k in km.ranges[i]), Val(NM))
+end
+
+# Functor 2: Returns the macroscopic index 'm' that owns kinetic component 'k'
+@inline function (km::Kin2Macro{NM})(k::Int) where {NM}
+    for (i, range) in enumerate(km.ranges)
+        if k in range
+            return i 
+        end
+    end
+    @warn "Could not match given kinetic index to macro variable!"
+    return 1
+end
+
+# =========================================================================
+# UNIFIED DISTANCE CALCULATIONS (Works for 1D, 2D, and 3D)
+# =========================================================================
+
+@inline function getDistance(pg::ParticleGrid, i::Int, j::Int)
+    if pg.meta.bc == :periodic
+        return getPeriodicDistance(pg, i, j)
+    else
+        return getEuclideanDistance(pg, i, j)
+    end
+end
+
+@inline function getEuclideanDistance(pg::ParticleGrid, i::Int, j::Int)
+    # Returns SVector{D, Float64} automatically!
+    return get_positions(pg)[i] - get_positions(pg)[j]
+end
+
+@inline function getPeriodicDistance(pg::ParticleGrid, i::Int, j::Int)
+    dist = get_positions(pg)[i] - get_positions(pg)[j]
+    L = pg.meta.maxs - pg.meta.mins
+    
+    # Perfectly type-stable, unrolled periodic wrapping for any dimension
+    return map((d, l) -> d > 0.5 * l ? d - l : (d < -0.5 * l ? d + l : d), dist, L)
+end
 
 function createParticleGrid(
     ::Val{1}, xmin::Real, xmax::Real, N_interior::Integer, bc::Symbol,
     interp_range_factor::Real;
     M::Int = 1, randomness::Real = 0.0, rng = Random.default_rng(), merge_factor = 0.3,
-    weight_func = exponentialWeightFunction(1.,1.), km_inp = nothing
+    weight_func = exponentialWeightFunction(1.,1.), km = nothing, mover = NoGridMover()
 )
-    km = isnothing(km_inp) ? Kin2Macro(1:M) : km_inp  
+    km = isnothing(km) ? Kin2Macro(1:M) : km  
     N_ghost::Int = bc == :periodic ? 0 : ceil(Int, interp_range_factor)
     if bc == :periodic
         @assert N_ghost == 0 "Periodic grids do not use ghost cells."
@@ -68,7 +110,7 @@ function createParticleGrid(
     )
 
     core = ParticleGridCore{1}(positions, is_boundary, zeros(Int, N))
-    shared = SharedBuffers{1, M}(zeros(N, M), similar(positions), zeros(Bool,N), zeros(Int, N))
+    shared = SharedBuffers{1, M}(zeros(SVector{M, Float64}, N), similar(positions), zeros(Bool,N), zeros(Int, N))
 
     # Initialize ranges array
     neighbor = NeighborData{1, Nothing, typeof(weight_func)}(
@@ -85,9 +127,9 @@ function createParticleGrid(
     voxels = LocalVoxels(min_nb, R)
     manage = ManagementData{1,M}(voxels)
 
-    pg = ParticleGrid{1, M, Nothing, typeof(weight_func)}(
-        meta, core, shared, neighbor, reorder, manage,
-        zeros(N, M), zeros(Bool,N,M), zeros(N, M), km
+    pg = ParticleGrid{1, M, Nothing, typeof(weight_func), typeof(mover)}(
+        meta, core, shared, neighbor, reorder, manage, km, mover,
+        zeros(N, M), zeros(Bool,N,M), zeros(N, M), 
     )
 
     pg.reorder(pg)
@@ -100,9 +142,9 @@ function createParticleGrid(
     ::Val{2}, xmin::Real, xmax::Real, ymin::Real, ymax::Real, 
     Nx_interior::Int, Ny_interior::Int, bc::Symbol, interp_range_factor::Real;
     M::Int = 1, randomness::NTuple{2, Float64} = (0.0, 0.0), rng = Random.default_rng(), 
-    weight_func = exponentialWeightFunction(1.,1.), merge_factor = .3, km_inp = nothing,
+    weight_func = exponentialWeightFunction(1.,1.), merge_factor = .3, km = nothing, mover = NoGridMover()
 )
-    km = isnothing(km_inp) ? Kin2Macro(1:M) : km_inp  
+    km = isnothing(km) ? Kin2Macro(1:M) : km  
     xmin_f, xmax_f = Float64(xmin), Float64(xmax)
     ymin_f, ymax_f = Float64(ymin), Float64(ymax)
     range_factor_f = Float64(interp_range_factor)
@@ -140,7 +182,7 @@ function createParticleGrid(
         )
 
         core = ParticleGridCore{2}(positions, is_boundary, zeros(Float64, N))
-        shared = SharedBuffers{2, M}(zeros(N, M), similar(positions), zeros(Bool,N), zeros(Int, N))
+        shared = SharedBuffers{2, M}(zeros(SVector{M, Float64}, N), similar(positions), zeros(Bool,N), zeros(Int, N))
 
         # Initialize ranges array
         neighbors = NeighborData{2, typeof(sys), typeof(weight_func)}(
@@ -157,8 +199,8 @@ function createParticleGrid(
         manage = ManagementData{2,M}(voxels)
 
         return ParticleGrid{2, M, typeof(sys), typeof(weight_func)}(
-            meta, core, shared, neighbors, reorder, manage,
-            zeros(N, M), zeros(Bool,N,M), zeros(N, M), km
+            meta, core, shared, neighbors, reorder, manage, km, mover,
+            zeros(N, M), zeros(Bool,N,M), zeros(N, M),
         )
     end
     local pg
@@ -250,9 +292,7 @@ function (rd::ReorderData{D})(pg::ParticleGrid{D, M, S, WF}) where {D, M, S, WF}
         src_idx = rd.permutation[i]
         pg.core.positions[i]   = pg.shared.pos_buffer[src_idx]
         pg.core.is_boundary[i] = pg.shared.bit_buffer[src_idx]
-        for m in 1:M
-            pg.rhos[i, m] = pg.shared.rho_buffer[src_idx, m]
-        end
+        pg.rhos[i]             = pg.shared.rho_buffer[src_idx] # Single vector copy!
     end
 
     Threads.@threads for i in 1:N
@@ -333,7 +373,8 @@ function (nd::NeighborData{1, S, WF})(pg::ParticleGrid{1, M, S, WF}) where {M, S
     if total_neighbors > current_capacity
         new_capacity = ceil(Int, total_neighbors * 1.25)
         resize!(pg.neighbor.indices, new_capacity)
-        pg.neighbor.data = Matrix{Float64}(undef, new_capacity, 2)
+        resize!(pg.neighbor.weights, new_capacity)
+        resize!(pg.neighbor.distances, new_capacity)
     end
 
     offset_counts = zeros(Int, N) 
@@ -347,8 +388,8 @@ function (nd::NeighborData{1, S, WF})(pg::ParticleGrid{1, M, S, WF}) where {M, S
             d2 = dist_x^2
 
             pg.neighbor.indices[write_idx] = j
-            pg.neighbor.data[write_idx, 1] = weightFunc(d2)
-            pg.neighbor.data[write_idx, 2] = dist_x
+            pg.neighbor.weights[write_idx] = weightFunc(d2)
+            pg.neighbor.distances[write_idx] = SVector{1,Float64}(dist_x)
             
             offset_counts[i] += 1
         end
@@ -433,10 +474,14 @@ function (nd::NeighborData{D, S, WF})(pg::ParticleGrid{D, M, S, WF}) where {D, M
 
     total_neighbors = current_ptr - 1
     current_capacity = length(pg.neighbor.indices)
+    
     if total_neighbors > current_capacity
         new_capacity = ceil(Int, total_neighbors * 1.25)
         resize!(pg.neighbor.indices, new_capacity)
-        pg.neighbor.data = Matrix{Float64}(undef, new_capacity, D+1)
+        
+        # --- NEW VECTOR RESIZING (Replaces the Matrix reallocation) ---
+        resize!(pg.neighbor.weights, new_capacity)
+        resize!(pg.neighbor.distances, new_capacity)
     end
     
     @inbounds for i in 1:pg.meta.N; nd.atomic_offsets[i][] = 0; end
@@ -444,24 +489,31 @@ function (nd::NeighborData{D, S, WF})(pg::ParticleGrid{D, M, S, WF}) where {D, M
     
     map_pairwise!(
         (xi, xj, i, j, d2, null) -> begin
-            dist = xj - xi 
-            if pg.meta.bc == :periodic
-                domainSize = pg.meta.maxs - pg.meta.mins
-                dist -= round.(dist ./ domainSize) .* domainSize
-            end
-            weight = weightFunc(d2)
+            # CellListMap returns d2 (distance squared). 
+            # Make sure your weight function expects d or d2!
+            weight = weightFunc(sqrt(d2)) 
 
+            # --- NEW SVECTOR DISTANCE CALCULATION ---
+            # Automatically returns SVector{D, Float64} handling periodicity
+            dist = getDistance(pg, i, j) 
+
+            # --- PARTICLE i ---
             offset_i = atomic_add!(atomic_offsets[i], 1)
             write_idx_i = pg.neighbor.ranges[i].start + offset_i
             pg.neighbor.indices[write_idx_i] = j
-            pg.neighbor.data[write_idx_i, 1] = weight
-            for d in 1:D; pg.neighbor.data[write_idx_i, 1 + d] = dist[d]; end
+            
+            # Direct struct-of-arrays assignments
+            pg.neighbor.weights[write_idx_i]   = weight
+            pg.neighbor.distances[write_idx_i] = dist
 
+            # --- PARTICLE j ---
             offset_j = atomic_add!(atomic_offsets[j], 1) 
             write_idx_j = pg.neighbor.ranges[j].start + offset_j
             pg.neighbor.indices[write_idx_j] = i
-            pg.neighbor.data[write_idx_j, 1] = weight
-            for d in 1:D; pg.neighbor.data[write_idx_j, 1 + d] = -dist[d]; end
+            
+            # Direct struct-of-arrays assignments (Invert distance for j!)
+            pg.neighbor.weights[write_idx_j]   = weight
+            pg.neighbor.distances[write_idx_j] = -dist
             
             null
         end,
@@ -476,59 +528,40 @@ function (rd::ReorderData{1})(pg::ParticleGrid{1, M, S, WF}) where {M, S, WF}
     N = pg.meta.N
     range = (N + 1):length(pg.core.positions)
     p = [sortperm(pg.core.positions[1:N]); collect(range)]
-
     if issorted(p); return nothing; end
-
+    
     Base.permute!(pg.core.positions, p)
     Base.permute!(pg.core.is_boundary, p)
-    pg.rhos .= pg.rhos[p, :]
-    pg.curvatures .= pg.curvatures[p, :]
-    pg.mood_events .= pg.mood_events[p, :]
+    Base.permute!(pg.rhos, p)          # Native permutation!
+    Base.permute!(pg.curvatures, p)    # Native permutation!
+    Base.permute!(pg.mood_events, p)   # Native permutation!
+    
     return nothing
 end
 
 # --- 1D BCs (Matrix) ---
-function apply_boundary_conditions!(pg::ParticleGrid{1}, rhos_buffer::AbstractMatrix)
+function apply_boundary_conditions!(pg::ParticleGrid{1}, rhos_buffer::AbstractVector{T}) where {T}
     bc = pg.meta.bc
     if bc == :periodic; return; end
-    if bc == :fixed_dirichlet
-        @inbounds for i in 1:pg.meta.N
-            if pg.core.is_boundary[i]
-                rhos_buffer[i, :] .= pg.rhos[i, :]
-            end
-        end
-    elseif bc == :outflow
-        first_int = findfirst(==(false), pg.core.is_boundary)
-        last_int  = findlast(==(false), pg.core.is_boundary)
-        if isnothing(first_int) || isnothing(last_int); return; end
-        
-        val_left = rhos_buffer[first_int, :]
-        val_right = rhos_buffer[last_int, :]
-        for i in 1:(first_int-1); rhos_buffer[i, :] .= val_left; end
-        for i in (last_int+1):pg.meta.N; rhos_buffer[i, :] .= val_right; end
-    end
-    return nothing
-end
 
-# --- 1D BCs (Vector) ---
-function apply_boundary_conditions!(pg::ParticleGrid{1}, rhos_buffer::AbstractVector)
-    bc = pg.meta.bc
-    if bc == :periodic; return; end
     if bc == :fixed_dirichlet
         @inbounds for i in 1:pg.meta.N
             if pg.core.is_boundary[i]
-                rhos_buffer[i] = pg.rhos[i, 1]
+                rhos_buffer[i] = pg.rhos[i]
             end
         end
     elseif bc == :outflow
         first_int = findfirst(==(false), pg.core.is_boundary)
         last_int  = findlast(==(false), pg.core.is_boundary)
+        
         if isnothing(first_int) || isnothing(last_int); return; end
         
-        val_left = rhos_buffer[first_int]
+        val_left  = rhos_buffer[first_int]
         val_right = rhos_buffer[last_int]
-        rhos_buffer[1:(first_int-1)] .= val_left
-        rhos_buffer[(last_int+1):end] .= val_right
+        
+        # Use Ref() to broadcast the SVector as a single element
+        rhos_buffer[1:(first_int-1)] .= Ref(val_left)
+        rhos_buffer[(last_int+1):end] .= Ref(val_right)
     end
     return nothing
 end
@@ -715,45 +748,9 @@ function getTimeStep(pg::ParticleGrid{2}, eq)
     return dtMax
 end
 
-using Base.Threads: Atomic
-
-# =========================================================================
-# HELPER: Safe Matrix Resizing
-# =========================================================================
-# 2D Matrices cannot use `resize!` natively in Julia. This creates a new
-# matrix with the required rows and copies the old data over.
-function _resize_matrix(mat::Matrix{T}, new_rows::Int) where T
-    rows, cols = size(mat)
-    if rows >= new_rows
-        return mat
-    end
-    
-    new_mat = Matrix{T}(undef, new_rows, cols)
-    if rows > 0 && cols > 0
-        new_mat[1:rows, :] .= mat
-    end
-    return new_mat
-end
-
 # =========================================================================
 # OVERLOADED CAPACITY MANAGERS
 # =========================================================================
-
-"""
-    ensure_capacity!(sb::SharedBuffers, req_capacity::Int)
-"""
-@inline function ensure_capacity!(sb::SharedBuffers, req_capacity::Int)
-    if length(sb.pos_buffer) < req_capacity
-        new_cap = ceil(Int, req_capacity * 1.25)
-        
-        resize!(sb.pos_buffer, new_cap)
-        resize!(sb.bit_buffer, new_cap)
-        resize!(sb.int_buffer, new_cap)
-        
-        sb.rho_buffer = _resize_matrix(sb.rho_buffer, new_cap)
-    end
-    return nothing
-end
 
 """
     ensure_capacity!(rd::ReorderData, req_capacity::Int)
@@ -791,43 +788,36 @@ Note: This only resizes the arrays mapped to the number of PARTICLES (N).
 The `indices` and `data` arrays map to the number of NEIGHBORS, which scales 
 differently and must be resized separately during the neighbor search.
 """
-@inline function ensure_capacity!(nd::NeighborData, req_particles::Int)
-    old_cap = length(nd.atomic_counts)
-    
-    if old_cap < req_particles
-        new_cap = ceil(Int, req_particles * 1.25)
-        
-        # Ranges requires N+1
-        resize!(nd.ranges, new_cap + 1)
-        
-        resize!(nd.atomic_counts, new_cap)
-        resize!(nd.atomic_offsets, new_cap)
-        
-        # Newly added Atomic elements must be explicitly initialized
-        for i in (old_cap + 1):new_cap
-            nd.atomic_counts[i] = Atomic{Int}(0)
-            nd.atomic_offsets[i] = Atomic{Int}(0)
-        end
-        
-        # Ensure the new range pointer is safe
-        nd.ranges[new_cap + 1] = 1:0
+@inline function ensure_capacity!(nd::NeighborData{D}, req_neighbors::Int) where {D}
+    if length(nd.indices) < req_neighbors
+        new_cap = ceil(Int, req_neighbors * 1.25)
+        resize!(nd.indices, new_cap)
+        resize!(nd.weights, new_cap)
+        resize!(nd.distances, new_cap)
     end
     return nothing
 end
 
-"""
-    ensure_capacity!(pg::ParticleGrid, req_capacity::Int)
-
-Top-level capacity manager. Checks the core fields and delegates to substructs.
-"""
-@inline function ensure_capacity!(pg::ParticleGrid, req_capacity::Int)
-    if size(pg.rhos, 1) < req_capacity
+@inline function ensure_capacity!(sb::SharedBuffers{D, M}, req_capacity::Int) where {D, M}
+    if length(sb.pos_buffer) < req_capacity
         new_cap = ceil(Int, req_capacity * 1.25)
         
-        # Resize top-level matrices
-        pg.rhos        = _resize_matrix(pg.rhos, new_cap)
-        pg.mood_events = _resize_matrix(pg.mood_events, new_cap)
-        pg.curvatures  = _resize_matrix(pg.curvatures, new_cap)
+        resize!(sb.pos_buffer, new_cap)
+        resize!(sb.bit_buffer, new_cap)
+        resize!(sb.int_buffer, new_cap)
+        resize!(sb.rho_buffer, new_cap)
+    end
+    return nothing
+end
+
+@inline function ensure_capacity!(pg::ParticleGrid, req_capacity::Int)
+    if length(pg.rhos) < req_capacity
+        new_cap = ceil(Int, req_capacity * 1.25)
+        
+        # Native resize! now works for everything
+        resize!(pg.rhos, new_cap)
+        resize!(pg.mood_events, new_cap)
+        resize!(pg.curvatures, new_cap)
     end
     
     # Safely delegate down the chain

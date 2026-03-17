@@ -3,108 +3,115 @@ abstract type MeshfreeTimeStepper <: TimeStepper end
 abstract type FixedGridTimeStepper <: TimeStepper end
 abstract type MeshfreeSystemTimeStepper <: MeshfreeTimeStepper end
 
-## ------------------------------- Meshfree Direct Stepper -------------------------------
+## ------------------------------- Meshfree Direct Steppers -------------------------------
 
-struct EulerUpwind{G1 <: GradientInterpolator, G2 <: GradientInterpolator, M <: MOODCriterion, GM <: GridMover} <: MeshfreeTimeStepper
+struct EulerUpwind{T, PDE <: HyperbolicPDE, G1 <: GradientInterpolator, G2 <: GradientInterpolator, M <: MOODCriterion} <: MeshfreeTimeStepper
+    pde::PDE
     gradientInterpolator::G1
     fallbackInterpolator::G2
     mood::M
-    grid_mover::GM
     
-    # Buffers are now part of the struct to be reused
-    rhoInit::Vector{Float64}      # Stores the state at the beginning of the step
-    neighbor_fs::Vector{Float64}  # Pre-gathered neighbor values
-    neighbor_dfs::Vector{Float64} # Pre-gathered neighbor differences
-end
+    rhoInit::Vector{T}      
+    neighbor_fs::Vector{T}  
+    neighbor_dfs::Vector{T} 
 
-# No longer needs Nx, Ny. Buffers are sized based on the grid passed during the call.
-struct RalstonRK2{G1, G2, MOOD, GM} <: MeshfreeTimeStepper
-    gradientInterpolator::G1
-    fallbackInterpolator::G2
-    mood::MOOD
-    grid_mover::GM
-    
-    # Buffers are now part of the struct to be reused
-    rhoInit::Vector{Float64}
-    rhos::Vector{Float64}
-    div1::Vector{Float64}
-
-    # Buffers for efficient calculations
-    neighbor_fs::Vector{Float64}
-    neighbor_dfs::Vector{Float64}
-
-    function RalstonRK2(grad::G1, fallback::G2, mood::M, gm::GM) where {G1 <: GradientInterpolator, G2 <: GradientInterpolator, M <: MOODCriterion, GM <: GridMover}
-        # Initialize with empty buffers, they will be resized on the first step
-        new{G1, G2, M, GM}(grad, fallback, mood, gm, Float64[], Float64[], Float64[], Float64[], Float64[])
+    function EulerUpwind(pde::PDE, grad::G1, fallback::G2, mood::M, ::Type{T}=SVector{1, Float64}) where {PDE, G1, G2, M, T}
+        new{T, PDE, G1, G2, M}(pde, grad, fallback, mood, T[], T[], T[])
     end
 end
 
-struct RalstonRK2SmoothSwitch{G1, G2, MOOD, GM} <: MeshfreeTimeStepper
+struct RalstonRK2{T, PDE <: HyperbolicPDE, G1, G2, MOOD} <: MeshfreeTimeStepper
+    pde::PDE
     gradientInterpolator::G1
     fallbackInterpolator::G2
     mood::MOOD
-    grid_mover::GM
-    tol::Float64
     
-    # --- Reusable Buffers (Workspace) ---
-    rho_n::Vector{Float64}
-    rho_stage::Vector{Float64}
-    rho_fallback::Vector{Float64}
-    div1::Vector{Float64}
+    rhoInit::Vector{T}
+    rhos::Vector{T}
+    div1::Vector{T}
+
+    neighbor_fs::Vector{T}
+    neighbor_dfs::Vector{T}
+
+    function RalstonRK2(pde::PDE, grad::G1, fallback::G2, mood::M, ::Type{T}=SVector{1, Float64}) where {PDE, G1, G2, M, T}
+        new{T, PDE, G1, G2, M}(pde, grad, fallback, mood, T[], T[], T[], T[], T[])
+    end
+end
+
+struct RK3{T, PDE <: HyperbolicPDE, G1, G2, MOOD} <: MeshfreeTimeStepper
+    pde::PDE
+    gradientInterpolator::G1
+    fallbackInterpolator::G2
+    mood::MOOD
     
-    # --- Propagation Buffers ---
-    mood_indices::Vector{Int}
+    rhoInit::Vector{T}
+    rhos::Vector{T}
+    div1::Vector{T}
+    div2::Vector{T}
+
+    neighbor_fs::Vector{T}
+    neighbor_dfs::Vector{T}
+
+    function RK3(pde::PDE, grad::G1, fallback::G2, mood::M, ::Type{T}=SVector{1, Float64}) where {PDE, G1, G2, M, T}
+        new{T, PDE, G1, G2, M}(pde, grad, fallback, mood, T[], T[], T[], T[], T[], T[])
+    end
+end
+
+struct RK4{T, PDE <: HyperbolicPDE, G1, G2, MOOD} <: MeshfreeTimeStepper
+    pde::PDE
+    gradientInterpolator::G1
+    fallbackInterpolator::G2
+    mood::MOOD
+    
+    rhoInit::Vector{T}
+    rhos::Vector{T}
+    k1::Vector{T}
+    k2::Vector{T}
+    k3::Vector{T}
+
+    neighbor_fs::Vector{T}
+    neighbor_dfs::Vector{T}
+
+    function RK4(pde::PDE, grad::G1, fallback::G2, mood::M, ::Type{T}=SVector{1, Float64}) where {PDE, G1, G2, M, T}
+        new{T, PDE, G1, G2, M}(pde, grad, fallback, mood, T[], T[], T[], T[], T[], T[], T[])
+    end
+end
+
+struct RalstonSwitchRK2{T, PDE <: HyperbolicPDE, G1, G2, MOOD} <: MeshfreeTimeStepper
+    pde::PDE
+    gradientInterpolator::G1
+    fallbackInterpolator::G2
+    mood::MOOD
+    
+    rhoInit::Vector{T}
+    rhos::Vector{T}
+    rho_fallback::Vector{T}
+    div1::Vector{T}
+
+    # Graph/Topology Propagation Buffers for MOOD Switching
     prop_indices::Vector{Int}
-    
-    # Per-step flag to track which particles have been switched to fallback
-    switched_to_fallback::BitVector
+    switched_to_fallback::Vector{Bool}
+    mood_indices::Vector{Int}
+    tol::Float64
 
-    # --- Buffers for efficient calculations (like in RK4) ---
-    neighbor_fs::Vector{Float64}
-    neighbor_dfs::Vector{Float64}
+    neighbor_fs::Vector{T}
+    neighbor_dfs::Vector{T}
+
+    function RalstonSwitchRK2(pde::PDE, grad::G1, fallback::G2, mood::M, tol::Float64=1e-6, ::Type{T}=SVector{1, Float64}) where {PDE, G1, G2, M, T}
+        new{T, PDE, G1, G2, M}(pde, grad, fallback, mood, T[], T[], T[], T[], Int[], Bool[], Int[], tol, T[], T[])
+    end
 end
 
-struct RK3{G1 <: GradientInterpolator, G2 <: GradientInterpolator, MOOD <: MOODCriterion, GM} <: MeshfreeTimeStepper
-    gradientInterpolator::G1
-    fallbackInterpolator::G2
-    mood::MOOD
-    grid_mover::GM
-    
-    # --- Reusable Buffers (Workspace) ---
-    rho_n::Vector{Float64}      # Stores the solution at the start of the step
-    rho_stage1::Vector{Float64} # Stores the result of the first stage
-    rho_stage2::Vector{Float64} # Stores the result of the second stage
-    
-    div1::Vector{Float64} # Stores divergence from stage 1
-    div2::Vector{Float64} # Stores divergence from stage 2
-    div3::Vector{Float64} # Stores divergence from stage 3
+## ------------------------------- Butcher Tableaus -------------------------------
 
-    # --- Buffers for efficient calculations (like in RK4) ---
-    neighbor_fs::Vector{Float64}
-    neighbor_dfs::Vector{Float64}
+struct ButcherTableau
+    A::Matrix{Float64}
+    b::Vector{Float64}
+    c::Vector{Float64}
+    A_tilde::Matrix{Float64}
+    b_tilde::Vector{Float64}
+    c_tilde::Vector{Float64}
 end
-
-struct RK4{G1, G2, MOOD, GM} <: MeshfreeTimeStepper
-    gradientInterpolator::G1
-    fallbackInterpolator::G2
-    mood::MOOD
-    grid_mover::GM
-    
-    # --- Reusable Buffers (Workspace) ---
-    rho_n::Vector{Float64}
-    rho_stage::Vector{Float64} # A single buffer for all intermediate stages
-    
-    k1::Vector{Float64} # Stores divergence from stage 1
-    k2::Vector{Float64} # Stores divergence from stage 2
-    k3::Vector{Float64} # Stores divergence from stage 3
-    k4::Vector{Float64} # Stores divergence from stage 4
-
-    # --- Buffers for efficient calculations (like in RK2) ---
-    neighbor_fs::Vector{Float64}
-    neighbor_dfs::Vector{Float64}
-end
-
-## ------------------------------- Meshfree IMEX Stepper -------------------------------
 
 ## ------------------------------- Source Terms -------------------------------
 
@@ -112,34 +119,21 @@ abstract type AbstractSourceTerm end
 
 struct NoSourceTerm <: AbstractSourceTerm end
 
-struct RelaxationSourceTerm{D, N, NK, PDE <: HyperbolicPDE{D, N}} <: AbstractSourceTerm
-    system_eq::PDE
+struct RelaxationSourceTerm{D, NM, NK} <: AbstractSourceTerm
     epsilon::Float64
     inv_epsilon::Float64
-    kin2macro::Kin2Macro{N}
-
-    # Parameters stored as flat tuples of length NK (Number of Kinetic components)
-    coefficients::NTuple{NK, Float64}
-    relax_speeds::NTuple{NK, Float64}
+    coefficients::NTuple{NM, Float64} # Sized to Macro variables
+    inv_relax_speeds::NTuple{NK, SVector{D, Float64}} # Sized to Kinetic, customized dot product!
     interior_factors::NTuple{NK, Float64}
-    dimensions::NTuple{NK, Int} # which spatial dimension (flux) this component advects in
-
-    num_total_kinetic_components::Int64
-    num_macro_variables::Int64
 end
 
-mutable struct NonLocalRelaxationSourceTerm{D, N, NK, PDE <: HyperbolicPDE{D, N}} <: AbstractSourceTerm
-    system_eq::PDE
+mutable struct NonLocalRelaxationSourceTerm{D, NM, NK} <: AbstractSourceTerm
     epsilon::Float64
     inv_epsilon::Float64
-    kin2macro::Kin2Macro{N}
-
-    coefficients::NTuple{N, Float64}
-    relax_speeds::NTuple{NK, Float64}
+    coefficients::NTuple{NM, Float64}
+    inv_relax_speeds::NTuple{NK, SVector{D, Float64}}
     interior_factor::Float64
-
     T_potential::Matrix{Float64}
-    num_total_kinetic_components::Int
 end
 
 abstract type AbstractImplicitSolver end
@@ -158,29 +152,64 @@ struct IMEXButcherTableau{M <: AbstractArray{Float64, 2}, V <: AbstractArray{Flo
     bt::V
 end
 
-mutable struct GeneralIMEXTimeStepper{M_comp, G1, G2, M_crit, IS, ST_OBJ, BT, GM} <: TimeStepper
-    # User's modular components
-    gradientInterpolator::NTuple{M_comp, G1}
-    fallbackInterpolator::NTuple{M_comp, G2}
+struct GeneralIMEXTimeStepper{T, M_comp, G1, G2, M_crit, IS, ST_OBJ, BT} <: MeshfreeSystemTimeStepper
+    gradientInterpolators::NTuple{M_comp, G1}
+    fallbackInterpolators::NTuple{M_comp, G2}
     mood::M_crit
     implicit_solver::IS
     source_term_object::ST_OBJ
     butcher_tableau::BT
-    grid_mover::GM  
     
-    # --- Reusable Buffers (Workspace) ---
-    U_n_sys::Matrix{Float64}
-    Y_stages_sys::Vector{Matrix{Float64}}
-    K_E_stages_sys::Vector{Matrix{Float64}}
-    K_I_stages_sys::Vector{Matrix{Float64}}
+    # --- Buffers for local time stepping (Fully Converted to Vector{T}) ---
+    U_n::Vector{T}
+    Y_stages::Vector{Vector{T}}
+    K_E_stages::Vector{Vector{T}}
+    K_I_stages::Vector{Vector{T}}
     
-    mood_triggered::BitArray{3}
+    mood_triggered::Matrix{Bool}
+    
+    # --- Buffers for parallel evaluation ---
+    U_n_sys::Vector{T}
+    Y_stages_sys::Vector{Vector{T}}
+    K_E_stages_sys::Vector{Vector{T}}
+    K_I_stages_sys::Vector{Vector{T}}
+    
+    mood_triggered_sys::Array{Bool, 3}
     
     # Buffers for explicit fused loop 
-    all_neighbor_fs::Matrix{Float64}
-    all_neighbor_dfs::Matrix{Float64}
+    all_neighbor_fs::Vector{T}
+    all_neighbor_dfs::Vector{T}
     
     num_stages::Int
+
+    function GeneralIMEXTimeStepper(
+        gradientInterpolator::G1, fallbackInterpolator::G2, mood::M_crit,
+        implicit_solver::IS, source_term_object::ST_OBJ, butcher_tableau::BT,
+        ::Type{T}=SVector{1, Float64} # Parameterized by SVector natively
+    ) where {G1, G2, M_crit, IS, ST_OBJ, BT, T}
+        
+        s = size(butcher_tableau.A, 1) # Number of stages
+        M_comp = source_term_object.num_total_kinetic_components
+        
+        new{T, M_comp, G1, G2, M_crit, IS, ST_OBJ, BT}(
+            ntuple(_ -> deepcopy(gradientInterpolator), M_comp), 
+            ntuple(_ -> deepcopy(fallbackInterpolator), M_comp), 
+            mood, implicit_solver, source_term_object, butcher_tableau,
+            T[], 
+            [T[] for _ in 1:s],
+            [T[] for _ in 1:s], 
+            [T[] for _ in 1:s], 
+            falses(0, M_comp),
+            T[], 
+            [T[] for _ in 1:s],
+            [T[] for _ in 1:s], 
+            [T[] for _ in 1:s], 
+            falses(0, M_comp, s),
+            T[], 
+            T[],
+            s
+        )
+    end
 end
 
 ## ------------------------------- Fixed Grid Direct Stepper -------------------------------

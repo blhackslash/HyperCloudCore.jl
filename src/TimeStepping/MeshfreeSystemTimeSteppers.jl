@@ -87,7 +87,7 @@ function (imex_ts::GeneralIMEXTimeStepper{M_comp, G1, G2, M_crit, IS, ST_OBJ, BT
     bt = imex_ts.butcher_tableau
     
     # 1. Geometry updates on the unified grid
-    manage_particles!(imex_ts.grid_mover, pg, imex_ts.source_term_object) 
+    manage_particles!(pg, imex_ts.source_term_object) 
     update_grid_velocities!(pg, imex_ts.grid_mover)
     
     N_particles = pg.meta.N 

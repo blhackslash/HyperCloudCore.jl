@@ -61,15 +61,15 @@ function main()
         #"init_params" => (0.,1.,-2.,2.),
         "randomness_factor" => 0.0, # (x_rand_factor, y_rand_factor)
         "SEED_value" => 42,
-        "PDE" => "burgers", "PDE_params" => 1., "merge_factor" => .3,
+        "PDE" => "linear", "PDE_params" => 1., #"merge_factor" => .3,
         "weight_function" => "exponential",
-        "grid_mover" => "physical",
+        "grid_mover" => "none",
         "bc" => :outflow,
         "sim_function" => "runSimulation",
 
         # --- Method-Specific Parameters for "RK4-MUSCL2-2D" ---
-        "timestepper" => "ARS222",
-        "relax_velocities" => [[1.,-1.]],  "relax_epsilon" => 1e-6, "save_relax" => false,
+        "timestepper" => "EulerUpwind",
+        #"relax_velocities" => [[1.,-1.]],  "relax_epsilon" => 1e-6, "save_relax" => false,
         "main_gradient" => "Upwind",
         "order" =>1,
         "main_flux" => "Rusanov",

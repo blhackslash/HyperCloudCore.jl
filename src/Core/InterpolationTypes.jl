@@ -193,64 +193,39 @@ struct MUSCL{D,ORDER<:MUSCLORDER, L<:AbstractSlopeLimiter, NFF <: NumericalFluxF
     mood::M
 end
 
-
 ## ------------------------------- Upwind -------------------------------
-abstract type UpwindAlgorithm end  # Only relevant in 2D. In 1D, all algorithms are the same.
-abstract type TiwariAlgorithm <: UpwindAlgorithm end  # Split domain in left and right for d/dx, and up and down for d/dy.
-abstract type PraveenAlgorithm <: UpwindAlgorithm end  # Praveen C. postive upwind scheme.
-abstract type NonLinearPraveenAlgorithm <: UpwindAlgorithm end  # Praveen C. postive upwind scheme.
-abstract type ClassicAlgorithm <: UpwindAlgorithm end  # Take all points 'behind' center point. 
-abstract type DecompositionAlgorithm <: UpwindAlgorithm end
+abstract type UpwindAlgorithm end  
+abstract type TiwariAlgorithm <: UpwindAlgorithm end 
+abstract type PraveenAlgorithm <: UpwindAlgorithm end  
+abstract type NonLinearPraveenAlgorithm <: UpwindAlgorithm end  
+abstract type ClassicAlgorithm <: UpwindAlgorithm end 
 
 abstract type UpwindWorkspace end
 
-
-"""
-A thread-local workspace for the Upwind TiwariAlgorithm.
-Holds temporary buffers for all neighbors and for the filtered stencils.
-"""
-struct UpwindWorkspaceTA <: UpwindWorkspace
-    # Buffers to hold ALL neighbor data initially (size num_neighbors)
-    dxVec::Vector{Float64}
-    dyVec::Vector{Float64}
-    dfVec::Vector{Float64}
-    wVec::Vector{Float64}  # For calculated weights
-
-    # BitVectors to mark upwind neighbors for each direction
+struct UpwindWorkspaceTA{D, T} <: UpwindWorkspace
+    distVec::Vector{SVector{D, Float64}}
+    dfVec::Vector{T}
+    wVec::Vector{Float64}
     xWindow::BitVector
     yWindow::BitVector
 end
 
-"""
-A minimal, thread-local workspace for the Upwind ClassicAlgorithm.
-It holds temporary buffers for the filtered "upwind" neighbors.
-"""
-struct UpwindWorkspaceCA <: UpwindWorkspace
-    dxVec::Vector{Float64} # Filtered dx (upwind)
-    dyVec::Vector{Float64} # Filtered dy (upwind)
-    dfVec::Vector{Float64} # Filtered df (upwind)
-    wVec::Vector{Float64}  # Filtered w (upwind)
+struct UpwindWorkspaceCA{D, T} <: UpwindWorkspace
+    distVec::Vector{SVector{D, Float64}}
+    dfVec::Vector{T} 
+    wVec::Vector{Float64}  
 end
 
-"""
-A minimal, thread-local workspace for the Upwind PraveenAlgorithm.
-Stores only essential coefficients.
-"""
-struct UpwindWorkspacePA <: UpwindWorkspace
-    # Buffers to hold calculated coefficients (size num_neighbors)
-    coeff_x_Vec::Vector{Float64}
-    coeff_y_Vec::Vector{Float64}
-    cijVec::Vector{Float64}     # Final coefficient
+struct UpwindWorkspacePA{D, T} <: UpwindWorkspace
+    coeff_Vec::Vector{SVector{D, Float64}}
+    cijVec::Vector{Float64}     
 end
-
 
 struct UpwindGradient{D, WS <: UpwindWorkspace, I <: Interpolator, Algorithm <: UpwindAlgorithm} <: GradientInterpolator
     order::Int
     numericalFlux::NumericalFluxFunction
     workspaces::Vector{WS}
     interpolator::I
-    # --- Modify the UpwindGradient Constructor ---
-
 end
 
 ## ------------------------------- WENO -------------------------------

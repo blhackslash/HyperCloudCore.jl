@@ -1,71 +1,120 @@
-# 1D or generic fallback
-@inline function (rusanov::RusanovFlux)(leftState::Float64, rightState::Float64, eq::ScalarHyperbolicPDE)
-    leftFlux = flux(eq, leftState)
-    rightFlux = flux(eq, rightState)
-    s = max(abs(velocity(eq, leftState)), abs(velocity(eq, rightState)))
-    return 0.5 * (leftFlux + rightFlux - s * (rightState - leftState))
+# =========================================================================
+# HELPER FUNCTIONS FOR UNIFIED DIRECTIONAL ACCESS
+# =========================================================================
+
+# --- Directional Flux Extractors ---
+# Scalar 1D (Returns SVector{1, Float64})
+@inline _directional_flux(eq::ScalarHyperbolicPDE{1}, u::SVector{1, Float64}, d::Int) = flux(eq, u)
+# Scalar Multi-D (Extracts the d-th dimension and repackages as SVector{1, Float64})
+@inline _directional_flux(eq::ScalarHyperbolicPDE{D}, u::SVector{1, Float64}, d::Int) where {D} = SVector{1, Float64}(flux(eq, u)[d])
+
+# System 1D (Returns SVector{NM, Float64})
+@inline _directional_flux(eq::HyperbolicPDESystem{1}, U::SVector{NM, Float64}, d::Int) where {NM} = flux(eq, U)
+# System Multi-D (Extracts the SVector{NM, Float64} for dimension d)
+@inline _directional_flux(eq::HyperbolicPDESystem{D}, U::SVector{NM, Float64}, d::Int) where {D, NM} = flux(eq, U)[d]
+
+
+# --- Directional Velocity Extractors (Scalar Only) ---
+@inline _directional_velocity(eq::ScalarHyperbolicPDE{1}, u::SVector{1, Float64}, d::Int) = velocity(eq, u)[1]
+@inline _directional_velocity(eq::ScalarHyperbolicPDE{D}, u::SVector{1, Float64}, d::Int) where {D} = velocity(eq, u)[d]
+
+
+# =========================================================================
+# WAVE SPEED CALCULATIONS
+# =========================================================================
+
+# Scalar PDEs 
+@inline function max_wave_speed(eq::ScalarHyperbolicPDE, uL::SVector{1, Float64}, uR::SVector{1, Float64}, d::Int)
+    vL = _directional_velocity(eq, uL, d)
+    vR = _directional_velocity(eq, uR, d)
+    return max(abs(vL), abs(vR))
 end
 
-# 2D Optimized simultaneous evaluation
-@inline function (rusanov::RusanovFlux)(fmx::Float64, fpx::Float64, fmy::Float64, fpy::Float64, eq::ScalarHyperbolicPDE{2})
-    # Evaluate and extract ONLY the X components
-    fx_l = flux(eq, fmx)[1]
-    fx_r = flux(eq, fpx)[1] 
-    vx_l = velocity(eq, fmx)[1]
-    vx_r = velocity(eq, fpx)[1]
-    sx = max(abs(vx_l), abs(vx_r))
-    num_fx = 0.5 * (fx_l + fx_r - sx * (fpx - fmx))
-    
-    # Evaluate and extract ONLY the Y components
-    fy_l = flux(eq, fmy)[2]
-    fy_r = flux(eq, fpy)[2]
-    vy_l = velocity(eq, fmy)[2]
-    vy_r = velocity(eq, fpy)[2]
-    sy = max(abs(vy_l), abs(vy_r))
-    num_fy = 0.5 * (fy_l + fy_r - sy * (fpy - fmy))
-    
-    return num_fx, num_fy
+# System PDEs 
+@inline function max_wave_speed(eq::HyperbolicPDESystem, UL::SVector{NM, Float64}, UR::SVector{NM, Float64}, d::Int) where {NM}
+    # Notice we pass the SVector directly into max_eigenvalue now!
+    lamL = max_eigenvalue(eq, UL, d) 
+    lamR = max_eigenvalue(eq, UR, d)
+    return max(lamL, lamR)
 end
 
-# 1D or generic fallback
-@inline function (upwind::UpwindFlux)(leftState::Float64, rightState::Float64, eq::ScalarHyperbolicPDE) 
-    leftFlux = flux(eq, leftState)
-    rightFlux = flux(eq, rightState)
-    a = leftState == rightState ? velocity(eq, leftState) : (leftFlux - rightFlux) / (leftState - rightState)
-    return 0.5 * (leftFlux + rightFlux - abs(a) * (rightState - leftState))
+# --- Default Eigenvalue implementations for Euler Equations ---
+@inline function max_eigenvalue(eq::Euler1D, U::Tuple, d::Int)
+    rho, m, E = U
+    if rho < 1e-9; return 0.0; end
+    u = m / rho
+    p = pressure_from_euler_conserved(rho, m, E)
+    c = sqrt(GAS_GAMMA_EULER * p / rho)
+    return abs(u) + c
 end
 
-# 2D Optimized simultaneous evaluation
-@inline function (upwind::UpwindFlux)(fmx::Float64, fpx::Float64, fmy::Float64, fpy::Float64, eq::ScalarHyperbolicPDE{2}) 
-    # X-direction
-    fx_l = flux(eq, fmx)[1]
-    fx_r = flux(eq, fpx)[1]
-    vx_l = velocity(eq, fmx)[1]
-    ax = fmx == fpx ? vx_l : (fx_l - fx_r) / (fmx - fpx)
-    num_fx = 0.5 * (fx_l + fx_r - abs(ax) * (fpx - fmx))
-    
-    # Y-direction
-    fy_l = flux(eq, fmy)[2]
-    fy_r = flux(eq, fpy)[2]
-    vy_l = velocity(eq, fmy)[2]
-    ay = fmy == fpy ? vy_l : (fy_l - fy_r) / (fmy - fpy)
-    num_fy = 0.5 * (fy_l + fy_r - abs(ay) * (fpy - fmy))
-    
-    return num_fx, num_fy
+@inline function max_eigenvalue(eq::Euler2D, U::Tuple, d::Int)
+    rho, mx, my, E = U
+    if rho < 1e-9; return 0.0; end
+    # Get velocity along the required dimension (d=1 is X, d=2 is Y)
+    u_n = d == 1 ? mx / rho : my / rho
+    p = pressure_from_euler_conserved(U)
+    c = sqrt(GAS_GAMMA_EULER * p / rho)
+    return abs(u_n) + c
 end
 
 
-function (lw::RoeDiffusiveFlux)(leftState::Real, rightState::Real, eq::ScalarHyperbolicPDE{D}) where {D}
-    F_L = flux(eq, leftState)
-    F_R = flux(eq, rightState)
-    
-    avg_F = 0.5 * (F_L + F_R)
-    diff_U = rightState - leftState
+# =========================================================================
+# NUMERICAL FLUXES (Unified for Scalars & Systems, 1D & Multi-D)
+# =========================================================================
 
-    if abs(diff_U) < 1e-12
-        return F_L # or F_R, they are the same
+# ---------------------------------------------------------
+# RUSANOV FLUX
+# ---------------------------------------------------------
+
+# Scalar Dispatch
+@inline function (rusanov::RusanovFlux)(fL::SVector{1, Float64}, fR::SVector{1, Float64}, eq::ScalarHyperbolicPDE, d::Int=1)
+    uL = fL[1]
+    uR = fR[1]
+    
+    fx_L = _directional_flux(eq, uL, d)
+    fx_R = _directional_flux(eq, uR, d)
+    s = max_wave_speed(eq, uL, uR, d)
+    
+    return SVector{1, Float64}(0.5 * (fx_L + fx_R - s * (uR - uL)))
+end
+
+# System Dispatch (Calculates flux for all NM variables simultaneously)
+@inline function (rusanov::RusanovFlux)(fL::SVector{NM, Float64}, fR::SVector{NM, Float64}, eq::HyperbolicPDESystem, d::Int=1) where {NM}
+
+    F_L = _directional_flux(eq, fL, d)
+    F_R = _directional_flux(eq, fR, d)
+    s = max_wave_speed(eq, fL, fR, d)
+    
+    return SVector{NM, Float64}(ntuple(c -> 0.5 * (F_L[c] + F_R[c] - s * (fR[c] - fL[c])), Val(NM)))
+end
+
+
+# ---------------------------------------------------------
+# UPWIND FLUX
+# ---------------------------------------------------------
+
+# Scalar Dispatch
+@inline function (upwind::UpwindFlux)(fL::SVector{1, Float64}, fR::SVector{1, Float64}, eq::ScalarHyperbolicPDE, d::Int=1)
+    uL = fL[1]
+    uR = fR[1]
+    
+    fx_L = _directional_flux(eq, uL, d)
+    fx_R = _directional_flux(eq, uR, d)
+    
+    # Calculate local wave speed (a)
+    if uL == uR
+        a = _directional_velocity(eq, uL, d)
     else
-        A_roe_squared_term = (F_L - F_R)^2 / diff_U # This is (-(F_R-F_L))^2 / diff_U = (F_R-F_L)^2 / diff_U
-        return avg_F - A_roe_squared_term
+        a = (fx_L - fx_R) / (uL - uR)
     end
+    
+    return SVector{1, Float64}(0.5 * (fx_L + fx_R - abs(a) * (uR - uL)))
+end
+
+# System Dispatch
+@inline function (upwind::UpwindFlux)(fL::SVector{NM, Float64}, fR::SVector{NM, Float64}, eq::HyperbolicPDESystem, d::Int=1) where {NM}
+    # True upwinding for systems requires Roe-averaging or full eigensystem decomposition.
+    # As a safe fallback for systems, we automatically route to Rusanov.
+    return RusanovFlux()(fL, fR, eq, d)
 end

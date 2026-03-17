@@ -54,7 +54,7 @@ end
 # MULTIPLE DISPATCH KINETIC RECONSTRUCTION
 # =========================================================================
 
-@inline function reconstruct_kinetic(U_macro::Tuple, st::RelaxationSourceTerm{D, N, NK, PDE}) where {D, N, NK, PDE}
+@inline function reconstruct_kinetic(U_macro::Tuple, st::RelaxationSourceTerm{NM, NK}) where {NM, NK}
     flux_vals = flux(st.system_eq, U_macro)
     return ntuple(Val(NK)) do k
         m_idx = st.kin2macro(k)
@@ -64,7 +64,7 @@ end
     end
 end
 
-@inline function reconstruct_kinetic(U_macro::Tuple, st::NonLocalRelaxationSourceTerm{D, N, NK, PDE}, T_vals::Tuple) where {D, N, NK, PDE}
+@inline function reconstruct_kinetic(U_macro::Tuple, st::NonLocalRelaxationSourceTerm{NM, NK}, T_vals::Tuple) where {NM, NK}
     return ntuple(Val(NK)) do k
         m_idx = st.kin2macro(k)
         T_val = T_vals[m_idx]
@@ -119,6 +119,11 @@ end
 # =========================================================================
 # MAIN ROUTINE
 # =========================================================================
+# User-facing wrapper: automatically extracts the mover!
+function manage_particles!(pg::ParticleGrid1D, source_term::AbstractSourceTerm=NoSourceTerm())
+    _manage_particles!(pg.mover, pg, source_term)
+end
+
 function manage_particles!(::NoGridMover, kwargs...)
     return
 end

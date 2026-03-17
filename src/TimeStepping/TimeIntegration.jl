@@ -9,10 +9,12 @@ end
 function initTSBuffer!(ts::MeshfreeTimeStepper, pg::ParticleGrid)
     # `num_interactions` is the total length of the flat neighbor lists (M)
     num_interactions = length(pg.neighbor.indices) 
+    
     # --- 3. Resize Per-Interaction Buffers (Size M) ---
     _ensure_capacity!(ts.neighbor_fs, num_interactions)
     _ensure_capacity!(ts.neighbor_dfs, num_interactions)
     initAddTSBuffer!(ts, pg)
+    
     return nothing
 end
 
@@ -25,30 +27,17 @@ end
 
 include("MeshfreeTimeSteppers.jl")
 include("FixedGridTimeSteppers.jl")
-
-
 include("ButcherTableaus.jl")
 include("SourceTerms.jl")
 include("ImplicitSolvers.jl")
 include("MeshfreeSystemTimeSteppers.jl")
 
-# --- Low-Level `saveData!` Helpers ---
-
-function _copy_positions!(dest::Vector{Float64}, src::AbstractVector)
-    copyto!(dest, src)
-end
-
-function _copy_positions!(dest::Vector{Tuple{Float64,Float64}}, src::AbstractVector{SVector{2, Float64}})
-    @inbounds for i in eachindex(dest, src)
-        dest[i] = Tuple(src[i])
-    end
-end
 
 """
     saveData!(...)
 
 Saves data from a unified ParticleGrid into pre-allocated storage slots.
-Works for both scalar (M=1) and system (M>1) equations natively.
+Works natively for both 1D and Multi-D SVectors.
 """
 function saveData!(
     xs_storage::AbstractVector, 
@@ -63,33 +52,33 @@ function saveData!(
     ts_storage[snap_idx] = current_t
     N_active = pg.meta.N 
     
+    # Extract native arrays (These are Vector{SVector})
+    pos_array = get_positions(pg)
+    rho_array = pg.rhos
+    
     if remove_ghosts
+        # Create a view of active particles and find interior indices
         active_boundary_view = @view pg.core.is_boundary[1:N_active]
         indices = findall(.!active_boundary_view)
-        
         N_save = length(indices)
-        pos_type = D == 1 ? Float64 : Tuple{Float64,Float64}
         
-        xs_storage[snap_idx] = Vector{pos_type}(undef, N_save)
-        us_storage[snap_idx] = Matrix{Float64}(undef, N_save, M)
+        # Pre-allocate SVector output arrays for this snapshot
+        xs_storage[snap_idx] = Vector{SVector{D, Float64}}(undef, N_save)
+        us_storage[snap_idx] = Vector{SVector{M, Float64}}(undef, N_save)
         
-        # Copy positions
-        _copy_positions!(xs_storage[snap_idx], view(get_positions(pg), indices))
-        
-        # Copy rhos using a direct matrix slice
-        copyto!(us_storage[snap_idx], view(pg.rhos, indices, :))
+        # Perform fast vector copy based on the filtered indices
+        copyto!(xs_storage[snap_idx], view(pos_array, indices))
+        copyto!(us_storage[snap_idx], view(rho_array, indices))
     else
         N_save = N_active
-        pos_type = D == 1 ? Float64 : Tuple{Float64,Float64}
         
-        xs_storage[snap_idx] = Vector{pos_type}(undef, N_save)
-        us_storage[snap_idx] = Matrix{Float64}(undef, N_save, M)
+        # Pre-allocate SVector output arrays for this snapshot
+        xs_storage[snap_idx] = Vector{SVector{D, Float64}}(undef, N_save)
+        us_storage[snap_idx] = Vector{SVector{M, Float64}}(undef, N_save)
         
-        # Copy strictly 1:N_active 
-        _copy_positions!(xs_storage[snap_idx], view(get_positions(pg), 1:N_save))
-        
-        # Copy rhos using a direct matrix slice
-        copyto!(us_storage[snap_idx], view(pg.rhos, 1:N_save, :))
+        # Perform fast contiguous memory copy for active particles
+        copyto!(xs_storage[snap_idx], view(pos_array, 1:N_save))
+        copyto!(us_storage[snap_idx], view(rho_array, 1:N_save))
     end
 end
 
@@ -106,11 +95,10 @@ function mainTimeIntegrator!(
     snapshots::Integer = 10,
     remove_ghosts::Bool = false
 ) where {D, M}
-
-    pos_type = D == 1 ? Float64 : Tuple{Float64,Float64}
     
-    xs = Vector{Vector{pos_type}}(undef, snapshots + 1)
-    us = Vector{Matrix{Float64}}(undef, snapshots + 1)
+    # Output arrays hold Vectors of SVectors!
+    xs = Vector{Vector{SVector{D, Float64}}}(undef, snapshots + 1)
+    us = Vector{Vector{SVector{M, Float64}}}(undef, snapshots + 1)
     ts = Vector{Float64}(undef, snapshots + 1)
 
     t_snap = range(0.0, settings.tmax, length=snapshots+1)
@@ -136,15 +124,10 @@ function mainTimeIntegrator!(
             saveData!(xs, us, ts, snap_counter, pg, t, remove_ghosts)
             snap_counter += 1
         end
-        
-        ProgressMeter.next!(p)
-    end
 
-    if snap_counter <= (snapshots + 1)
-        saveData!(xs, us, ts, snap_counter, pg, t, remove_ghosts)
+        next!(p)
     end
+    finish!(p)
 
-    # Return trimmed arrays in case early exit occurred
-    num_saved = snap_counter - 1
-    return elapsed_time, xs[1:num_saved], us[1:num_saved], ts[1:num_saved]
+    return xs, us, ts, k_step, elapsed_time
 end

@@ -35,12 +35,30 @@ end
     return sim_data
 end
 
-@noinline function _execute_explicit_sim!(method, eq, pg, settings, run_params, dimension, snapshots, remove_ghosts)
-    elapsed_time, xs, us, ts = mainTimeIntegrator!(method, eq, pg, settings; snapshots = snapshots, remove_ghosts = remove_ghosts)
+@noinline function _execute_explicit_sim!(method, eq, pg, settings, run_params, dimension, snapshots, remove_ghosts, M_components)
+    elapsed_time, xs, us_svector, ts, k_step = mainTimeIntegrator!(method, eq, pg, settings; snapshots = snapshots, remove_ghosts = remove_ghosts)
     @info "Explicit Simulation (D=$dimension) finished in $(round(elapsed_time, digits=2)) seconds."
 
-    sim_data_result = createSimData(xs, us, ts, run_params)
+    # --- Transform SVector arrays back into Matrices for plotting/saving ---
+    m = length(ts)
+    us_final = Vector{Matrix{Float64}}(undef, m)
+    
+    for t_idx in 1:m
+        N_particles = length(us_svector[t_idx])
+        mat = Matrix{Float64}(undef, N_particles, M_components)
+        
+        # Fast column-major extraction
+        for c in 1:M_components
+            for i in 1:N_particles
+                mat[i, c] = us_svector[t_idx][i][c]
+            end
+        end
+        us_final[t_idx] = mat
+    end
+
+    sim_data_result = createSimData(xs, us_final, ts, run_params)
     sim_data_result.stats["time"] = elapsed_time
+    sim_data_result.stats["k_step"] = k_step
     return sim_data_result
 end
 
@@ -286,7 +304,7 @@ function runSimulation(params::ParamDictType)::Union{AbstractSimData, Nothing}
             upwind_alg_2d = "Classic"
             weight_func = exponentialWeightFunction(interp_alpha, interp_range)
             
-            pg = createParticleGrid(Val(1), xmin, xmax, Nx, bc, interp_range_factor; M=M_components, rng=rng, randomness=(randomness_factor * dx_nom), merge_factor=merge_factor, weight_func=weight_func, km_inp = km)
+            pg = createParticleGrid(Val(1), xmin, xmax, Nx, bc, interp_range_factor; M=M_components, rng=rng, randomness=(randomness_factor * dx_nom), merge_factor=merge_factor, weight_func=weight_func, km = km, mover = grid_mover)
         else
             Nx, Ny = haskey(run_params, "N") ? (run_params["N"], run_params["N"]) : (run_params["Nx"], run_params["Ny"])
             ymin, ymax = run_params["ymin"], run_params["ymax"]
@@ -296,7 +314,7 @@ function runSimulation(params::ParamDictType)::Union{AbstractSimData, Nothing}
             upwind_alg_2d = (main_grad_name == "Upwind" || fallback_grad_name == "Upwind") ? run_params["upwind_alg_2d"] : nothing
             weight_func = exponentialWeightFunction(interp_alpha, interp_range)
             
-            pg = createParticleGrid(Val(2), xmin, xmax, ymin, ymax, Nx, Ny, bc, interp_range_factor; M=M_components, weight_func=weight_func, rng=rng, randomness=(randomness_factor[1]*dx_nom, randomness_factor[2]*dy_nom), km_inp = km)
+            pg = createParticleGrid(Val(2), xmin, xmax, ymin, ymax, Nx, Ny, bc, interp_range_factor; M=M_components, weight_func=weight_func, rng=rng, randomness=(randomness_factor[1]*dx_nom, randomness_factor[2]*dy_nom), km = km, mover = grid_mover)
         end
 
         # --- 7. Time Step Calculation ---
@@ -401,54 +419,52 @@ function runSimulation(params::ParamDictType)::Union{AbstractSimData, Nothing}
         end
 
         # --- 9. Final Execution Dispatch ---
-        if !is_kinetic
-            method = if timestepper_name == "RalstonRK2"
-                RalstonRK2(MainGrad, FallbackGrad, mood_fun, grid_mover)
-            elseif timestepper_name == "EulerUpwind"
-                EulerUpwind(MainGrad, grid_mover)
+if !is_kinetic
+            # We determine the exact state type based on the number of macro variables
+            state_type = SVector{M_components, Float64}
+            
+            if timestepper_name == "EulerUpwind"
+                method = EulerUpwind(eq, MainGrad, FallbackGrad, mood_fun, state_type)
+            elseif timestepper_name == "RalstonRK2"
+                method = RalstonRK2(eq, MainGrad, FallbackGrad, mood_fun, state_type)
             elseif timestepper_name == "RK3"
-                RK3(MainGrad, FallbackGrad, mood_fun)
+                method = RK3(eq, MainGrad, FallbackGrad, mood_fun, state_type)
             elseif timestepper_name == "RK4"
-                RK4(MainGrad, FallbackGrad, mood_fun)
-            elseif timestepper_name == "LF"
-                LaxFriedrich()
-            elseif timestepper_name == "LW"
-                ClassicalRichtmyerLWMOOD(; mood = mood_fun)
-            elseif timestepper_name == "Classic"
-                ClassicalTimeStepper(MainFlux)
-            elseif timestepper_name == "Upwind"
-                Upwind(pg.meta.N)
-            elseif timestepper_name == "RalstonRK2SmoothSwitch"
-                RalstonRK2SmoothSwitch(MainGrad, FallbackGrad, mood_fun; tol = run_params["switch_tol"])
+                method = RK4(eq, MainGrad, FallbackGrad, mood_fun, state_type)
             else
-                error("Unknown Timestepper!")
+                error("Unknown direct TimeStepper: '$timestepper_name'")
             end
-            
-            setInitialConditions!(pg, IC)
-            return _execute_explicit_sim!(method, eq, pg, settings, run_params, dimension, snapshots, remove_ghosts)
-        else
-            implicit_solver = LinearizedRelaxationImplicitSolver()
-            
-            system_method = if timestepper_name == "ARS233"
-                ARS233(MainGrad, FallbackGrad, mood_fun, implicit_solver, source_term, grid_mover)
-            elseif timestepper_name == "PRSSP3"
-                PareschiRussoIMEXSSP3(MainGrad, FallbackGrad, mood_fun, implicit_solver, source_term, grid_mover)
-            elseif timestepper_name == "ARS222"
-                ARS222(MainGrad, FallbackGrad, mood_fun, implicit_solver, source_term, grid_mover)
-            elseif timestepper_name == "ARS232"
-                ARS232(MainGrad, FallbackGrad, mood_fun, implicit_solver, source_term, grid_mover)
-            elseif timestepper_name == "SimpleSplitting"
-                SimpleSplitting(EulerUpwind(MainGrad; fallbackInterpolator=FallbackGrad, mood=mood_fun), source_term)
-            else
-                error("Unknown IMEX TimeStepper: '$timestepper_name'")
-            end
-            
-            kinetic_eqs = Tuple(kinetic_eqs_vec)
-            setInitialConditions!(pg, source_term, IC)
-            save_relax = get(run_params, "save_relax", false)
 
-            return _execute_kinetic_sim!(system_method, kinetic_eqs, pg, settings, run_params, dimension, snapshots, remove_ghosts, save_relax, N_macro_vars, kinetic_to_macro_map)
+            # Note: Ensure your setInitialConditions! is updated to write SVectors!
+            setInitialConditions!(pg, eq, IC)
+            
+            return _execute_explicit_sim!(method, eq, pg, settings, run_params, dimension, snapshots, remove_ghosts, M_components)
+        else
+            error("Kinetic / IMEX simulations are temporarily disabled for refactoring.")
         end
+        # else
+        #     implicit_solver = LinearizedRelaxationImplicitSolver()
+            
+        #     system_method = if timestepper_name == "ARS233"
+        #         ARS233(MainGrad, FallbackGrad, mood_fun, implicit_solver, source_term, grid_mover)
+        #     elseif timestepper_name == "PRSSP3"
+        #         PareschiRussoIMEXSSP3(MainGrad, FallbackGrad, mood_fun, implicit_solver, source_term, grid_mover)
+        #     elseif timestepper_name == "ARS222"
+        #         ARS222(MainGrad, FallbackGrad, mood_fun, implicit_solver, source_term, grid_mover)
+        #     elseif timestepper_name == "ARS232"
+        #         ARS232(MainGrad, FallbackGrad, mood_fun, implicit_solver, source_term, grid_mover)
+        #     elseif timestepper_name == "SimpleSplitting"
+        #         SimpleSplitting(EulerUpwind(MainGrad; fallbackInterpolator=FallbackGrad, mood=mood_fun), source_term)
+        #     else
+        #         error("Unknown IMEX TimeStepper: '$timestepper_name'")
+        #     end
+            
+        #     kinetic_eqs = Tuple(kinetic_eqs_vec)
+        #     setInitialConditions!(pg, source_term, IC)
+        #     save_relax = get(run_params, "save_relax", false)
+
+        #     return _execute_kinetic_sim!(system_method, kinetic_eqs, pg, settings, run_params, dimension, snapshots, remove_ghosts, save_relax, N_macro_vars, kinetic_to_macro_map)
+        # end
 
     catch e
         @error "Error during Simulation!" params=params exception=(e, catch_backtrace())

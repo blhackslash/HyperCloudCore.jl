@@ -53,35 +53,27 @@ function solve!(
     ::LinearizedRelaxationImplicitSolver,
     Y_out_particle::AbstractVector{Float64},         
     dt_coeff::Float64,              
-    rs::RelaxationSourceTerm{D, N, NK, PDE},     
+    rs::RelaxationSourceTerm{D, NM, NK},     
     p_idx::Int,
-    particle_pos::Any,           
-    time_for_S_eval::Real,                      
-    args...      
-)::Bool where {D, N, NK, PDE}
+    eq::HyperbolicPDE{D},
+    km::Kin2Macro{NM}      
+)::Bool where {D, NM, NK}
     
     epsilon = rs.epsilon
     coeff_sum_inv = 1.0 / (epsilon + dt_coeff)
 
-    # 1. Reconstruct Macro State
-    u_macro = rs.kin2macro(Y_out_particle)
-    
-    # 2. Evaluate physical flux ONCE
-    flux_vals = flux(rs.system_eq, u_macro)
+    u_macro = km(Y_out_particle)
+    flux_vals = flux(eq, u_macro)
 
-    # 3. Update kinetic components implicitly
     for k in 1:NK
-        v_k_base_kinetic = Y_out_particle[k]
+        v_k_base = Y_out_particle[k]
+        m_idx = km(k)
         
-        m_idx = rs.kin2macro(k)
-        dim = rs.dimensions[k]
+        f_dot_inv_lambda = flux_dot(flux_vals, m_idx, rs.inv_relax_speeds[k])
         
-        f_val = get_flux_component(flux_vals, m_idx, dim, Val(D))
+        Mk_val = rs.coefficients[m_idx] * (u_macro[m_idx] + rs.interior_factors[k] * f_dot_inv_lambda)
         
-        # Inline Maxwellian
-        Mk_val = rs.coefficients[k] * (u_macro[m_idx] + rs.interior_factors[k] * f_val / rs.relax_speeds[k])
-        
-        Y_out_particle[k] = (epsilon * v_k_base_kinetic + dt_coeff * Mk_val) * coeff_sum_inv
+        Y_out_particle[k] = (epsilon * v_k_base + dt_coeff * Mk_val) * coeff_sum_inv
     end
     
     return true 
@@ -92,23 +84,24 @@ function solve!(
     ::LinearizedRelaxationImplicitSolver,
     V_out::AbstractVector{Float64},       
     dt_coeff::Float64,              
-    st::NonLocalRelaxationSourceTerm{D, N, NK, PDE},     
+    st::NonLocalRelaxationSourceTerm{D, NM, NK},     
     p_idx::Int, 
-    args...
-)::Bool where {D, N, NK, PDE}
+    eq::HyperbolicPDE{D},
+    km::Kin2Macro{NM}
+)::Bool where {D, NM, NK}
     
     epsilon = st.epsilon
     coeff_sum_inv = 1.0 / (epsilon + dt_coeff)
-    
-    # Kin2Macro handles the slice directly now
-    u_macro = st.kin2macro(V_out)
+    u_macro = km(V_out)
     
     for k in 1:NK
         v_star = V_out[k]
-        m_idx = st.kin2macro(k)
+        m_idx = km(k)
         
         T_val = st.T_potential[p_idx, m_idx]
-        Mk_val = st.coefficients[m_idx] * (u_macro[m_idx] + st.interior_factor * T_val / st.relax_speeds[k])
+        T_dot_inv_lambda = T_val * st.inv_relax_speeds[k][1]
+
+        Mk_val = st.coefficients[m_idx] * (u_macro[m_idx] + st.interior_factor * T_dot_inv_lambda)
         
         V_out[k] = (epsilon * v_star + dt_coeff * Mk_val) * coeff_sum_inv
     end
