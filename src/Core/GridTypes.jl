@@ -39,6 +39,10 @@ struct inverseWeightFunction <: MLSWeightFunction
     range::Float64
 end
 
+struct Kin2Macro{NM}
+    ranges::NTuple{NM, UnitRange{Int}}
+end
+
 # ---------------------------------------------------------
 # 1. Grid Metadata
 # ---------------------------------------------------------
@@ -127,6 +131,7 @@ mutable struct ParticleGrid{D, M, S, WF}
     rhos::Matrix{Float64}
     mood_events::Matrix{Bool}
     curvatures::Matrix{Float64}
+    km::Kin2Macro{M}
 end
 
 # --- Aliases for convenience ---

@@ -3,10 +3,6 @@
 # SHARED BUFFER ACCESSORS & SAFE RESIZING
 # =========================================================================
 
-# Allows get_positions to work natively on the SharedBuffers struct
-@inline get_positions(sb::SharedBuffers{1}) = reinterpret(Float64, sb.pos_buffer)
-@inline get_positions(sb::SharedBuffers{D}) where {D} = sb.pos_buffer
-
 @inline function ensure_shared_capacity!(pg::ParticleGrid, required_capacity::Int)
     if length(pg.shared.pos_buffer) < required_capacity
         new_cap = ceil(Int, required_capacity * 1.25)
@@ -155,7 +151,7 @@ end
 function _split_particles!(pg::ParticleGrid1D, eq::HyperbolicPDE, source_term::AbstractSourceTerm)
     N = pg.meta.N
     ensure_capacity!(pg.shared, N)
-    
+    is_boundary = pg.core.is_boundary
     visited = pg.shared.bit_buffer
     fill!(view(visited, 1:N), false)
     
@@ -182,17 +178,18 @@ function _split_particles!(pg::ParticleGrid1D, eq::HyperbolicPDE, source_term::A
         
         grid_pos = get_positions(pg)
         shared_pos = get_positions(pg.shared)
+        shared_bd = pg.shared.int_buffer
         
         for k in 1:N_new
             idx = N_curr + k
             grid_pos[idx] = shared_pos[k]
+            is_boundary[idx] = shared_bd[k]
             
             for c in 1:M
                 pg.rhos[idx, c] = pg.shared.rho_buffer[k, c]
             end
             
             pg.curvatures[idx] = 0.0
-            pg.core.is_boundary[idx] = false 
             pg.core.volumes[idx] = 0.0
             pg.mood_events[idx] = false
         end
@@ -263,6 +260,7 @@ function fill_empty_voxels!(lv::LocalVoxels, pg::ParticleGrid1D, i::Int, visited
                 ensure_shared_capacity!(pg, idx_new)
                 num_new[] = idx_new
                 
+                pg.shared.int_buffer[idx_new] = false
                 get_positions(pg.shared)[idx_new] = new_abs_pos
                 _write_state!(pg.shared.rho_buffer, idx_new, new_state_tuple, M)
                 
@@ -272,6 +270,7 @@ function fill_empty_voxels!(lv::LocalVoxels, pg::ParticleGrid1D, i::Int, visited
                     ensure_shared_capacity!(pg, idx_new)
                     num_new[] = idx_new
                     
+                    pg.shared.int_buffer[idx_new] = true
                     get_positions(pg.shared)[idx_new] = abs_pos
                     _write_state!(pg.shared.rho_buffer, idx_new, _extract_state(pg.rhos, i, M), M)
                 else
@@ -282,7 +281,8 @@ function fill_empty_voxels!(lv::LocalVoxels, pg::ParticleGrid1D, i::Int, visited
                     idx_new = num_new[] + 1
                     ensure_shared_capacity!(pg, idx_new)
                     num_new[] = idx_new
-                    
+
+                    pg.shared.int_buffer[idx_new] = true
                     get_positions(pg.shared)[idx_new] = abs_pos
                     _write_state!(pg.shared.rho_buffer, idx_new, _extract_state(pg.rhos, i, M), M)
                 else
@@ -293,6 +293,7 @@ function fill_empty_voxels!(lv::LocalVoxels, pg::ParticleGrid1D, i::Int, visited
                 ensure_shared_capacity!(pg, idx_new)
                 num_new[] = idx_new
                 
+                pg.shared.int_buffer[idx_new] = true
                 get_positions(pg.shared)[idx_new] = abs_pos
                 _write_state!(pg.shared.rho_buffer, idx_new, _extract_state(pg.rhos, i, M), M)
             end
@@ -411,7 +412,7 @@ function update_boundaries!(pg::ParticleGrid1D)
     M     = size(rhos, 2)
     
     write_idx = 0
-    
+
     for i in 1:pg.meta.N
         x = pos[i] 
         

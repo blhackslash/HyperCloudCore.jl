@@ -21,6 +21,7 @@ end
 end
 
 # --- Flux Helpers ---
+@inline get_flux_component(flux_result::Float64, i_macro::Int, i_dim::Int, ::Val{1}) = flux_result
 @inline get_flux_component(flux_result::Tuple, i_macro::Int, i_dim::Int, ::Val{1}) = flux_result[i_macro]
 @inline get_flux_component(flux_result::Tuple, i_macro::Int, i_dim::Int, ::Val{2}) = flux_result[i_dim][i_macro]
 @inline get_flux_component(flux_result::Float64, i_dim::Int, ::Val{1}) = flux_result

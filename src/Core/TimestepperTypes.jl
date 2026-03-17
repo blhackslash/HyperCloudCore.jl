@@ -112,10 +112,6 @@ abstract type AbstractSourceTerm end
 
 struct NoSourceTerm <: AbstractSourceTerm end
 
-struct Kin2Macro{NM}
-    ranges::NTuple{NM, UnitRange{Int}}
-end
-
 struct RelaxationSourceTerm{D, N, NK, PDE <: HyperbolicPDE{D, N}} <: AbstractSourceTerm
     system_eq::PDE
     epsilon::Float64

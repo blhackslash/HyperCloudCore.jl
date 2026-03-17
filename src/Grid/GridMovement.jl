@@ -113,7 +113,7 @@ function update_grid_velocities!(pg::ParticleGrid{D, M}, gm::PhysicalGridMover{E
     Threads.@threads for i in 1:N
         rho_sum = 0.0
         # Iterate over the subset of kinetic variables that define "velocity"
-        for k in gm.vel_kinetic_indices
+        for k in pg.km.ranges[]
             rho_sum += pg.rhos[i, k]
         end
         

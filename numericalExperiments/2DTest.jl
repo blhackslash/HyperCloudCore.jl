@@ -1,7 +1,6 @@
 using Meshfree4ScalarEq
 using IPlotPDESols
 using InteractiveUtils
-using Cthulhu
 
 # 2D simulation using your `runScalar2DSim` function.
 function main()
@@ -69,7 +68,8 @@ function main()
         "sim_function" => "runSimulation",
 
         # --- Method-Specific Parameters for "RK4-MUSCL2-2D" ---
-        "timestepper" => "RalstonRK2",
+        "timestepper" => "ARS222",
+        "relax_velocities" => [[1.,-1.]],  "relax_epsilon" => 1e-6, "save_relax" => false,
         "main_gradient" => "Upwind",
         "order" =>1,
         "main_flux" => "Rusanov",

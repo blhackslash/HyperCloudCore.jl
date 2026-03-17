@@ -121,18 +121,22 @@ function runSimulation(params::ParamDictType)::Union{AbstractSimData, Nothing}
                 eq = LinearAdvection(Tuple(pde_params))
             end
             N_macro_vars = 1
+            vel_var = 1
         elseif eq_name == "burgers"
             dimension = 1
             eq = BurgersEquation(get(run_params,"PDE_params", 0.))
             N_macro_vars = 1
+            vel_var = 1
         elseif eq_name == "burgers2d"
             dimension = 2
             eq = BurgersEquation2D()
             N_macro_vars = 1
+            vel_var = 1
         elseif eq_name == "testU3"
             dimension = 1
             eq = TestU3Equation(get(run_params,"PDE_params", 0.))
             N_macro_vars = 1
+            vel_var = 1
         elseif eq_name == "euler1d"
             dimension = 1
             eq = Euler1D()
@@ -218,6 +222,7 @@ function runSimulation(params::ParamDictType)::Union{AbstractSimData, Nothing}
                 source_term = RelaxationSourceTerm(eq, relax_eps, km, Tuple(coeffs_k), Tuple(speeds_k), Tuple(ints_k), Tuple(dims_k))
             end
         else
+            km = Kin2Macro(1:N_macro_vars)
             M_components = N_macro_vars
         end
 
@@ -281,7 +286,7 @@ function runSimulation(params::ParamDictType)::Union{AbstractSimData, Nothing}
             upwind_alg_2d = "Classic"
             weight_func = exponentialWeightFunction(interp_alpha, interp_range)
             
-            pg = createParticleGrid(Val(1), xmin, xmax, Nx, bc, interp_range_factor; M=M_components, rng=rng, randomness=(randomness_factor * dx_nom), merge_factor=merge_factor, weight_func=weight_func)
+            pg = createParticleGrid(Val(1), xmin, xmax, Nx, bc, interp_range_factor; M=M_components, rng=rng, randomness=(randomness_factor * dx_nom), merge_factor=merge_factor, weight_func=weight_func, km_inp = km)
         else
             Nx, Ny = haskey(run_params, "N") ? (run_params["N"], run_params["N"]) : (run_params["Nx"], run_params["Ny"])
             ymin, ymax = run_params["ymin"], run_params["ymax"]
@@ -291,7 +296,7 @@ function runSimulation(params::ParamDictType)::Union{AbstractSimData, Nothing}
             upwind_alg_2d = (main_grad_name == "Upwind" || fallback_grad_name == "Upwind") ? run_params["upwind_alg_2d"] : nothing
             weight_func = exponentialWeightFunction(interp_alpha, interp_range)
             
-            pg = createParticleGrid(Val(2), xmin, xmax, ymin, ymax, Nx, Ny, bc, interp_range_factor; M=M_components, weight_func=weight_func, rng=rng, randomness=(randomness_factor[1]*dx_nom, randomness_factor[2]*dy_nom))
+            pg = createParticleGrid(Val(2), xmin, xmax, ymin, ymax, Nx, Ny, bc, interp_range_factor; M=M_components, weight_func=weight_func, rng=rng, randomness=(randomness_factor[1]*dx_nom, randomness_factor[2]*dy_nom), km_inp = km)
         end
 
         # --- 7. Time Step Calculation ---

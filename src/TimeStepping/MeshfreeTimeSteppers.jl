@@ -157,7 +157,6 @@ end
 function (ralston::RalstonRK2)(eq::ScalarHyperbolicPDE, pg::ParticleGrid{D, M, S, WF}, settings::SimSetting, time::Real, dt::Real) where {D, M, S, WF}
     
     grid_mover = ralston.grid_mover
-    grid_mover(pg, dt)
     manage_particles!(ralston.grid_mover, pg)
     #initTS!(ralston.pg)
     # --- Resize buffers only if necessary, using N ---
@@ -171,9 +170,7 @@ function (ralston::RalstonRK2)(eq::ScalarHyperbolicPDE, pg::ParticleGrid{D, M, S
     # 1. Start with the current, correct state of the grid
     ralston.rhoInit[1:N] .= view(pg.rhos, 1:N)
 
-    # 4. Apply boundary conditions to the intermediate result stored in the buffer
-    #apply_boundary_conditions!(pg, ralston.rhoInit)
-
+    grid_mover(pg, 2/3 * dt)
     # Partition 1:N into chunks of 100, and schedule *those* dynamically
     Threads.@threads for p_idx in 1:N
             fi = ralston.rhoInit[p_idx]
@@ -203,7 +200,7 @@ function (ralston::RalstonRK2)(eq::ScalarHyperbolicPDE, pg::ParticleGrid{D, M, S
     # 4. Apply boundary conditions to the intermediate result stored in the buffer
     apply_boundary_conditions!(pg, ralston.rhos)
 
-    #grid_mover(pg, 1/3 * dt)
+    grid_mover(pg, 1/3 * dt)
 
     N = pg.meta.N
     #updateNeighbors!(pg)

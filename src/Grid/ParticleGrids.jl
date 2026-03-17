@@ -6,6 +6,9 @@ include("ParticleManagement.jl")
 @inline get_positions(pg::ParticleGrid{1}) = reinterpret(Float64, pg.core.positions)
 # 2D Normal Access
 @inline get_positions(pg::ParticleGrid{2}) = pg.core.positions
+# Allows get_positions to work natively on the SharedBuffers struct
+@inline get_positions(sb::SharedBuffers{1}) = reinterpret(Float64, sb.pos_buffer)
+@inline get_positions(sb::SharedBuffers{D}) where {D} = sb.pos_buffer
 
 # Column-Major Views for Neighbors
 @inline get_weights(pg::ParticleGrid)   = @inbounds view(pg.neighbor.data, :, 1)
@@ -17,8 +20,9 @@ function createParticleGrid(
     ::Val{1}, xmin::Real, xmax::Real, N_interior::Integer, bc::Symbol,
     interp_range_factor::Real;
     M::Int = 1, randomness::Real = 0.0, rng = Random.default_rng(), merge_factor = 0.3,
-    weight_func = exponentialWeightFunction(1.,1.)
+    weight_func = exponentialWeightFunction(1.,1.), km_inp = nothing
 )
+    km = isnothing(km_inp) ? Kin2Macro(1:M) : km_inp  
     N_ghost::Int = bc == :periodic ? 0 : ceil(Int, interp_range_factor)
     if bc == :periodic
         @assert N_ghost == 0 "Periodic grids do not use ghost cells."
@@ -83,7 +87,7 @@ function createParticleGrid(
 
     pg = ParticleGrid{1, M, Nothing, typeof(weight_func)}(
         meta, core, shared, neighbor, reorder, manage,
-        zeros(N, M), zeros(Bool,N,M), zeros(N, M) 
+        zeros(N, M), zeros(Bool,N,M), zeros(N, M), km
     )
 
     pg.reorder(pg)
@@ -96,8 +100,9 @@ function createParticleGrid(
     ::Val{2}, xmin::Real, xmax::Real, ymin::Real, ymax::Real, 
     Nx_interior::Int, Ny_interior::Int, bc::Symbol, interp_range_factor::Real;
     M::Int = 1, randomness::NTuple{2, Float64} = (0.0, 0.0), rng = Random.default_rng(), 
-    weight_func = exponentialWeightFunction(1.,1.), merge_factor = .3,
+    weight_func = exponentialWeightFunction(1.,1.), merge_factor = .3, km_inp = nothing,
 )
+    km = isnothing(km_inp) ? Kin2Macro(1:M) : km_inp  
     xmin_f, xmax_f = Float64(xmin), Float64(xmax)
     ymin_f, ymax_f = Float64(ymin), Float64(ymax)
     range_factor_f = Float64(interp_range_factor)
@@ -153,7 +158,7 @@ function createParticleGrid(
 
         return ParticleGrid{2, M, typeof(sys), typeof(weight_func)}(
             meta, core, shared, neighbors, reorder, manage,
-            zeros(N, M), zeros(Bool,N,M), zeros(N, M)
+            zeros(N, M), zeros(Bool,N,M), zeros(N, M), km
         )
     end
     local pg
@@ -560,6 +565,7 @@ determineVolumes!(pg) = return
 
 function determineVolumes!(pg::ParticleGrid1D)
     N = pg.meta.N
+
     if N == 0; return; end
     positions = get_positions(pg)
     volumes = pg.core.volumes
