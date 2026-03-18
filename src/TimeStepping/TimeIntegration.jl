@@ -106,12 +106,13 @@ function mainTimeIntegrator!(
     t = 0.0
     k_step = 0
 
+    # 1. Save initial condition (t=0)
     saveData!(xs, us, ts, snap_counter, pg, t, remove_ghosts)
     snap_counter += 1 
 
     p = Progress(convert(Int, ceil(settings.tmax / settings.dt)), desc="Running Simulation...")
 
-    elapsed_time = @elapsed while t < settings.tmax && snap_counter <= (snapshots + 1)
+    elapsed_time = @elapsed while t < settings.tmax
         dt = min(settings.dt, settings.tmax - t)
         if dt <= 1e-12; break; end
 
@@ -120,7 +121,8 @@ function mainTimeIntegrator!(
         t += dt
         k_step += 1
 
-        while snap_counter <= (snapshots + 1) && t >= t_snap[snap_counter]
+        # 2. Save intermediate snapshots (stop before the final slot)
+        while snap_counter <= snapshots && t >= t_snap[snap_counter]
             saveData!(xs, us, ts, snap_counter, pg, t, remove_ghosts)
             snap_counter += 1
         end
@@ -128,6 +130,11 @@ function mainTimeIntegrator!(
         next!(p)
     end
     finish!(p)
+
+    # 3. Always force the final snapshot exactly at the end
+    if snap_counter <= snapshots + 1
+        saveData!(xs, us, ts, snapshots + 1, pg, t, remove_ghosts)
+    end
 
     return xs, us, ts, k_step, elapsed_time
 end

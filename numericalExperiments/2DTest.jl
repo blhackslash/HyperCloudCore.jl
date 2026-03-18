@@ -43,10 +43,8 @@ function main()
 
     params = ParamDict(
         # --- Shared Parameters ---
-        "tmax" => 10.,
+        "tmax" => 5.,
         "N" => 200,
-
-
         
         "xmin" => -5.0,
         "xmax" => 5.0,
@@ -56,19 +54,19 @@ function main()
         "interp_alpha" => 1.0,
         "interp_range" => 3.5,
         "init_func" => "riemann", # Using the unified struct
-        "init_params" => (1.,0.,-2.),
+        "init_params" => ((1.,1.),(0.,0.),-2., 1.),
         #"init_params" => (1.0, 0., 1.5), # (amplitude, (centerX, centerY), width)
         #"init_params" => (0.,1.,-2.,2.),
         "randomness_factor" => 0.0, # (x_rand_factor, y_rand_factor)
         "SEED_value" => 42,
-        "PDE" => "linear", "PDE_params" => 1., #"merge_factor" => .3,
+        "PDE" => "linear", "PDE_params" => ((1.,.5),), #"merge_factor" => .3,
         "weight_function" => "exponential",
         "grid_mover" => "none",
         "bc" => :outflow,
         "sim_function" => "runSimulation",
 
         # --- Method-Specific Parameters for "RK4-MUSCL2-2D" ---
-        "timestepper" => "EulerUpwind",
+        "timestepper" => "RalstonRK2",
         #"relax_velocities" => [[1.,-1.]],  "relax_epsilon" => 1e-6, "save_relax" => false,
         "main_gradient" => "Upwind",
         "order" =>1,

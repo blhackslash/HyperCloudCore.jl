@@ -8,112 +8,101 @@ using LinearAlgebra
 function setInitialConditions!(pg::ParticleGrid{D, M}, eq::HyperbolicPDE, IC::InitialCondition) where {D, M}
     positions = get_positions(pg)
     
-    for i in 1:pg.meta.N
-        # Splat the SVector position to match IC signatures (x) or (x, y)
-        val = IC(positions[i]...)
-        
-        # Seamlessly wrap scalar or tuple returns into the SVector state
-        pg.rhos[i] = SVector{M, Float64}(val)
+    @inbounds for i in 1:pg.meta.N
+        # Strict assignment: IC(pos) must return an SVector{M, Float64}
+        pg.rhos[i] = IC(positions[i])
     end
     return nothing
 end
 
-# =========================================================================
-# 2. INITIAL CONDITION FUNCTORS (t = 0)
-# =========================================================================
-
-# --- Gauss ---
-(ic::Gauss{Float64, S})(x::Real) where S = ic.a * exp(-((x - ic.b) / ic.width)^2)
-(ic::Gauss{NTuple{2, Float64}, S})(x::Real, y::Real) where S = ic.a * exp(-(((x - ic.b[1])^2 + (y - ic.b[2])^2) / ic.width^2))
-
-# --- Box ---
-Box(bg::S, val::S, xs, xe) where S = Box{S}(bg, val, xs, xe, nothing, nothing)
-Box(bg::S, val::S, xs, xe, ys, ye) where S = Box{S}(bg, val, xs, xe, ys, ye)
-
-(ic::Box)(x::Real) = ic.x_start <= x <= ic.x_end ? ic.u_box : ic.u_background
-(ic::Box)(x::Real, y::Real) = (ic.x_start <= x <= ic.x_end && !isnothing(ic.y_start) && ic.y_start <= y <= ic.y_end) ? ic.u_box : ic.u_background
-
-# --- Sine ---
-(ic::Sine)(x::Real) = ic.a * sin(2.0 * pi * x / ic.b_period) + ic.c_offset
-
-# --- Riemann ---
-function Riemann(uL::S, uR::S, x0::Real) where S
-    Riemann{Float64, S}(uL, uR, Float64(x0), 1.0)
+(ic::Gauss)(pos::SVector{D, Float64}) where {D} = @. ic.a * exp(-sum(abs2, pos - ic.b) / ic.width^2)
+(ic::Box)(pos::SVector{D, Float64}) where {D} = all(ic.mins .<= pos .<= ic.maxs) ? ic.u_box : ic.u_bg
+(ic::Sine)(pos::SVector{D, Float64}) where {D} = ic.a * sin(2.0 * pi * sum(pos ./ ic.period)) + ic.c_offset
+(ic::Riemann)(pos::SVector{D, Float64}) where {D} = dot(pos - ic.p0, ic.n) < 0 ? ic.uL : ic.uR
+function (ic::SRiemann)(pos::SVector{D, Float64}) where {D}
+    dist = dot(pos - ic.p0, ic.n)
+    return @. 0.5 * (ic.uL + ic.uR) - (ic.uL - ic.uR) / pi * atan(dist / ic.width)
 end
-
-function Riemann(uL::S, uR::S, p0::NTuple{2, Real}, n_vec::NTuple{2, Real}) where S
-    norm_n = LinearAlgebra.norm(n_vec)
-    if norm_n < 1e-14; error("Normal vector for Riemann cannot be a zero vector."); end
-    n_normalized = (n_vec[1] / norm_n, n_vec[2] / norm_n)
-    p0_float = (Float64(p0[1]), Float64(p0[2]))
-    Riemann{NTuple{2, Float64}, S}(uL, uR, p0_float, n_normalized)
-end
-
-(ic::Riemann{Float64, S})(x::Real) where S = x < ic.p0 ? ic.uL : ic.uR
-(ic::Riemann{NTuple{2, Float64}, S})(x::Real, y::Real) where S = dot((x - ic.p0[1], y - ic.p0[2]), ic.n) < 0 ? ic.uL : ic.uR
-
-# --- SRiemann (Smooth Riemann) ---
-function (ic::SRiemann)(x::Real)
-    # Broadcasts perfectly for both scalars and tuples
-    return @. 0.5 * (ic.uL + ic.uR) - (ic.uL - ic.uR) / pi * atan((x - ic.x0) / ic.width)
-end
-
-# --- Quadrant Riemann ---
-function QuadrantRiemann(u_states::NTuple{D,NTuple{M,Float64}}, p0::T) where {D, M, T}
-    if D != 2^(length(p0))
-        error("Dimension mismatch in QuadrantRiemann!")
+function (ic::QuadrantRiemann{D, T, N})(pos::SVector{D, Float64}) where {D, T, N}
+    # Binary encoding: Left/Bottom adds 0, Right/Top adds 2^(d-1)
+    idx = 1
+    for d in 1:D
+        if pos[d] >= ic.p0[d]
+            idx += 2^(d-1)
+        end
     end
-    QuadrantRiemann{D, M, T}(u_states, p0)
+    return ic.u_states[idx]
 end
-
-function (ic::QuadrantRiemann{2, M, Float64})(x::Real) where M
-    return x < ic.p0 ? ic.u_states[1] : ic.u_states[2]
-end
-
-function (ic::QuadrantRiemann{4, M, NTuple{2, Float64}})(x::Real, y::Real) where M
-    x0, y0 = ic.p0
-    if x < x0 && y < y0       # Bottom-Left
-        return ic.u_states[1]
-    elseif x >= x0 && y < y0  # Bottom-Right
-        return ic.u_states[2]
-    elseif x < x0 && y >= y0  # Top-Left
-        return ic.u_states[3]
-    else                      # Top-Right
-        return ic.u_states[4]
-    end
-end
-
-# --- Euler Shock Tube ---
-function (ic::EulerShockTube)(x::Real)
-    rho_val, u_val, p_val = x < ic.x0 ? ic.uL : ic.uR
+function (ic::EulerShockTube)(pos::SVector{D, Float64}) where {D}
+    is_left = dot(pos - ic.p0, ic.n) < 0
+    rho_val, u_val, p_val = is_left ? ic.uL : ic.uR
+    
     rho_val = max(rho_val, 1e-6)
     p_val = max(p_val, 1e-6)
     
     m_val = rho_val * u_val
     E_val = p_val / (GAS_GAMMA_EULER - 1.0) + 0.5 * rho_val * u_val^2
     
-    return (rho_val, m_val, E_val)
+    return SVector{3, Float64}(rho_val, m_val, E_val)
 end
 
 # =========================================================================
 # 3. FACTORY FUNCTION
 # =========================================================================
-
-function getInitialCondition(name::String, params::Tuple)
+function getInitialCondition(name::String, p::Tuple)
     if name == "gauss"
-        return Gauss(params...)
+        return Gauss(param2uvec(p[1]), param2xvec(p[2]), Float64(p[3]))
+        
     elseif name == "box"
-        return Box(params...)
+        if length(p) == 4
+            # 1D/Multi-D unified format: Box(bg, box, mins, maxs)
+            return Box(param2uvec(p[1]), param2uvec(p[2]), param2xvec(p[3]), param2xvec(p[4]))
+        elseif length(p) == 6
+            # Backwards compatibility for old 2D format: Box(bg, box, xmin, xmax, ymin, ymax)
+            mins = param2xvec((p[3], p[5]))
+            maxs = param2xvec((p[4], p[6]))
+            return Box(param2uvec(p[1]), param2uvec(p[2]), mins, maxs)
+        else
+            error("Invalid number of parameters for Box")
+        end
+        
     elseif name == "sine"
-        return Sine(params...)
+        return Sine(param2uvec(p[1]), param2xvec(p[2]), param2uvec(p[3]))
+        
     elseif name == "riemann"
-        return Riemann(params...)
+        uL = param2uvec(p[1])
+        uR = param2uvec(p[2])
+        p0 = param2xvec(p[3])
+        # If normal vector not provided, default to pointing in +X direction
+        n  = length(p) > 3 ? normalize(param2xvec(p[4])) : SVector{length(p0), Float64}(ntuple(i -> i==1 ? 1.0 : 0.0, length(p0)))
+        
+        return Riemann(uL, uR, p0, n)
+        
     elseif name == "s_riemann"
-        return SRiemann(params...)
+        uL = param2uvec(p[1])
+        uR = param2uvec(p[2])
+        p0 = param2xvec(p[3])
+        if length(p) == 4
+            n = SVector{length(p0), Float64}(ntuple(i -> i==1 ? 1.0 : 0.0, length(p0)))
+            return SRiemann(uL, uR, p0, n, Float64(p[4]))
+        else
+            n = normalize(param2xvec(p[4]))
+            return SRiemann(uL, uR, p0, n, Float64(p[5]))
+        end
+        
     elseif name == "q_riemann"
-        return QuadrantRiemann(params...)
+        states = ntuple(i -> param2uvec(p[1][i]), length(p[1]))
+        p0 = param2xvec(p[2])
+        return QuadrantRiemann(states, p0)
+        
     elseif name == "eulerShockTube"
-        return EulerShockTube(params...)
+        uL = param2uvec(p[1])
+        uR = param2uvec(p[2])
+        p0 = param2xvec(p[3])
+        n  = length(p) > 3 ? normalize(param2xvec(p[4])) : SVector{length(p0), Float64}(ntuple(i -> i==1 ? 1.0 : 0.0, length(p0)))
+        
+        return EulerShockTube(uL, uR, p0, n)
+        
     else 
         error("Unknown initFunc name: $name")
     end

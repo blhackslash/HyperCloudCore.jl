@@ -36,29 +36,54 @@ end
 end
 
 @noinline function _execute_explicit_sim!(method, eq, pg, settings, run_params, dimension, snapshots, remove_ghosts, M_components)
-    elapsed_time, xs, us_svector, ts, k_step = mainTimeIntegrator!(method, eq, pg, settings; snapshots = snapshots, remove_ghosts = remove_ghosts)
+    xs_svector, us_svector, ts_full, k_step, elapsed_time = mainTimeIntegrator!(method, eq, pg, settings; snapshots = snapshots, remove_ghosts = remove_ghosts)
+    
     @info "Explicit Simulation (D=$dimension) finished in $(round(elapsed_time, digits=2)) seconds."
 
-    # --- Transform SVector arrays back into Matrices for plotting/saving ---
-    m = length(ts)
-    us_final = Vector{Matrix{Float64}}(undef, m)
+    # --- FIX: Filter out unassigned snapshots (happens due to floating-point truncation near tmax) ---
+    valid_indices = findall(i -> isassigned(us_svector, i), 1:length(us_svector))
+    m = length(valid_indices)
     
-    for t_idx in 1:m
-        N_particles = length(us_svector[t_idx])
-        mat = Matrix{Float64}(undef, N_particles, M_components)
+    # Slice the valid timestamps
+    ts = ts_full[valid_indices]
+    
+    # Pre-allocate standard arrays for plotting/saving
+    us_final = Vector{Matrix{Float64}}(undef, m)
+    local xs_final
+    if dimension == 1
+        xs_final = Vector{Vector{Float64}}(undef, m)
+    else
+        xs_final = Vector{Vector{NTuple{dimension, Float64}}}(undef, m)
+    end
+    
+    # Extract only the valid frames
+    for (new_idx, orig_idx) in enumerate(valid_indices)
+        u_snap = us_svector[orig_idx]
+        x_snap = xs_svector[orig_idx]
+        N_particles = length(u_snap)
         
-        # Fast column-major extraction
+        # --- Convert States to Matrix ---
+        mat = Matrix{Float64}(undef, N_particles, M_components)
         for c in 1:M_components
             for i in 1:N_particles
-                mat[i, c] = us_svector[t_idx][i][c]
+                mat[i, c] = u_snap[i][c]
             end
         end
-        us_final[t_idx] = mat
+        us_final[new_idx] = mat
+        
+        # --- Convert Positions to Floats/Tuples ---
+        if dimension == 1
+            xs_final[new_idx] = [x_snap[i][1] for i in 1:N_particles]
+        else
+            xs_final[new_idx] = [Tuple(x_snap[i]) for i in 1:N_particles]
+        end
     end
 
-    sim_data_result = createSimData(xs, us_final, ts, run_params)
+    # Pass the perfectly formatted arrays into your external data struct
+    sim_data_result = createSimData(xs_final, us_final, ts, run_params)
     sim_data_result.stats["time"] = elapsed_time
     sim_data_result.stats["k_step"] = k_step
+    
     return sim_data_result
 end
 
@@ -131,14 +156,9 @@ function runSimulation(params::ParamDictType)::Union{AbstractSimData, Nothing}
 
         if eq_name == "linear"
             pde_params = run_params["PDE_params"]
-            if pde_params isa Real
-                dimension = 1
-                eq = LinearAdvection(pde_params)
-            else
-                dimension = 2
-                eq = LinearAdvection(Tuple(pde_params))
-            end
-            N_macro_vars = 1
+            get_size(::LinearAdvection{D, NM}) where {D, NM} = D, NM
+            eq = LinearAdvection(pde_params)
+            dimension, N_macro_vars = get_size(eq)
             vel_var = 1
         elseif eq_name == "burgers"
             dimension = 1
@@ -240,7 +260,7 @@ function runSimulation(params::ParamDictType)::Union{AbstractSimData, Nothing}
                 source_term = RelaxationSourceTerm(eq, relax_eps, km, Tuple(coeffs_k), Tuple(speeds_k), Tuple(ints_k), Tuple(dims_k))
             end
         else
-            km = Kin2Macro(1:N_macro_vars)
+            km = Kin2Macro{N_macro_vars}(ntuple(i -> i:i,Val(N_macro_vars)))
             M_components = N_macro_vars
         end
 
@@ -399,7 +419,7 @@ function runSimulation(params::ParamDictType)::Union{AbstractSimData, Nothing}
         MainGrad = if main_grad_name == "MUSCL"
             MUSCL(order-1, dimension; numericalFlux = MainFlux, limiter = limiter, mood = mood_fun2)
         elseif main_grad_name == "Upwind"
-            UpwindGradient(order, dimension; numericalFlux=MainFlux, algType=upwind_alg_2d)
+            UpwindGradient(order, dimension, N_macro_vars; numericalFlux=MainFlux, algType=upwind_alg_2d)
         elseif main_grad_name == "Central"
             CentralGradient(order, dimension)
         elseif main_grad_name == "WENO"
@@ -413,7 +433,7 @@ function runSimulation(params::ParamDictType)::Union{AbstractSimData, Nothing}
         FallbackGrad = if isnothing(fallback_grad_name)
             NoFallbackGrad()
         elseif fallback_grad_name == "Upwind"
-            UpwindGradient(1, dimension; numericalFlux=FallbackFlux, algType=upwind_alg_2d)
+            UpwindGradient(1, dimension, N_macro_vars; numericalFlux=FallbackFlux, algType=upwind_alg_2d)
         else
             error("Fallback Gradient NYI")
         end
@@ -434,7 +454,6 @@ if !is_kinetic
             else
                 error("Unknown direct TimeStepper: '$timestepper_name'")
             end
-
             # Note: Ensure your setInitialConditions! is updated to write SVectors!
             setInitialConditions!(pg, eq, IC)
             

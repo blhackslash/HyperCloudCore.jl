@@ -5,26 +5,26 @@ using StaticArrays
 # WORKSPACE CONSTRUCTORS & CAPACITY MANAGERS
 # =========================================================================
 
-function UpwindWorkspaceTA{D, T}(max_neighbors::Int=100) where {D, T}
-    UpwindWorkspaceTA{D, T}(
+function UpwindWorkspaceTA{D, NM}(max_neighbors::Int=100) where {D, NM}
+    UpwindWorkspaceTA{D, NM}(
         Vector{SVector{D, Float64}}(undef, max_neighbors),
-        Vector{T}(undef, max_neighbors),
+        Vector{SVector{NM, Float64}}(undef, max_neighbors),
         Vector{Float64}(undef, max_neighbors),
         falses(max_neighbors),
         falses(max_neighbors)
     )
 end
 
-function UpwindWorkspaceCA{D, T}(max_neighbors::Int=100) where {D, T}
-    UpwindWorkspaceCA{D, T}(
+function UpwindWorkspaceCA{D, NM}(max_neighbors::Int=100) where {D, NM}
+    UpwindWorkspaceCA{D, NM}(
         Vector{SVector{D, Float64}}(undef, max_neighbors),
-        Vector{T}(undef, max_neighbors),
+        Vector{SVector{NM, Float64}}(undef, max_neighbors),
         Vector{Float64}(undef, max_neighbors)
     )
 end
 
-function UpwindWorkspacePA{D, T}(max_neighbors::Int=100) where {D, T}
-    UpwindWorkspacePA{D, T}(
+function UpwindWorkspacePA{D}(max_neighbors::Int=100) where {D}
+    UpwindWorkspacePA{D}(
         Vector{SVector{D, Float64}}(undef, max_neighbors),
         Vector{Float64}(undef, max_neighbors)
     )
@@ -55,7 +55,7 @@ end
 # UPWIND GRADIENT SETUP
 # =========================================================================
 
-function UpwindGradient(order, dimension, ::Type{T}=SVector{1, Float64}; numericalFlux::NumericalFluxFunction=UpwindFlux(), algType::String="Classic") where {T}
+function UpwindGradient(order, dimension, NM; numericalFlux::NumericalFluxFunction=UpwindFlux(), algType::String="Classic")
     @assert order >= 1 "Order must be larger or equal to one."
     
     local alg_type
@@ -67,23 +67,22 @@ function UpwindGradient(order, dimension, ::Type{T}=SVector{1, Float64}; numeric
     elseif algType == "Tiwari"
         alg_type = TiwariAlgorithm
         WS_eltype = UpwindWorkspaceTA 
-        @assert T === SVector{1, Float64} "Tiwari Algorithm only supports Scalar Equations."
+        @assert NM == 1 "Tiwari Algorithm only supports Scalar Equations."
     elseif algType == "Praveen"
         alg_type = PraveenAlgorithm 
         WS_eltype = UpwindWorkspacePA 
         @assert order == 1 "Praveen only supports 1st order."
-        @assert T === SVector{1, Float64} "Praveen Algorithm only supports Scalar Equations."
+        @assert NM == 1 "Praveen Algorithm only supports Scalar Equations."
     else
         error("Algorithm type $algType not fully configured for workspace selection.")
     end
-
     n_threads = Threads.nthreads()
-    workspaces = [WS_eltype{dimension, T}(100) for _ in 1:n_threads] 
+    workspaces = [WS_eltype{dimension, NM}(100) for _ in 1:n_threads] 
 
     interpolator = Interpolator{dimension, order, 1}()
     I = typeof(interpolator)
 
-    UpwindGradient{dimension, WS_eltype{dimension, T}, I, alg_type}(order, numericalFlux, workspaces, interpolator)
+    UpwindGradient{dimension, WS_eltype{dimension, NM}, I, alg_type}(order, numericalFlux, workspaces, interpolator)
 end
 
 function _init_buffers_internal!(workspaces::Vector{WS}, max_neighbors::Int) where WS <: UpwindWorkspace 
@@ -145,11 +144,10 @@ function (upwind::UpwindGradient{D, <:UpwindWorkspaceCA{D, T}, <:Any, ClassicAlg
     flux_i = flux(eq, f_i)
     
     div = zero(T)
-    scale = D == 1 ? SVector(pg.meta.dx[1]) : pg.meta.dx
+    scale = pg.meta.dx
     
     # Unified Loop Over Dimensions
     for d in 1:D
-        flux_i_d = D == 1 ? flux_i : flux_i[d]
         
         @inbounds for (local_idx, global_idx) in enumerate(nb_slice)
             dist_k = dist_all_full[global_idx]
@@ -161,8 +159,8 @@ function (upwind::UpwindGradient{D, <:UpwindWorkspaceCA{D, T}, <:Any, ClassicAlg
             # Inline directional sorting logic
             f_L, f_R = dist_k[d] > 0 ? (f_i, f_j) : (f_j, f_i)
             
-            flux_num = D == 1 ? nFlux(f_L, f_R, eq) : nFlux(f_L, f_R, eq, d)
-            df_buf[local_idx] = flux_num - flux_i_d
+            flux_num = nFlux(f_L, f_R, eq, d)
+            df_buf[local_idx] = flux_num - flux_i[d]
         end
         
         scale_d = scale[d]
@@ -249,7 +247,7 @@ end
 """
 Functor for PraveenAlgorithm. (Restricted to Scalar PDEs in 2D)
 """
-function (upwind::UpwindGradient{2, <:UpwindWorkspacePA{2, SVector{1, Float64}}, <:Any, PraveenAlgorithm})(
+function (upwind::UpwindGradient{2, <:UpwindWorkspacePA{2}, <:Any, PraveenAlgorithm})(
     eq::PDE,
     i::Int,                         
     f_i::SVector{1, Float64},                  

@@ -1,10 +1,11 @@
-# Constructors for convenience
-LinearAdvection(vel::Real) = LinearAdvection{1}((Float64(vel),))
-LinearAdvection(vel::Tuple{<:Real, <:Real}) = LinearAdvection{2}(Float64.(vel))
-
 # --- Linear Advection ---
 @inline velocity(eq::LinearAdvection{D}, u::SVector{1, Float64}) where {D} = SVector{D, Float64}(eq.vel...)
-@inline flux(eq::LinearAdvection{D}, u::SVector{1, Float64}) where {D} = SVector{D, Float64}(eq.vel...) * u[1]
+# --- Multi-D Flux ---
+# Returns: SVector{D, SVector{NM, Float64}}
+@inline function flux(eq::LinearAdvection{D, NM}, U::SVector{NM, Float64}) where {D, NM}
+    # Builds the flux vector for each dimension 'd' using a generated tuple
+    return SVector{D, SVector{NM, Float64}}(ntuple(d -> eq.vel[d] .* U, Val(D)))
+end
 
 # --- Burgers Equation 1D ---
 BurgersEquation(a::Float64) = BurgersEquation{a}()
@@ -17,9 +18,6 @@ end
 @inline function flux(::BurgersEquation{a}, u::SVector{1, Float64}) where {a}
     return SVector{1, Float64}(0.5 * (1.0 - a) * u[1]^2)
 end
-
-# --- Burgers Equation 2D ---
-struct BurgersEquation2D <: ScalarHyperbolicPDE{2} end
 
 @inline velocity(eq::BurgersEquation2D, u::SVector{1, Float64}) = SVector{2, Float64}(u[1], u[1])
 @inline flux(eq::BurgersEquation2D, u::SVector{1, Float64}) = SVector{2, Float64}(0.5 * u[1]^2, 0.5 * u[1]^2)

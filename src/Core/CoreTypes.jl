@@ -23,62 +23,67 @@ abstract type NCHyperbolicPDESystem{D, N} <: HyperbolicPDESystem{D, N} end
 
 const DiagonalHyperbolicSystem{N, D} = NTuple{N, <: ScalarHyperbolicPDE{D}}
 
-struct LinearAdvection{D} <: ScalarHyperbolicPDE{D} 
-    vel::NTuple{D, Float64} # Store velocity as a tuple of length D
+struct LinearAdvection{D, NM} <: HyperbolicPDESystem{D, NM}
+    vel::SVector{D, SVector{NM, Float64}}
+end
+
+# Single constructor handles Floats, Tuples, and Tuples-of-Tuples!
+function LinearAdvection(velocities)
+    svec_vel = param2svec(velocities)
+    
+    # Extract D and NM directly from the generated SVector's type!
+    D = length(svec_vel)
+    NM = length(svec_vel[1])
+    
+    return LinearAdvection{D, NM}(svec_vel)
 end
 
 struct BurgersEquation{a} <: ScalarHyperbolicPDE{1} end
 struct TestU3Equation{a} <: ScalarHyperbolicPDE{1} end
 struct Euler1D <: HyperbolicPDESystem{1, 3} end
-
+# --- Burgers Equation 2D ---
+struct BurgersEquation2D <: ScalarHyperbolicPDE{2} end
 ## ------------------------------- Initial Conditions -------------------------------
 abstract type InitialCondition end
 abstract type SmoothInitialCondition <: InitialCondition end
-abstract type ShockInitialCondition <: InitialCondition end
 
-"Gaussian distribution for scalar or system states."
-struct Gauss{T, S} <: SmoothInitialCondition
-    a::S      # Amplitude (can be a scalar or a vector/tuple)
-    b::T      # Center (Float64 for 1D, NTuple for 2D)
+struct Gauss{D, NM} <: SmoothInitialCondition
+    a::SVector{NM, Float64}
+    b::SVector{D, Float64}
     width::Float64
 end
 
-"Box distribution for scalar or system states."
-struct Box{S} <: ShockInitialCondition
-    u_background::S
-    u_box::S
-    x_start::Float64
-    x_end::Float64
-    y_start::Union{Float64, Nothing}
-    y_end::Union{Float64, Nothing}
+struct Box{D, NM} <: InitialCondition
+    u_bg::SVector{NM, Float64}
+    u_box::SVector{NM, Float64}
+    mins::SVector{D, Float64}
+    maxs::SVector{D, Float64}
 end
 
-"Sine wave for scalar states (systems would require more specific definition)."
-struct Sine <: SmoothInitialCondition
-    a::Float64
-    b_period::Float64
-    c_offset::Float64
+struct Sine{D, NM} <: SmoothInitialCondition
+    a::SVector{NM, Float64}
+    period::SVector{D, Float64}
+    c_offset::SVector{NM, Float64}
 end
 
-"Riemann problem (shock/rarefaction) for scalar or system states in 1D or 2D."
-struct Riemann{T, S} <: ShockInitialCondition
-    uL::S
-    uR::S
-    p0::T  # 1D: x0 position. 2D: point on line.
-    n::T   # 1D: defaults to 1.0. 2D: normal vector.
+struct Riemann{D, NM} <: InitialCondition
+    uL::SVector{NM, Float64}
+    uR::SVector{NM, Float64}
+    p0::SVector{D, Float64}
+    n::SVector{D, Float64}
 end
 
-"Smoothed Riemann problem (arctan) for scalar or system states."
-struct SRiemann{T, S} <: SmoothInitialCondition
-    uL::S
-    uR::S
-    x0::T      # Center of the transition
-    width::T   # Smoothing width (steepness)
+struct SRiemann{D, NM} <: SmoothInitialCondition
+    uL::SVector{NM, Float64}
+    uR::SVector{NM, Float64}
+    p0::SVector{D, Float64}
+    n::SVector{D, Float64}
+    width::Float64
 end
 
-struct QuadrantRiemann{D, M, T} <: ShockInitialCondition
-    u_states::NTuple{D,NTuple{M,Float64}} # Vector of states for each quadrant
-    p0::T               # Center point of the quadrants
+struct QuadrantRiemann{D, NM, N_states} <: InitialCondition
+    u_states::NTuple{N_states, SVector{NM, Float64}} 
+    p0::SVector{D, Float64}
 end
 
 const EulerShockTube = Riemann{Float64,NTuple{3,Float64}}

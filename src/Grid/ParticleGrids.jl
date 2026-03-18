@@ -46,193 +46,168 @@ end
 end
 
 @inline function getEuclideanDistance(pg::ParticleGrid, i::Int, j::Int)
-    # Returns SVector{D, Float64} automatically!
-    return get_positions(pg)[i] - get_positions(pg)[j]
+    # FIX: Must be j - i to point from the center particle to the neighbor
+    return get_positions(pg)[j] - get_positions(pg)[i] 
 end
 
 @inline function getPeriodicDistance(pg::ParticleGrid, i::Int, j::Int)
-    dist = get_positions(pg)[i] - get_positions(pg)[j]
+    # FIX: Must be j - i 
+    dist = get_positions(pg)[j] - get_positions(pg)[i]
     L = pg.meta.maxs - pg.meta.mins
     
     # Perfectly type-stable, unrolled periodic wrapping for any dimension
     return map((d, l) -> d > 0.5 * l ? d - l : (d < -0.5 * l ? d + l : d), dist, L)
 end
 
+# =========================================================================
+# GENERALIZED D-DIMENSIONAL GRID GENERATOR
+# =========================================================================
+
 function createParticleGrid(
-    ::Val{1}, xmin::Real, xmax::Real, N_interior::Integer, bc::Symbol,
-    interp_range_factor::Real;
-    M::Int = 1, randomness::Real = 0.0, rng = Random.default_rng(), merge_factor = 0.3,
+    mins::NTuple{D, Real}, maxs::NTuple{D, Real}, Ns_interior::NTuple{D, Integer}, 
+    bc::Symbol, interp_range_factor::Real;
+    M::Int = 1, randomness::NTuple{D, Float64} = ntuple(i->0.0, D), 
+    rng = Random.default_rng(), merge_factor = 0.3, 
     weight_func = exponentialWeightFunction(1.,1.), km = nothing, mover = NoGridMover()
-)
+) where {D}
+    
     km = isnothing(km) ? Kin2Macro(1:M) : km  
     N_ghost::Int = bc == :periodic ? 0 : ceil(Int, interp_range_factor)
+    
     if bc == :periodic
         @assert N_ghost == 0 "Periodic grids do not use ghost cells."
-        N = N_interior
-        dx = (xmax - xmin) / max(N_interior, 1.0)
+        Ns_total = Ns_interior
+        dxs = (maxs .- mins) ./ max.(Ns_interior, 1.0)
     else
         @assert N_ghost >= 0 "N_ghost must be non-negative."
-        N = N_interior + 2 * N_ghost
-        dx = (xmax - xmin) / max(N_interior - 1, 1.0)
+        Ns_total = Ns_interior .+ 2*N_ghost
+        dxs = (maxs .- mins) ./ max.(Ns_interior .- 1, 1.0)
     end
 
-    xmin_tot = xmin - N_ghost * dx
-    xmax_tot = xmax + N_ghost * dx
-    R = dx * interp_range_factor
+    N = prod(Ns_total)
+    N_interior_total = prod(Ns_interior)
+    N_ghost_total = N - N_interior_total
+
+    # Cast to Static Vectors for type-stable math
+    mins_f = SVector{D, Float64}(mins...)
+    maxs_f = SVector{D, Float64}(maxs...)
+    dxs_f  = SVector{D, Float64}(dxs...)
+    rand_f = SVector{D, Float64}(randomness...)
+
+    mins_tot = mins_f .- N_ghost .* dxs_f
+    maxs_tot = maxs_f .+ N_ghost .* dxs_f
+    
+    R = D == 1 ? dxs_f[1] * interp_range_factor : (interp_range_factor < 1e-10 ? maximum(dxs_f) : interp_range_factor * maximum(dxs_f))
     r = merge_factor * R
-    regular = (randomness == 0.0)
+    regular = all(==(0.0), randomness)
 
-    positions = Vector{SVector{1, Float64}}(undef, N)
-    is_boundary = zeros(Bool,N)
+    positions = Vector{SVector{D, Float64}}(undef, N)
+    is_boundary = zeros(Bool, N)
 
-    if bc == :periodic
-        for i in 1:N_interior
-            positions[i] = SVector(xmin + dx*(i-0.5) + randomness*(rand(rng, Float64)*2 - 1))
+    # ---------------------------------------------------------
+    # D-Dimensional Placement Loop using CartesianIndices
+    # ---------------------------------------------------------
+    for (i, I) in enumerate(CartesianIndices(Ns_total))
+        pos_tuple = ntuple(Val(D)) do d
+            idx = I[d]
+            
+            if bc == :periodic
+                return mins_f[d] + dxs_f[d]*(idx - 0.5) + rand_f[d]*(rand(rng, Float64)*2 - 1)
+            else
+                if idx <= N_ghost
+                    return mins_f[d] - (N_ghost - idx + 1) * dxs_f[d]
+                elseif idx > Ns_interior[d] + N_ghost
+                    return maxs_f[d] + (idx - (Ns_interior[d] + N_ghost)) * dxs_f[d]
+                else
+                    # Keep single-particle domains perfectly centered
+                    base = Ns_interior[d] == 1 ? (mins_f[d] + maxs_f[d]) / 2.0 : mins_f[d] + (idx - N_ghost - 1) * dxs_f[d]
+                    return base + rand_f[d] * (rand(rng, Float64) * 2 - 1)
+                end
+            end
         end
-    else
-        for i in 1:N_ghost
-            positions[i] = SVector(xmin - (N_ghost - i + 1) * dx)
-            is_boundary[i] = true
-        end
-        for i in 1:N_interior
-            base_pos = (N_interior == 1) ? (xmin+xmax)/2.0 : xmin + (i-1) * dx
-            positions[N_ghost + i] = SVector(base_pos + randomness*(rand(rng, Float64)*2 - 1))
-        end
-        for i in 1:N_ghost
-            positions[N_ghost + N_interior + i] = SVector(xmax + i * dx)
-            is_boundary[N_ghost + N_interior + i] = true
+        
+        positions[i] = SVector{D, Float64}(pos_tuple)
+        
+        if bc != :periodic
+            is_boundary[i] = any(d -> I[d] <= N_ghost || I[d] > Ns_interior[d] + N_ghost, 1:D)
         end
     end
 
-    meta = GridMetadata{1}(
-        N, N_interior, N_ghost, SVector(xmin_tot), SVector(xmax_tot), SVector(xmin), SVector(xmax), 
-        R, r, SVector(dx), regular, bc, Float64(interp_range_factor), 0
+    # ---------------------------------------------------------
+    # Struct Instantiation
+    # ---------------------------------------------------------
+    meta = GridMetadata{D}(
+        N, N_interior_total, N_ghost_total, mins_tot, maxs_tot, mins_f, maxs_f, 
+        R, r, dxs_f, regular, bc, Float64(interp_range_factor), 0
     )
 
-    core = ParticleGridCore{1}(positions, is_boundary, zeros(Int, N))
-    shared = SharedBuffers{1, M}(zeros(SVector{M, Float64}, N), similar(positions), zeros(Bool,N), zeros(Int, N))
+    core = ParticleGridCore{D}(positions, is_boundary, zeros(Float64, N))
+    shared = SharedBuffers{D, M}(zeros(SVector{M, Float64}, N), similar(positions), zeros(Bool,N), zeros(Int, N))
 
-    # Initialize ranges array
-    neighbor = NeighborData{1, Nothing, typeof(weight_func)}(
-        nothing, weight_func, fill(1:0, N + 1), Int[], 
-        Matrix{Float64}(undef, 0, 2), 
+    reorder = ReorderData{D}(collect(1:N), collect(1:N), zeros(Int, N), zeros(Bool,N))
+    voxels = LocalVoxels(floor(Int, interp_range_factor), Float64(R))
+    manage = ManagementData{D,M}(voxels)
+
+    # Neighborhood System mapping
+    local system
+    if D == 1
+        system = nothing
+    else
+        if bc == :periodic
+            unit_cell = maxs_f .- mins_f
+            system = InPlaceNeighborList(x=positions, cutoff=R, unitcell=unit_cell, parallel=true)
+        else
+            system = InPlaceNeighborList(x=positions, cutoff=R, parallel=true)
+        end
+    end
+
+    neighbors = NeighborData{D, typeof(system), typeof(weight_func)}(
+        system, weight_func, fill(1:0, N + 1), Int[], 
+        Vector{Float64}(undef,0), Vector{SVector{D,Float64}}(undef, 0), 
         [Atomic{Int}(0) for _ in 1:N], [Atomic{Int}(0) for _ in 1:N]
     )
 
-    permutation = collect(1:N)
-    reorder = ReorderData{1}(permutation, copy(permutation), zeros(Int, N), zeros(Bool,N))
-
-    min_nb = floor(Int, interp_range_factor)
-    R = dx * interp_range_factor
-    voxels = LocalVoxels(min_nb, R)
-    manage = ManagementData{1,M}(voxels)
-
-    pg = ParticleGrid{1, M, Nothing, typeof(weight_func), typeof(mover)}(
-        meta, core, shared, neighbor, reorder, manage, km, mover,
-        zeros(N, M), zeros(Bool,N,M), zeros(N, M), 
+    pg = ParticleGrid{D, M, typeof(system), typeof(weight_func), typeof(mover)}(
+        meta, core, shared, neighbors, reorder, manage, km, mover,
+        zeros(SVector{M, Float64}, N), zeros(SVector{M, Bool}, N), zeros(SVector{M, Float64}, N)
     )
 
+    if D > 1; pg.neighbor(pg); end # Pre-warm CellListMap
     pg.reorder(pg)
     pg.neighbor(pg)
     
     return pg
 end
 
+# =========================================================================
+# BACKWARDS COMPATIBILITY WRAPPERS
+# =========================================================================
+
+# 1D Wrapper
+function createParticleGrid(
+    ::Val{1}, xmin::Real, xmax::Real, N_interior::Integer, bc::Symbol,
+    interp_range_factor::Real;
+    randomness::Real = 0.0, kwargs...
+)
+    return createParticleGrid(
+        (Float64(xmin),), (Float64(xmax),), (Int(N_interior),), 
+        bc, Float64(interp_range_factor);
+        randomness=(Float64(randomness),), kwargs...
+    )
+end
+
+# 2D Wrapper
 function createParticleGrid(
     ::Val{2}, xmin::Real, xmax::Real, ymin::Real, ymax::Real, 
     Nx_interior::Int, Ny_interior::Int, bc::Symbol, interp_range_factor::Real;
-    M::Int = 1, randomness::NTuple{2, Float64} = (0.0, 0.0), rng = Random.default_rng(), 
-    weight_func = exponentialWeightFunction(1.,1.), merge_factor = .3, km = nothing, mover = NoGridMover()
+    randomness::NTuple{2, Float64} = (0.0, 0.0), kwargs...
 )
-    km = isnothing(km) ? Kin2Macro(1:M) : km  
-    xmin_f, xmax_f = Float64(xmin), Float64(xmax)
-    ymin_f, ymax_f = Float64(ymin), Float64(ymax)
-    range_factor_f = Float64(interp_range_factor)
-    rand_x, rand_y = Float64(randomness[1]), Float64(randomness[2])
-
-    N_ghost::Int = bc == :periodic ? 0 : ceil(Int, range_factor_f)
-    
-    if bc == :periodic
-        @assert N_ghost == 0 "Periodic grids do not use ghost cells."
-        Nx_total, Ny_total = Nx_interior, Ny_interior
-        dx_nominal = (xmax_f - xmin_f) / Nx_interior
-        dy_nominal = (ymax_f - ymin_f) / Ny_interior
-    else
-        @assert N_ghost >= 0 "N_ghost must be non-negative."
-        Nx_total = Nx_interior + 2*N_ghost
-        Ny_total = Ny_interior + 2*N_ghost
-        dx_nominal = (xmax_f - xmin_f) / max(Nx_interior - 1, 1.0)
-        dy_nominal = (ymax_f - ymin_f) / max(Ny_interior - 1, 1.0)
-    end
-    
-    N = Nx_total * Ny_total
-    R = range_factor_f < 1e-10 ? max(dx_nominal, dy_nominal) : range_factor_f * max(dx_nominal, dy_nominal)
-    r = merge_factor * R
-
-    positions = Vector{SVector{2, Float64}}(undef, N)
-    is_boundary = zeros(Bool,N)
-    
-    function _build_grid(sys)
-        meta = GridMetadata{2}(
-            N, Nx_interior * Ny_interior, N - (Nx_interior * Ny_interior), 
-            SVector{2, Float64}(xmin_f, ymin_f), SVector{2, Float64}(xmax_f, ymax_f), 
-            SVector{2, Float64}(xmin, ymin), SVector{2, Float64}(xmax, ymax), 
-            R, r, SVector{2, Float64}(dx_nominal, dy_nominal), 
-            (randomness == (0.0, 0.0)), bc, range_factor_f, 0
-        )
-
-        core = ParticleGridCore{2}(positions, is_boundary, zeros(Float64, N))
-        shared = SharedBuffers{2, M}(zeros(SVector{M, Float64}, N), similar(positions), zeros(Bool,N), zeros(Int, N))
-
-        # Initialize ranges array
-        neighbors = NeighborData{2, typeof(sys), typeof(weight_func)}(
-            sys, weight_func, fill(1:0, N + 1), Int[], 
-            Matrix{Float64}(undef, 0, 3),
-            [Atomic{Int}(0) for _ in 1:N], [Atomic{Int}(0) for _ in 1:N]
-        )
-
-        reorder = ReorderData{2}(collect(1:N), collect(1:N), zeros(Int, N), zeros(Bool,N))
-
-        min_nb = floor(Int, interp_range_factor)
-        R = max(dx_nominal,dy_nominal) * interp_range_factor
-        voxels = LocalVoxels(min_nb, R)
-        manage = ManagementData{2,M}(voxels)
-
-        return ParticleGrid{2, M, typeof(sys), typeof(weight_func)}(
-            meta, core, shared, neighbors, reorder, manage, km, mover,
-            zeros(N, M), zeros(Bool,N,M), zeros(N, M),
-        )
-    end
-    local pg
-    if bc == :periodic
-        for i in 1:Nx_total, j in 1:Ny_total
-            index = (i - 1) * Ny_total + j
-            posX = xmin_f + dx_nominal*(i-0.5) + rand_x*(rand(rng, Float64)*2 - 1)
-            posY = ymin_f + dy_nominal*(j-0.5) + rand_y*(rand(rng, Float64)*2 - 1)
-            positions[index] = SVector{2, Float64}(posX, posY)
-        end
-        unit_cell = SVector{2, Float64}(xmax_f - xmin_f, ymax_f - ymin_f)
-        system = InPlaceNeighborList(x=positions, cutoff=R, unitcell=unit_cell, parallel=true)
-        pg =  _build_grid(system)
-    else
-        for i in 1:Nx_total, j in 1:Ny_total
-            index = (i - 1) * Ny_total + j
-            is_interior = (N_ghost < i <= Nx_interior + N_ghost) && (N_ghost < j <= Ny_interior + N_ghost)
-            
-            posX = i <= N_ghost ? xmin_f - (N_ghost-i+1)*dx_nominal : (i > Nx_interior+N_ghost ? xmax_f+(i-(Nx_interior+N_ghost))*dx_nominal : xmin_f+(i-N_ghost-1)*dx_nominal + rand_x*(rand(rng,Float64)*2-1))
-            posY = j <= N_ghost ? ymin_f - (N_ghost-j+1)*dy_nominal : (j > Ny_interior+N_ghost ? ymax_f+(j-(Ny_interior+N_ghost))*dy_nominal : ymin_f+(j-N_ghost-1)*dy_nominal + rand_y*(rand(rng,Float64)*2-1))
-            
-            positions[index] = SVector{2, Float64}(posX, posY)
-            is_boundary[index] = !is_interior
-        end
-        
-        system = InPlaceNeighborList(x=positions, cutoff=R, parallel=true)
-        pg = _build_grid(system)
-    end
-    pg.neighbor(pg)
-    pg.reorder(pg)
-    pg.neighbor(pg)
-    return pg
+    return createParticleGrid(
+        (Float64(xmin), Float64(ymin)), (Float64(xmax), Float64(ymax)), 
+        (Int(Nx_interior), Int(Ny_interior)), 
+        bc, Float64(interp_range_factor);
+        randomness=Float64.(randomness), kwargs...
+    )
 end
 
 # Extractor simply returns the cached UnitRange
@@ -384,7 +359,7 @@ function (nd::NeighborData{1, S, WF})(pg::ParticleGrid{1, M, S, WF}) where {M, S
             offset = offset_counts[i]
             write_idx = pg.neighbor.ranges[i].start + offset
             
-            dist_x = getDistance(pg, i, j) 
+            dist_x = getDistance(pg, i, j)[1] 
             d2 = dist_x^2
 
             pg.neighbor.indices[write_idx] = j
@@ -398,19 +373,10 @@ function (nd::NeighborData{1, S, WF})(pg::ParticleGrid{1, M, S, WF}) where {M, S
     return nothing
 end
 
-function getDistance(pg::ParticleGrid1D, i::Integer, j::Integer)
-    dist = get_positions(pg)[j] - get_positions(pg)[i]
-    if pg.meta.bc == :periodic
-        domain_size = pg.meta.maxs[1] - pg.meta.mins[1]
-        dist -= round(dist / domain_size) * domain_size
-    end
-    return dist
-end
-
 function _find_neighbors_1d(pg::ParticleGrid1D, i::Int, maxDist::Float64)
     N = pg.meta.N
     positions = get_positions(pg)
-    pos_i = positions[i]
+    pos_i = positions[i][1]
     
     neighbor_list = Vector{Int}()
     sizehint!(neighbor_list, 2 * ceil(Int, maxDist / pg.meta.dx[1]) + 2)
@@ -418,23 +384,23 @@ function _find_neighbors_1d(pg::ParticleGrid1D, i::Int, maxDist::Float64)
     if pg.meta.bc == :periodic
         for j_offset in 1:div(N, 2)
             j = mod1(i - j_offset, N)
-            dist = abs(getDistance(pg, i, j))
+            dist = abs(getDistance(pg, i, j)[1])
             if dist <= maxDist; push!(neighbor_list, j)
             else; break; end
         end
         for j_offset in 1:div(N, 2)
             j = mod1(i + j_offset, N)
-            dist = abs(getDistance(pg, i, j))
+            dist = abs(getDistance(pg, i, j)[1])
             if dist <= maxDist; push!(neighbor_list, j)
             else; break; end
         end
     else 
         for j in (i-1):-1:1
-            if abs(positions[j] - pos_i) <= maxDist; push!(neighbor_list, j)
+            if abs(positions[j][1] - pos_i) <= maxDist; push!(neighbor_list, j)
             else; break; end
         end
         for j in (i+1):N
-            if abs(positions[j] - pos_i) <= maxDist; push!(neighbor_list, j)
+            if abs(positions[j][1] - pos_i) <= maxDist; push!(neighbor_list, j)
             else; break; end
         end
     end
@@ -607,14 +573,14 @@ function determineVolumes!(pg::ParticleGrid1D)
         for i in 1:N
             prev_idx = mod1(i - 1, N)
             next_idx = mod1(i + 1, N)
-            deltaPosL = abs(getDistance(pg, i, prev_idx))
-            deltaPosR = abs(getDistance(pg, i, next_idx))
+            deltaPosL = abs(getDistance(pg, i, prev_idx)[1])
+            deltaPosR = abs(getDistance(pg, i, next_idx)[1])
             volumes[i] = (deltaPosL + deltaPosR) / 2.0
         end
     else
         for i in 1:N
             if pg.core.is_boundary[i]; continue end
-            volumes[i] = (positions[i+1] - positions[i-1]) / 2.0
+            volumes[i] = (positions[i+1][1] - positions[i-1][1]) / 2.0
         end
     end
     return
