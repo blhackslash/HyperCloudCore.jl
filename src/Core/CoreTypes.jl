@@ -1,3 +1,9 @@
+## ------------------------------- SVector Types -------------------------------
+const Space{D} = SVector{D, Float64}
+const State{M} = SVector{M, Float64}
+const Flux{D,M} = SVector{D, State{M}}
+const Kinetic{K} = SVector{K, Float64}
+
 ## ------------------------------- HyperbolicPDEs -------------------------------
 abstract type DifferentialOrder end
 struct Order0 <: DifferentialOrder end
@@ -12,30 +18,30 @@ abstract type AbstractPath{N} end
 struct LinePath{N} <: AbstractPath{N} end
 
 # A PDE in D dimensions with N variables.
-abstract type HyperbolicPDE{D, N} end
+abstract type HyperbolicPDE{D, M} end
 
 # A helper for scalar PDEs (where N is always 1)
 abstract type ScalarHyperbolicPDE{D} <: HyperbolicPDE{D, 1} end
 
 # A helper for systems of PDEs
-abstract type HyperbolicPDESystem{D, N} <: HyperbolicPDE{D, N} end
-abstract type NCHyperbolicPDESystem{D, N} <: HyperbolicPDESystem{D, N} end
+abstract type HyperbolicPDESystem{D, M} <: HyperbolicPDE{D, M} end
+abstract type NCHyperbolicPDESystem{D, M} <: HyperbolicPDESystem{D, M} end
 
-const DiagonalHyperbolicSystem{N, D} = NTuple{N, <: ScalarHyperbolicPDE{D}}
+const DiagonalHyperbolicSystem{M, D} = NTuple{M, <: ScalarHyperbolicPDE{D}}
 
-struct LinearAdvection{D, NM} <: HyperbolicPDESystem{D, NM}
-    vel::SVector{D, SVector{NM, Float64}}
+struct LinearAdvection{D, M} <: HyperbolicPDESystem{D, M}
+    vel::SVector{D, State{M}}
 end
 
 # Single constructor handles Floats, Tuples, and Tuples-of-Tuples!
 function LinearAdvection(velocities)
     svec_vel = param2svec(velocities)
     
-    # Extract D and NM directly from the generated SVector's type!
+    # Extract D and M directly from the generated SVector's type!
     D = length(svec_vel)
-    NM = length(svec_vel[1])
+    M = length(svec_vel[1])
     
-    return LinearAdvection{D, NM}(svec_vel)
+    return LinearAdvection{D, M}(svec_vel)
 end
 
 struct BurgersEquation{a} <: ScalarHyperbolicPDE{1} end
@@ -47,43 +53,43 @@ struct BurgersEquation2D <: ScalarHyperbolicPDE{2} end
 abstract type InitialCondition end
 abstract type SmoothInitialCondition <: InitialCondition end
 
-struct Gauss{D, NM} <: SmoothInitialCondition
-    a::SVector{NM, Float64}
-    b::SVector{D, Float64}
+struct Gauss{D, M} <: SmoothInitialCondition
+    a::State{M}
+    b::Space{D}
     width::Float64
 end
 
-struct Box{D, NM} <: InitialCondition
-    u_bg::SVector{NM, Float64}
-    u_box::SVector{NM, Float64}
-    mins::SVector{D, Float64}
-    maxs::SVector{D, Float64}
+struct Box{D, M} <: InitialCondition
+    u_bg::State{M}
+    u_box::State{M}
+    mins::Space{D}
+    maxs::Space{D}
 end
 
-struct Sine{D, NM} <: SmoothInitialCondition
-    a::SVector{NM, Float64}
-    period::SVector{D, Float64}
-    c_offset::SVector{NM, Float64}
+struct Sine{D, M} <: SmoothInitialCondition
+    a::State{M}
+    period::Space{D}
+    c_offset::State{M}
 end
 
-struct Riemann{D, NM} <: InitialCondition
-    uL::SVector{NM, Float64}
-    uR::SVector{NM, Float64}
-    p0::SVector{D, Float64}
-    n::SVector{D, Float64}
+struct Riemann{D, M} <: InitialCondition
+    uL::State{M}
+    uR::State{M}
+    p0::Space{D}
+    n::Space{D}
 end
 
-struct SRiemann{D, NM} <: SmoothInitialCondition
-    uL::SVector{NM, Float64}
-    uR::SVector{NM, Float64}
-    p0::SVector{D, Float64}
-    n::SVector{D, Float64}
+struct SRiemann{D, M} <: SmoothInitialCondition
+    uL::State{M}
+    uR::State{M}
+    p0::Space{D}
+    n::Space{D}
     width::Float64
 end
 
-struct QuadrantRiemann{D, NM, N_states} <: InitialCondition
-    u_states::NTuple{N_states, SVector{NM, Float64}} 
-    p0::SVector{D, Float64}
+struct QuadrantRiemann{D, M, N_states} <: InitialCondition
+    u_states::NTuple{N_states, State{M}} 
+    p0::Space{D}
 end
 
 const EulerShockTube = Riemann{Float64,NTuple{3,Float64}}

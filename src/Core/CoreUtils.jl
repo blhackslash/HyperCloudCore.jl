@@ -65,21 +65,21 @@ end
 @inline param2svec(v::NTuple{D, <:Real}) where {D} = 
     SVector{D, SVector{1, Float64}}(ntuple(i -> SVector{1, Float64}(Float64(v[i])), Val(D)))
 
-# Case 3: Tuple of Tuples -> D-Dimensional Space, NM Components (System PDE in Multi-D)
+# Case 3: Tuple of Tuples -> D-Dimensional Space, M Components (System PDE in Multi-D)
 # Example input: ((1.0, 0.0), (0.0, 1.0))
 # Output: SVector{2, SVector{2, Float64}}([ [1.0, 0.0], [0.0, 1.0] ])
-@inline param2svec(v::NTuple{D, NTuple{NM, <:Real}}) where {D, NM} = 
-    SVector{D, SVector{NM, Float64}}(ntuple(i -> SVector{NM, Float64}(Float64.(v[i])), Val(D)))
+@inline param2svec(v::NTuple{D, NTuple{M, <:Real}}) where {D, M} = 
+    Flux{D,M}(ntuple(i -> State{M}(Float64.(v[i])), Val(D)))
 
 # Case 4: Fallback if it is already correctly formatted
-@inline param2svec(v::SVector{D, SVector{NM, Float64}}) where {D, NM} = v
+@inline param2svec(v::Flux{D,M}) where {D, M} = v
 
-# --- System State Conversion (NM components) ---
+# --- System State Conversion (M components) ---
 @inline param2uvec(v::Real) = SVector{1, Float64}(Float64(v))
-@inline param2uvec(v::NTuple{NM, <:Real}) where {NM} = SVector{NM, Float64}(Float64.(v))
-@inline param2uvec(v::SVector{NM, Float64}) where {NM} = v
+@inline param2uvec(v::NTuple{M, <:Real}) where {M} = State{M}(Float64.(v))
+@inline param2uvec(v::State{M}) where {M} = v
 
 # --- Spatial Geometry Conversion (D dimensions) ---
 @inline param2xvec(x::Real) = SVector{1, Float64}(Float64(x))
-@inline param2xvec(x::NTuple{D, <:Real}) where {D} = SVector{D, Float64}(Float64.(x))
-@inline param2xvec(x::SVector{D, Float64}) where {D} = x
+@inline param2xvec(x::NTuple{D, <:Real}) where {D} = Space{D}(Float64.(x))
+@inline param2xvec(x::Space{D}) where {D} = x

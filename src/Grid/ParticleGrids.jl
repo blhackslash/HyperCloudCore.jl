@@ -8,22 +8,22 @@ include("ParticleManagement.jl")
 
 # --- 2. Unified Neighbor Accessors ---
 @inline get_weights(pg::ParticleGrid)   = pg.neighbor.weights
-@inline get_distances(pg::ParticleGrid) = pg.neighbor.distances # Returns SVector{D, Float64}
+@inline get_distances(pg::ParticleGrid) = pg.neighbor.distances # Returns Space{D}
 @inline get_neighbors(pg::ParticleGrid) = pg.neighbor.indices
 
 function Kin2Macro(edges::Union{AbstractVector{Int},Tuple})
-    NM = length(edges) - 1
-    ranges = ntuple(i -> edges[i]:(edges[i+1]-1), NM)
-    return Kin2Macro{NM}(ranges)
+    M = length(edges) - 1
+    ranges = ntuple(i -> edges[i]:(edges[i+1]-1), M)
+    return Kin2Macro{M}(ranges)
 end
 
 # Functor 1: Reconstruct Macro Tuple (v_kinetic -> u_macro)
-@inline function (km::Kin2Macro{NM})(v::AbstractVector) where {NM}
-    return ntuple(i -> sum(v[k] for k in km.ranges[i]), Val(NM))
+@inline function (km::Kin2Macro{M})(v::AbstractVector) where {M}
+    return ntuple(i -> sum(v[k] for k in km.ranges[i]), Val(M))
 end
 
 # Functor 2: Returns the macroscopic index 'm' that owns kinetic component 'k'
-@inline function (km::Kin2Macro{NM})(k::Int) where {NM}
+@inline function (km::Kin2Macro{M})(k::Int) where {M}
     for (i, range) in enumerate(km.ranges)
         if k in range
             return i 
@@ -66,7 +66,7 @@ end
 function createParticleGrid(
     mins::NTuple{D, Real}, maxs::NTuple{D, Real}, Ns_interior::NTuple{D, Integer}, 
     bc::Symbol, interp_range_factor::Real;
-    M::Int = 1, randomness::NTuple{D, Float64} = ntuple(i->0.0, D), 
+    M::Int = 1, randomness::Tuple = ntuple(i->0.0, D), 
     rng = Random.default_rng(), merge_factor = 0.3, 
     weight_func = exponentialWeightFunction(1.,1.), km = nothing, mover = NoGridMover()
 ) where {D}
@@ -89,10 +89,10 @@ function createParticleGrid(
     N_ghost_total = N - N_interior_total
 
     # Cast to Static Vectors for type-stable math
-    mins_f = SVector{D, Float64}(mins...)
-    maxs_f = SVector{D, Float64}(maxs...)
-    dxs_f  = SVector{D, Float64}(dxs...)
-    rand_f = SVector{D, Float64}(randomness...)
+    mins_f = Space{D}(mins...)
+    maxs_f = Space{D}(maxs...)
+    dxs_f  = Space{D}(dxs...)
+    rand_f = Space{D}(randomness...)
 
     mins_tot = mins_f .- N_ghost .* dxs_f
     maxs_tot = maxs_f .+ N_ghost .* dxs_f
@@ -101,7 +101,7 @@ function createParticleGrid(
     r = merge_factor * R
     regular = all(==(0.0), randomness)
 
-    positions = Vector{SVector{D, Float64}}(undef, N)
+    positions = Vector{Space{D}}(undef, N)
     is_boundary = zeros(Bool, N)
 
     # ---------------------------------------------------------
@@ -126,7 +126,7 @@ function createParticleGrid(
             end
         end
         
-        positions[i] = SVector{D, Float64}(pos_tuple)
+        positions[i] = Space{D}(pos_tuple)
         
         if bc != :periodic
             is_boundary[i] = any(d -> I[d] <= N_ghost || I[d] > Ns_interior[d] + N_ghost, 1:D)
@@ -142,7 +142,7 @@ function createParticleGrid(
     )
 
     core = ParticleGridCore{D}(positions, is_boundary, zeros(Float64, N))
-    shared = SharedBuffers{D, M}(zeros(SVector{M, Float64}, N), similar(positions), zeros(Bool,N), zeros(Int, N))
+    shared = SharedBuffers{D, M}(zeros(State{M}, N), similar(positions), zeros(Bool,N), zeros(Int, N))
 
     reorder = ReorderData{D}(collect(1:N), collect(1:N), zeros(Int, N), zeros(Bool,N))
     voxels = LocalVoxels(floor(Int, interp_range_factor), Float64(R))
@@ -164,12 +164,12 @@ function createParticleGrid(
     neighbors = NeighborData{D, typeof(system), typeof(weight_func)}(
         system, weight_func, fill(1:0, N + 1), Int[], 
         Vector{Float64}(undef,0), Vector{SVector{D,Float64}}(undef, 0), 
-        [Atomic{Int}(0) for _ in 1:N], [Atomic{Int}(0) for _ in 1:N]
+        zeros(Int, N), zeros(Int, N)
     )
 
     pg = ParticleGrid{D, M, typeof(system), typeof(weight_func), typeof(mover)}(
         meta, core, shared, neighbors, reorder, manage, km, mover,
-        zeros(SVector{M, Float64}, N), zeros(SVector{M, Bool}, N), zeros(SVector{M, Float64}, N)
+        zeros(State{M}, N), zeros(SVector{M, Bool}, N), zeros(State{M}, N)
     )
 
     if D > 1; pg.neighbor(pg); end # Pre-warm CellListMap
@@ -190,9 +190,9 @@ function createParticleGrid(
     randomness::Real = 0.0, kwargs...
 )
     return createParticleGrid(
-        (Float64(xmin),), (Float64(xmax),), (Int(N_interior),), 
+        Space{1}(Float64(xmin)), Space{1}(Float64(xmax)), (Int(N_interior),), 
         bc, Float64(interp_range_factor);
-        randomness=(Float64(randomness),), kwargs...
+        randomness=Space{1}(Float64(randomness)), kwargs...
     )
 end
 
@@ -203,10 +203,10 @@ function createParticleGrid(
     randomness::NTuple{2, Float64} = (0.0, 0.0), kwargs...
 )
     return createParticleGrid(
-        (Float64(xmin), Float64(ymin)), (Float64(xmax), Float64(ymax)), 
+        Space{2}(Float64(xmin), Float64(ymin)), Space{2}(Float64(xmax), Float64(ymax)), 
         (Int(Nx_interior), Int(Ny_interior)), 
         bc, Float64(interp_range_factor);
-        randomness=Float64.(randomness), kwargs...
+        randomness=Space{2}(Float64.(randomness)), kwargs...
     )
 end
 
@@ -410,83 +410,172 @@ end
 function (nd::NeighborData{D, S, WF})(pg::ParticleGrid{D, M, S, WF}) where {D, M, S, WF}
     system = nd.system
     weightFunc = nd.weight_func    
+    N = pg.meta.N
 
     CellListMap.update!(system, pg.core.positions)
 
-    @inbounds for i in 1:pg.meta.N; nd.atomic_counts[i][] = 0; end
-    atomic_counts = nd.atomic_counts
-
+    # --- PASS 1: FAST SERIAL COUNTING ---
+    counts = nd.counts
+    fill!(counts, 0)
+    
     map_pairwise!(
         (xi, xj, i, j, d2, null) -> begin
-            atomic_add!(atomic_counts[i], 1)
-            atomic_add!(atomic_counts[j], 1)
-            null
+            @inbounds counts[i] += 1
+            @inbounds counts[j] += 1
+            return null
         end,
-        0, system.box, system.cl; parallel = true
+        0, system.box, system.cl; parallel = false # <-- The magic fix
     )
 
+    # --- SEQUENTIAL PREFIX SUM ---
+    starts = Vector{Int}(undef, N)
     max_so_far = 0 
     current_ptr = 1
-    @inbounds for i in 1:pg.meta.N
-        count = atomic_counts[i][]
-        pg.neighbor.ranges[i] = current_ptr:(current_ptr + count - 1)
-        current_ptr += count
-        if count > max_so_far
-            max_so_far = count
+    
+    @inbounds for i in 1:N
+        c = counts[i]
+        pg.neighbor.ranges[i] = current_ptr:(current_ptr + c - 1)
+        starts[i] = current_ptr 
+        current_ptr += c
+        if c > max_so_far
+            max_so_far = c
         end
     end
-    pg.neighbor.ranges[pg.meta.N + 1] = current_ptr:(current_ptr - 1)
     pg.meta.max_nb = max_so_far
+    pg.neighbor.ranges[N + 1] = current_ptr:(current_ptr - 1)
 
+    # --- CAPACITY MANAGEMENT ---
     total_neighbors = current_ptr - 1
-    current_capacity = length(pg.neighbor.indices)
+    ensure_capacity!(nd, total_neighbors) 
     
-    if total_neighbors > current_capacity
-        new_capacity = ceil(Int, total_neighbors * 1.25)
-        resize!(pg.neighbor.indices, new_capacity)
-        
-        # --- NEW VECTOR RESIZING (Replaces the Matrix reallocation) ---
-        resize!(pg.neighbor.weights, new_capacity)
-        resize!(pg.neighbor.distances, new_capacity)
-    end
-    
-    @inbounds for i in 1:pg.meta.N; nd.atomic_offsets[i][] = 0; end
-    atomic_offsets = nd.atomic_offsets
-    
+    # --- ALIAS ALL DATA ARRAYS ---
+    indices = pg.neighbor.indices
+    weights = pg.neighbor.weights
+    distances = pg.neighbor.distances
+
+    offsets = nd.offsets
+    fill!(offsets, 0)
+
+    # --- PASS 2: FAST SERIAL WRITING ---
     map_pairwise!(
         (xi, xj, i, j, d2, null) -> begin
-            # CellListMap returns d2 (distance squared). 
-            # Make sure your weight function expects d or d2!
             weight = weightFunc(sqrt(d2)) 
-
-            # --- NEW SVECTOR DISTANCE CALCULATION ---
-            # Automatically returns SVector{D, Float64} handling periodicity
             dist = getDistance(pg, i, j) 
 
-            # --- PARTICLE i ---
-            offset_i = atomic_add!(atomic_offsets[i], 1)
-            write_idx_i = pg.neighbor.ranges[i].start + offset_i
-            pg.neighbor.indices[write_idx_i] = j
-            
-            # Direct struct-of-arrays assignments
-            pg.neighbor.weights[write_idx_i]   = weight
-            pg.neighbor.distances[write_idx_i] = dist
+            # PARTICLE i
+            @inbounds idx_i = starts[i] + offsets[i]
+            @inbounds offsets[i] += 1
+            @inbounds indices[idx_i]   = j
+            @inbounds weights[idx_i]   = weight
+            @inbounds distances[idx_i] = dist
 
-            # --- PARTICLE j ---
-            offset_j = atomic_add!(atomic_offsets[j], 1) 
-            write_idx_j = pg.neighbor.ranges[j].start + offset_j
-            pg.neighbor.indices[write_idx_j] = i
+            # PARTICLE j
+            @inbounds idx_j = starts[j] + offsets[j]
+            @inbounds offsets[j] += 1
+            @inbounds indices[idx_j]   = i
+            @inbounds weights[idx_j]   = weight
+            @inbounds distances[idx_j] = -dist
             
-            # Direct struct-of-arrays assignments (Invert distance for j!)
-            pg.neighbor.weights[write_idx_j]   = weight
-            pg.neighbor.distances[write_idx_j] = -dist
-            
-            null
+            return null
         end,
-        0, system.box, system.cl; parallel = true
+        0, system.box, system.cl; parallel = false # <-- The magic fix
     )
     return nothing
 end
+
+# function (nd::NeighborData{D, S, WF})(pg::ParticleGrid{D, M, S, WF}) where {D, M, S, WF}
+#     system = nd.system
+#     weightFunc = nd.weight_func    
+#     N = pg.meta.N
+
+#     CellListMap.update!(system, pg.core.positions)
+
+#     # --- ALIAS LOCALLY ---
+#     # Unboxing arrays prevents Julia from dereferencing `nd` on every loop iteration
+#     atomic_counts = nd.atomic_counts
+#     @inbounds for i in 1:N
+#         atomic_counts[i][] = 0
+#     end
+
+#     # PASS 1: Count Neighbors
+#     map_pairwise!(
+#         (xi, xj, i, j, d2, null) -> begin
+#             atomic_add!(atomic_counts[i], 1)
+#             atomic_add!(atomic_counts[j], 1)
+#             return null
+#         end,
+#         0, system.box, system.cl; parallel = true
+#     )
+
+#     max_so_far = 0 
+#     current_ptr = 1
+    
+#     # --- TRICK 1: FLAT STARTS ARRAY ---
+#     # We build a flat array of start indices to completely bypass the 
+#     # pg.neighbor.ranges[i].start struct lookup in the hot loop.
+#     starts = pg.shared.int_buffer
+    
+#     @inbounds for i in 1:N
+#         count = atomic_counts[i][]
+#         pg.neighbor.ranges[i] = current_ptr:(current_ptr + count - 1)
+#         starts[i] = current_ptr
+#         current_ptr += count
+#         if count > max_so_far
+#             max_so_far = count
+#         end
+#     end
+#     pg.neighbor.ranges[N + 1] = current_ptr:(current_ptr - 1)
+#     pg.meta.max_nb = max_so_far
+
+#     total_neighbors = current_ptr - 1
+#     current_capacity = length(pg.neighbor.indices)
+    
+#     if total_neighbors > current_capacity
+#         new_capacity = ceil(Int, total_neighbors * 1.25)
+#         resize!(pg.neighbor.indices, new_capacity)
+#         resize!(pg.neighbor.weights, new_capacity)
+#         resize!(pg.neighbor.distances, new_capacity)
+#     end
+    
+#     atomic_offsets = nd.atomic_offsets
+#     @inbounds for i in 1:N
+#         atomic_offsets[i][] = 0
+#     end
+    
+#     # --- TRICK 2: ALIAS ALL ARRAYS ---
+#     # Binding these locally guarantees the compiler won't box `pg` inside the closure
+#     indices = pg.neighbor.indices
+#     weights = pg.neighbor.weights
+#     distances = pg.neighbor.distances
+
+#     # PASS 2: Write Data
+#     map_pairwise!(
+#         (xi, xj, i, j, d2, null) -> begin
+#             weight = weightFunc(sqrt(d2)) 
+#             dist = getDistance(pg, i, j) 
+
+#             # --- PARTICLE i ---
+#             offset_i = atomic_add!(atomic_offsets[i], 1)
+#             write_idx_i = starts[i] + offset_i
+            
+#             indices[write_idx_i]   = j
+#             weights[write_idx_i]   = weight
+#             distances[write_idx_i] = dist
+
+#             # --- PARTICLE j ---
+#             offset_j = atomic_add!(atomic_offsets[j], 1) 
+#             write_idx_j = starts[j] + offset_j
+            
+#             indices[write_idx_j]   = i
+#             weights[write_idx_j]   = weight
+#             distances[write_idx_j] = -dist
+            
+#             return null
+#         end,
+#         0, system.box, system.cl; parallel = true
+#     )
+#     return nothing
+# end
 
 reorder_particles!(pg::ParticleGrid) = pg.reorder(pg)
 
@@ -505,58 +594,60 @@ function (rd::ReorderData{1})(pg::ParticleGrid{1, M, S, WF}) where {M, S, WF}
     return nothing
 end
 
-# --- 1D BCs (Matrix) ---
-function apply_boundary_conditions!(pg::ParticleGrid{1}, rhos_buffer::AbstractVector{T}) where {T}
+function apply_boundary_conditions!(pg::ParticleGrid{D, M}, rhos_buffer::AbstractVector{State{M}}) where {D, M}
     bc = pg.meta.bc
-    if bc == :periodic; return; end
+    
+    # 1. Periodic needs no manual overriding; neighbors wrap automatically
+    if bc == :periodic
+        return nothing
+    end
 
+    # 2. Fixed Dirichlet: Reset boundaries to their initial states
     if bc == :fixed_dirichlet
         @inbounds for i in 1:pg.meta.N
             if pg.core.is_boundary[i]
-                rhos_buffer[i] = pg.rhos[i]
+                rhos_buffer[i] = pg.rhos[i] 
             end
         end
-    elseif bc == :outflow
-        first_int = findfirst(==(false), pg.core.is_boundary)
-        last_int  = findlast(==(false), pg.core.is_boundary)
-        
-        if isnothing(first_int) || isnothing(last_int); return; end
-        
-        val_left  = rhos_buffer[first_int]
-        val_right = rhos_buffer[last_int]
-        
-        # Use Ref() to broadcast the SVector as a single element
-        rhos_buffer[1:(first_int-1)] .= Ref(val_left)
-        rhos_buffer[(last_int+1):end] .= Ref(val_right)
+        return nothing
     end
-    return nothing
-end
-
-# --- 2D BCs (Matrix) ---
-function apply_boundary_conditions!(pg::ParticleGrid{2}, rhos_buffer::AbstractMatrix)
-    bc = pg.meta.bc
-    if bc == :periodic; return; end
-    if bc == :fixed_dirichlet
+    
+    # 3. Outflow (Zero-Gradient): Adopt the state of the closest interior neighbor
+    if bc == :outflow
+        dist_vec = get_distances(pg)
+        
         @inbounds for i in 1:pg.meta.N
             if pg.core.is_boundary[i]
-                rhos_buffer[i, :] .= pg.rhos[i, :]
+                nb_slice = pg.neighbor.ranges[i]
+                
+                closest_j = -1
+                min_dist_sq = Inf
+                
+                # Search the local support domain for the nearest interior particle
+                for k in nb_slice
+                    j = pg.neighbor.indices[k]
+                    
+                    if !pg.core.is_boundary[j] # Ensure it's an interior particle!
+                        dx = dist_vec[k]       # dx is natively a Space{D}
+                        d2 = sum(abs2, dx)     # Fast squared distance
+                        
+                        if d2 < min_dist_sq
+                            min_dist_sq = d2
+                            closest_j = j
+                        end
+                    end
+                end
+                
+                if closest_j != -1
+                    rhos_buffer[i] = rhos_buffer[closest_j]
+                else
+                    # Fallback in case the support domain is too small to see the interior
+                    rhos_buffer[i] = pg.rhos[i]
+                end
             end
         end
     end
-    return nothing
-end
-
-# --- 2D BCs (Vector) ---
-function apply_boundary_conditions!(pg::ParticleGrid{2}, rhos_buffer::AbstractVector)
-    bc = pg.meta.bc
-    if bc == :periodic; return; end
-    if bc == :fixed_dirichlet
-        @inbounds for i in 1:pg.meta.N
-            if pg.core.is_boundary[i]
-                rhos_buffer[i] = pg.rhos[i, 1]
-            end
-        end
-    end
+    
     return nothing
 end
 
@@ -633,82 +724,61 @@ function findLocalExtremaAbs(
     return (mini1, maxi1, minAbs1, maxAbs1, mini2, maxi2, minAbs2, maxAbs2)
 end
 
-function getTimeStep(pg::ParticleGrid{1}, eq)
+@inline function getTimeStep(pg::ParticleGrid{D}, eq) where {D}
     dtMax = Inf
-    vel = velocity(eq, 0.0)
+    
+    # Extract base wave speeds safely into an SVector. 
+    # runSimulation.jl guarantees eq_for_dt is a LinearAdvection object.
+    vel = Space{D}(ntuple(d -> eq.vel[d][1], Val(D)))
+
+    w_vec = get_weights(pg)
+    dist_vec = get_distances(pg)
 
     for i in 1:pg.meta.N
-        if pg.core.is_boundary[i]; continue; end
+        if pg.core.is_boundary[i]
+            continue
+        end
         
         nb_slice = pg.neighbor.ranges[i]
-        if isempty(nb_slice); continue; end
+        if isempty(nb_slice)
+            continue
+        end
 
-        num = 0.0; denum = 0.0
-        w_vec = get_weights(pg)
-        dx_vec = get_xdistance(pg)
-        
+        # 1. Build the MLS Matrix N_s (Exactly like your Interpolator!)
+        N_s = @SMatrix zeros(Float64, D, D)
         @inbounds for k in nb_slice
-            w  = w_vec[k]; dx = dx_vec[k]
-            if ((vel >= 0.0) && (dx <= 0.0)) || ((vel <= 0.0) && (dx >= 0.0))
-                num += w * dx
-                denum += w * dx * dx
+            w  = w_vec[k]
+            dx = dist_vec[k] # This is already Space{D}
+            N_s += w * (dx * dx')
+        end
+
+        if abs(det(N_s)) < 1e-14
+            continue
+        end
+
+        # 2. Compile-time analytic inversion using StaticArrays
+        inv_N_s = inv(N_s)
+
+        # 3. Accumulate the stability condition
+        sum_c = 0.0
+        @inbounds for k in nb_slice
+            w  = w_vec[k]
+            dx = dist_vec[k]
+            
+            # C_k is the effective MLS shape function vector
+            C_k = inv_N_s * (w * dx)
+            
+            # Evaluate the upwind contribution: dot(velocity, shape_gradient)
+            c_k = dot(vel, C_k)
+            if c_k < 0.0
+                sum_c -= c_k
             end
         end
 
-        if abs(vel * num) > 1e-14
-            dtMax = min(-denum / (vel * num), dtMax)
-        end
-    end
-    return dtMax
-end
-
-function getTimeStep(pg::ParticleGrid{2}, eq)
-    dtMax = Inf
-    vel = eq.vel
-
-    for i in 1:pg.meta.N
-        if pg.core.is_boundary[i]; continue; end
-        
-        nb_slice = pg.neighbor.ranges[i]
-        if isempty(nb_slice); continue; end
-        
-        w_vec = get_weights(pg); dx_vec = get_xdistance(pg); dy_vec = get_ydistance(pg)
-        
-        A11 = 0.0; A12 = 0.0; A22 = 0.0
-        @inbounds for k in nb_slice
-            w  = w_vec[k]; dx = dx_vec[k]; dy = dy_vec[k]
-            A11 += w * dx * dx
-            A12 += w * dx * dy
-            A22 += w * dy * dy
-        end
-
-        D = A11 * A22 - (A12^2)
-        if abs(D) < 1e-14; continue; end
-
-        sumCij = 0.0
-        @inbounds for k in nb_slice
-            w  = w_vec[k]; dx = dx_vec[k]; dy = dy_vec[k]
-            coeff_x = (A22 * w * dx - A12 * w * dy) / D
-            coeff_y = (A11 * w * dy - A12 * w * dx) / D
-            
-            angle = atan(dy, dx)
-            n_x, n_y = cos(angle), sin(angle)
-            s_x, s_y = -n_y, n_x
-            
-            alfaBar = n_x * coeff_x + n_y * coeff_y
-            betaBar = s_x * coeff_x + s_y * coeff_y
-            
-            dot_vel_n = vel[1] * n_x + vel[2] * n_y
-            dot_vel_s = vel[1] * s_x + vel[2] * s_y
-            
-            bracketMinus = dot_vel_n > 0.0 ? 0.0 : dot_vel_n
-            bracketMinus2 = betaBar * dot_vel_s > 0.0 ? 0.0 : betaBar * dot_vel_s
-            
-            sumCij -= alfaBar * bracketMinus + bracketMinus2
-        end
-        
-        if abs(sumCij) > 1e-14
-            dtMax = min(1 / (2 * sumCij), dtMax)
+        if sum_c > 1e-14
+            # The factor D automatically scales CFL for 1D (D=1) and 2D (D=2)!
+            dt_i = 1.0 / (D * sum_c)
+            dtMax = min(dt_i, dtMax)
         end
     end
     return dtMax

@@ -39,8 +39,8 @@ struct inverseWeightFunction <: MLSWeightFunction
     range::Float64
 end
 
-struct Kin2Macro{NM}
-    ranges::NTuple{NM, UnitRange{Int}}
+struct Kin2Macro{M}
+    ranges::NTuple{M, UnitRange{Int}}
 end
 
 abstract type GridMover end
@@ -62,8 +62,8 @@ end
 # 3. PhysicalGridMover
 # ---------------------------------------------------------
 mutable struct PhysicalGridMover{D} <: GridMover
-    vel_indices::SVector{D,Float64}
-    grid_velocities::Vector{SVector{D, Float64}} # Pre-allocated workspace buffer
+    vel_indices::Space{D}
+    grid_velocities::Vector{Space{D}} # Pre-allocated workspace buffer
 end
 
 # ---------------------------------------------------------
@@ -73,13 +73,13 @@ mutable struct GridMetadata{D}
     N::Int                  
     N_interior::Int         
     N_ghost::Int            
-    mins::SVector{D, Float64}
-    maxs::SVector{D, Float64}
-    inner_mins::SVector{D, Float64}
-    inner_maxs::SVector{D, Float64}
+    mins::Space{D}
+    maxs::Space{D}
+    inner_mins::Space{D}
+    inner_maxs::Space{D}
     R::Float64
     r::Float64
-    dx::SVector{D, Float64} 
+    dx::Space{D} 
     regular::Bool
     bc::Symbol              
     range_factor::Float64
@@ -90,11 +90,30 @@ end
 # 2. Shared Workspace Buffers
 # ---------------------------------------------------------
 mutable struct SharedBuffers{D, M}
-    rho_buffer::Vector{SVector{M, Float64}}      
-    pos_buffer::Vector{SVector{D, Float64}} 
+    rho_buffer::Vector{State{M}}      
+    pos_buffer::Vector{Space{D}} 
     bit_buffer::Vector{Bool}
     int_buffer::Vector{Int}
 end
+
+# # ---------------------------------------------------------
+# # 3. Neighbor Search Context
+# # ---------------------------------------------------------
+# mutable struct NeighborData{D, S, WF}
+#     system::S      
+#     weight_func::WF
+
+#     # CSR format using native UnitRanges
+#     ranges::Vector{UnitRange{Int}}
+#     indices::Vector{Int}
+    
+#     # --- THE MASSIVE CHANGE ---
+#     weights::Vector{Float64}
+#     distances::Vector{Space{D}} 
+
+#     atomic_counts::Vector{Atomic{Int}}
+#     atomic_offsets::Vector{Atomic{Int}}
+# end
 
 # ---------------------------------------------------------
 # 3. Neighbor Search Context
@@ -107,12 +126,12 @@ mutable struct NeighborData{D, S, WF}
     ranges::Vector{UnitRange{Int}}
     indices::Vector{Int}
     
-    # --- THE MASSIVE CHANGE ---
     weights::Vector{Float64}
-    distances::Vector{SVector{D, Float64}} 
+    distances::Vector{Space{D}} 
 
-    atomic_counts::Vector{Atomic{Int}}
-    atomic_offsets::Vector{Atomic{Int}}
+    # --- Pure Serial Buffers ---
+    counts::Vector{Int}
+    offsets::Vector{Int}
 end
 
 # ---------------------------------------------------------
@@ -136,7 +155,7 @@ end
 # 6. Particle Grid Core (Geometry & Topology)
 # ---------------------------------------------------------
 mutable struct ParticleGridCore{D}
-    positions::Vector{SVector{D, Float64}}
+    positions::Vector{Space{D}}
     is_boundary::Vector{Bool}
     volumes::Vector{Float64}
 end
@@ -154,9 +173,9 @@ mutable struct ParticleGrid{D, M, S, WF, GM}
     kin2macro::Kin2Macro{M}
     mover::GM
 
-    rhos::Vector{SVector{M, Float64}}
+    rhos::Vector{State{M}}
     mood_events::Vector{SVector{M, Bool}}
-    curvatures::Vector{SVector{M, Float64}}
+    curvatures::Vector{State{M}}
     
 end
 

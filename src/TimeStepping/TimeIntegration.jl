@@ -63,8 +63,8 @@ function saveData!(
         N_save = length(indices)
         
         # Pre-allocate SVector output arrays for this snapshot
-        xs_storage[snap_idx] = Vector{SVector{D, Float64}}(undef, N_save)
-        us_storage[snap_idx] = Vector{SVector{M, Float64}}(undef, N_save)
+        xs_storage[snap_idx] = Vector{Space{D}}(undef, N_save)
+        us_storage[snap_idx] = Vector{State{M}}(undef, N_save)
         
         # Perform fast vector copy based on the filtered indices
         copyto!(xs_storage[snap_idx], view(pos_array, indices))
@@ -73,8 +73,8 @@ function saveData!(
         N_save = N_active
         
         # Pre-allocate SVector output arrays for this snapshot
-        xs_storage[snap_idx] = Vector{SVector{D, Float64}}(undef, N_save)
-        us_storage[snap_idx] = Vector{SVector{M, Float64}}(undef, N_save)
+        xs_storage[snap_idx] = Vector{Space{D}}(undef, N_save)
+        us_storage[snap_idx] = Vector{State{M}}(undef, N_save)
         
         # Perform fast contiguous memory copy for active particles
         copyto!(xs_storage[snap_idx], view(pos_array, 1:N_save))
@@ -97,8 +97,8 @@ function mainTimeIntegrator!(
 ) where {D, M}
     
     # Output arrays hold Vectors of SVectors!
-    xs = Vector{Vector{SVector{D, Float64}}}(undef, snapshots + 1)
-    us = Vector{Vector{SVector{M, Float64}}}(undef, snapshots + 1)
+    xs = Vector{Vector{Space{D}}}(undef, snapshots + 1)
+    us = Vector{Vector{State{M}}}(undef, snapshots + 1)
     ts = Vector{Float64}(undef, snapshots + 1)
 
     t_snap = range(0.0, settings.tmax, length=snapshots+1)

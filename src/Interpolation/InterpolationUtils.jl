@@ -19,11 +19,11 @@
 function (interp::Interpolator{D, 0, 0})(
     nb_slice::UnitRange{Int},
     wVec::AbstractVector{Float64},
-    fVec::AbstractVector{T} # T is SVector{NM, Float64}
-) where {D, T}
+    fVec::AbstractVector{State{M}}
+) where {D, M}
     
     sum_w = 0.0
-    sum_wf = zero(T)
+    sum_wf = zeros(SVector{M})
 
     @inbounds for i in nb_slice
         w = wVec[i]
@@ -32,7 +32,7 @@ function (interp::Interpolator{D, 0, 0})(
     end
 
     if abs(sum_w) < 1e-14
-        return zero(T) 
+        return zeros(SVector{M})
     else
         return sum_wf / sum_w 
     end
@@ -44,17 +44,16 @@ end
 
 function (interp::Interpolator{D, 1, 1})(
     nb_slice::UnitRange{Int},
-    distVec::AbstractVector{SVector{D, Float64}}, 
+    distVec::AbstractVector{Space{D}}, 
     wVec::AbstractVector{Float64},
-    dfVec::AbstractVector{T}; # T is SVector{NM, Float64}
+    dfVec::AbstractVector{State{M}};
     scale::Float64=1.0
-) where {D, T}
+) where {D, M}
     
     invL = 1.0 / scale
-    NM = length(T)
     
     N_s = @SMatrix zeros(Float64, D, D)
-    b_s = zero(SMatrix{D, NM, Float64, D * NM})
+    b_s = zero(SMatrix{D, M, Float64, D * M})
 
     @inbounds for i in nb_slice
         w = wVec[i]
@@ -71,7 +70,7 @@ function (interp::Interpolator{D, 1, 1})(
     # StaticArrays solves gradients for ALL macroscopic variables at once
     c_s = N_s \ b_s 
     
-    # Returns an SMatrix of size (D x NM)
+    # Returns an SMatrix of size (D x M)
     return c_s * invL 
 end
 
@@ -81,21 +80,20 @@ end
 
 function (interp::Interpolator{D, 2, 1})(
     nb_slice::UnitRange{Int},
-    distVec::AbstractVector{SVector{D, Float64}},
+    distVec::AbstractVector{Space{D}},
     wVec::AbstractVector{Float64},
-    dfVec::AbstractVector{T}; # T is SVector{NM, Float64}
+    dfVec::AbstractVector{State{M}};
     scale::Float64=1.0
-) where {D, T}
+) where {D, M}
     
     invL = 1.0 / scale
     invL2 = invL * invL
-    NM = length(T)
     
     # Compile-time resolution of basis size based on Dimension
     B_LEN = D == 1 ? 2 : (D == 2 ? 5 : 9)
     
     N_s = @SMatrix zeros(Float64, B_LEN, B_LEN)
-    b_s = zero(SMatrix{B_LEN, NM, Float64, B_LEN * NM})
+    b_s = zero(SMatrix{B_LEN, M, Float64, B_LEN * M})
 
     @inbounds for i in nb_slice
         w = wVec[i]
@@ -106,7 +104,7 @@ function (interp::Interpolator{D, 2, 1})(
     end
     
     if abs(det(N_s)) < 1e-14
-        return zero(SMatrix{D, NM, Float64, D * NM}), zero(SMatrix{B_LEN - D, NM, Float64, (B_LEN - D) * NM})
+        return zero(SMatrix{D, M, Float64, D * M}), zero(SMatrix{B_LEN - D, M, Float64, (B_LEN - D) * M})
     end
     
     c_s = N_s \ b_s
@@ -117,6 +115,6 @@ function (interp::Interpolator{D, 2, 1})(
     curves = c_s[(D+1):B_LEN, :] * invL2
     
     # Both are returned as SMatrix. 
-    # slopes is size (D x NM). curves is size ((B_LEN - D) x NM).
+    # slopes is size (D x M). curves is size ((B_LEN - D) x M).
     return slopes, curves
 end

@@ -9,21 +9,21 @@ function setInitialConditions!(pg::ParticleGrid{D, M}, eq::HyperbolicPDE, IC::In
     positions = get_positions(pg)
     
     @inbounds for i in 1:pg.meta.N
-        # Strict assignment: IC(pos) must return an SVector{M, Float64}
+        # Strict assignment: IC(pos) must return an State{M}
         pg.rhos[i] = IC(positions[i])
     end
     return nothing
 end
 
-(ic::Gauss)(pos::SVector{D, Float64}) where {D} = @. ic.a * exp(-sum(abs2, pos - ic.b) / ic.width^2)
-(ic::Box)(pos::SVector{D, Float64}) where {D} = all(ic.mins .<= pos .<= ic.maxs) ? ic.u_box : ic.u_bg
-(ic::Sine)(pos::SVector{D, Float64}) where {D} = ic.a * sin(2.0 * pi * sum(pos ./ ic.period)) + ic.c_offset
-(ic::Riemann)(pos::SVector{D, Float64}) where {D} = dot(pos - ic.p0, ic.n) < 0 ? ic.uL : ic.uR
-function (ic::SRiemann)(pos::SVector{D, Float64}) where {D}
+(ic::Gauss)(pos::Space{D}) where {D} = @. ic.a * exp(-sum(abs2, pos - ic.b) / ic.width^2)
+(ic::Box)(pos::Space{D}) where {D} = all(ic.mins .<= pos .<= ic.maxs) ? ic.u_box : ic.u_bg
+(ic::Sine)(pos::Space{D}) where {D} = ic.a * sin(2.0 * pi * sum(pos ./ ic.period)) + ic.c_offset
+(ic::Riemann)(pos::Space{D}) where {D} = dot(pos - ic.p0, ic.n) < 0 ? ic.uL : ic.uR
+function (ic::SRiemann)(pos::Space{D}) where {D}
     dist = dot(pos - ic.p0, ic.n)
     return @. 0.5 * (ic.uL + ic.uR) - (ic.uL - ic.uR) / pi * atan(dist / ic.width)
 end
-function (ic::QuadrantRiemann{D, T, N})(pos::SVector{D, Float64}) where {D, T, N}
+function (ic::QuadrantRiemann{D, M, N})(pos::Space{D}) where {D, M, N}
     # Binary encoding: Left/Bottom adds 0, Right/Top adds 2^(d-1)
     idx = 1
     for d in 1:D
@@ -33,7 +33,7 @@ function (ic::QuadrantRiemann{D, T, N})(pos::SVector{D, Float64}) where {D, T, N
     end
     return ic.u_states[idx]
 end
-function (ic::EulerShockTube)(pos::SVector{D, Float64}) where {D}
+function (ic::EulerShockTube)(pos::Space{D}) where {D}
     is_left = dot(pos - ic.p0, ic.n) < 0
     rho_val, u_val, p_val = is_left ? ic.uL : ic.uR
     
@@ -283,14 +283,6 @@ end
 # end
 
 # # --- NEW: Generalized Quadrant-based Riemann Problem ---
-
-
-# function QuadrantRiemann(u_states::NTuple{D,NTuple{M,Float64}}, p0::T) where {D, M, T}
-#     if D != 2^(length(p0))
-#         error("For a D-dimensional problem!")
-#     end
-#     QuadrantRiemann{D, M, T}(u_states, p0)
-# end
 
 # # 1D Functor (2 states: left, right)
 # function (ic::QuadrantRiemann{2, M, Float64})(x::Real) where M

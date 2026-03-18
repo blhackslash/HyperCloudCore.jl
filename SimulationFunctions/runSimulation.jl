@@ -324,7 +324,7 @@ function runSimulation(params::ParamDictType)::Union{AbstractSimData, Nothing}
             upwind_alg_2d = "Classic"
             weight_func = exponentialWeightFunction(interp_alpha, interp_range)
             
-            pg = createParticleGrid(Val(1), xmin, xmax, Nx, bc, interp_range_factor; M=M_components, rng=rng, randomness=(randomness_factor * dx_nom), merge_factor=merge_factor, weight_func=weight_func, km = km, mover = grid_mover)
+            pg = createParticleGrid((xmin,), (xmax,), (Nx,), bc, interp_range_factor; M=M_components, rng=rng, randomness=(randomness_factor * dx_nom,), merge_factor=merge_factor, weight_func=weight_func, km = km, mover = grid_mover)
         else
             Nx, Ny = haskey(run_params, "N") ? (run_params["N"], run_params["N"]) : (run_params["Nx"], run_params["Ny"])
             ymin, ymax = run_params["ymin"], run_params["ymax"]
@@ -334,7 +334,7 @@ function runSimulation(params::ParamDictType)::Union{AbstractSimData, Nothing}
             upwind_alg_2d = (main_grad_name == "Upwind" || fallback_grad_name == "Upwind") ? run_params["upwind_alg_2d"] : nothing
             weight_func = exponentialWeightFunction(interp_alpha, interp_range)
             
-            pg = createParticleGrid(Val(2), xmin, xmax, ymin, ymax, Nx, Ny, bc, interp_range_factor; M=M_components, weight_func=weight_func, rng=rng, randomness=(randomness_factor[1]*dx_nom, randomness_factor[2]*dy_nom), km = km, mover = grid_mover)
+            pg = createParticleGrid((xmin,ymin), (xmax, ymax), (Nx, Ny), bc, interp_range_factor; M=M_components, weight_func=weight_func, rng=rng, randomness=(randomness_factor[1]*dx_nom, randomness_factor[2]*dy_nom), km = km, mover = grid_mover)
         end
 
         # --- 7. Time Step Calculation ---
@@ -444,13 +444,13 @@ if !is_kinetic
             state_type = SVector{M_components, Float64}
             
             if timestepper_name == "EulerUpwind"
-                method = EulerUpwind(eq, MainGrad, FallbackGrad, mood_fun, state_type)
+                method = EulerUpwind(eq, MainGrad, FallbackGrad, mood_fun)
             elseif timestepper_name == "RalstonRK2"
-                method = RalstonRK2(eq, MainGrad, FallbackGrad, mood_fun, state_type)
+                method = RalstonRK2(eq, MainGrad, FallbackGrad, mood_fun)
             elseif timestepper_name == "RK3"
-                method = RK3(eq, MainGrad, FallbackGrad, mood_fun, state_type)
+                method = RK3(eq, MainGrad, FallbackGrad, mood_fun)
             elseif timestepper_name == "RK4"
-                method = RK4(eq, MainGrad, FallbackGrad, mood_fun, state_type)
+                method = RK4(eq, MainGrad, FallbackGrad, mood_fun)
             else
                 error("Unknown direct TimeStepper: '$timestepper_name'")
             end

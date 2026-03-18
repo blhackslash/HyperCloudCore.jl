@@ -10,13 +10,13 @@
 # =========================================================================
 
 # Notice the signature now accepts `eq` and `km` from the caller!
-function (rs::RelaxationSourceTerm{D, NM, NK})(
+function (rs::RelaxationSourceTerm{D, M, NK})(
     S_out_particle::AbstractVector{Float64},
     U_kinetic_particle::AbstractVector{Float64},
     p_idx::Int,
     eq::HyperbolicPDE{D},
-    km::Kin2Macro{NM}
-) where {D, NM, NK}
+    km::Kin2Macro{M}
+) where {D, M, NK}
     
     u_macro = km(U_kinetic_particle)
     flux_vals = flux(eq, u_macro)
@@ -36,18 +36,18 @@ end
 # NON-LOCAL RELAXATION SOURCE TERM
 # =========================================================================
 
-function ensure_buffer_size!(st::NonLocalRelaxationSourceTerm{D, NM, NK}, N_particles::Int) where {D, NM, NK}
+function ensure_buffer_size!(st::NonLocalRelaxationSourceTerm{D, M, NK}, N_particles::Int) where {D, M, NK}
     if size(st.T_potential, 1) != N_particles
-        st.T_potential = Matrix{Float64}(undef, N_particles, NM)
+        st.T_potential = Matrix{Float64}(undef, N_particles, M)
     end
 end
 
 function update_nonlocal_potential!(
-    st::NonLocalRelaxationSourceTerm{D, NM, NK}, 
+    st::NonLocalRelaxationSourceTerm{D, M, NK}, 
     stage_data::AbstractMatrix{Float64},
     pg::ParticleGrid,
     eq::HyperbolicPDE{D}
-) where {D, NM, NK}
+) where {D, M, NK}
     
     N_particles = pg.meta.N
     ensure_buffer_size!(st, N_particles)
@@ -62,27 +62,27 @@ function update_nonlocal_potential!(
         
         jump = path_integral(eq, u_L, u_R)
         
-        for m in 1:NM
+        for m in 1:M
             st.T_potential[i, m] = jump[m]
         end
     end
 
-    for m in 1:NM; st.T_potential[1, m] = 0.0; end
+    for m in 1:M; st.T_potential[1, m] = 0.0; end
     
     for i in 2:N_particles
-        for m in 1:NM
+        for m in 1:M
             st.T_potential[i, m] += st.T_potential[i-1, m]
         end
     end
 end
 
-function (st::NonLocalRelaxationSourceTerm{D, NM, NK})(
+function (st::NonLocalRelaxationSourceTerm{D, M, NK})(
     S_out::AbstractVector{Float64}, 
     V_kin::AbstractVector{Float64}, 
     p_idx::Int, 
     eq::HyperbolicPDE{D},
-    km::Kin2Macro{NM}
-) where {D, NM, NK}
+    km::Kin2Macro{M}
+) where {D, M, NK}
     
     u_macro = km(V_kin)
 

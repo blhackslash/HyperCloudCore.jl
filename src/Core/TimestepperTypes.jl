@@ -5,88 +5,88 @@ abstract type MeshfreeSystemTimeStepper <: MeshfreeTimeStepper end
 
 ## ------------------------------- Meshfree Direct Steppers -------------------------------
 
-struct EulerUpwind{T, PDE <: HyperbolicPDE, G1 <: GradientInterpolator, G2 <: GradientInterpolator, M <: MOODCriterion} <: MeshfreeTimeStepper
-    pde::PDE
-    gradientInterpolator::G1
-    fallbackInterpolator::G2
-    mood::M
-    
-    rhoInit::Vector{T}      
-    neighbor_fs::Vector{T}  
-    neighbor_dfs::Vector{T} 
-
-    function EulerUpwind(pde::PDE, grad::G1, fallback::G2, mood::M, ::Type{T}=SVector{1, Float64}) where {PDE, G1, G2, M, T}
-        new{T, PDE, G1, G2, M}(pde, grad, fallback, mood, T[], T[], T[])
-    end
-end
-
-struct RalstonRK2{T, PDE <: HyperbolicPDE, G1, G2, MOOD} <: MeshfreeTimeStepper
+struct EulerUpwind{M, PDE <: HyperbolicPDE, G1 <: GradientInterpolator, G2 <: GradientInterpolator, MOOD <: MOODCriterion} <: MeshfreeTimeStepper
     pde::PDE
     gradientInterpolator::G1
     fallbackInterpolator::G2
     mood::MOOD
     
-    rhoInit::Vector{T}
-    rhos::Vector{T}
-    div1::Vector{T}
+    rhoInit::Vector{State{M}}      
+    neighbor_fs::Vector{State{M}}  
+    neighbor_dfs::Vector{State{M}} 
 
-    neighbor_fs::Vector{T}
-    neighbor_dfs::Vector{T}
-
-    function RalstonRK2(pde::PDE, grad::G1, fallback::G2, mood::M, ::Type{T}=SVector{1, Float64}) where {PDE, G1, G2, M, T}
-        new{T, PDE, G1, G2, M}(pde, grad, fallback, mood, T[], T[], T[], T[], T[])
+    function EulerUpwind(pde::HyperbolicPDE{D, M}, grad::G1, fallback::G2, mood::MOOD) where {G1, G2, MOOD, D, M}
+        new{M, typeof(pde), G1, G2, M}(pde, grad, fallback, mood, State{M}[], State{M}[], State{M}[])
     end
 end
 
-struct RK3{T, PDE <: HyperbolicPDE, G1, G2, MOOD} <: MeshfreeTimeStepper
+struct RalstonRK2{M, PDE, G1, G2, MOOD} <: MeshfreeTimeStepper
     pde::PDE
     gradientInterpolator::G1
     fallbackInterpolator::G2
     mood::MOOD
     
-    rhoInit::Vector{T}
-    rhos::Vector{T}
-    div1::Vector{T}
-    div2::Vector{T}
+    rhoInit::Vector{State{M}}
+    rhos::Vector{State{M}}
+    div1::Vector{State{M}}
 
-    neighbor_fs::Vector{T}
-    neighbor_dfs::Vector{T}
+    neighbor_fs::Vector{State{M}}
+    neighbor_dfs::Vector{State{M}}
 
-    function RK3(pde::PDE, grad::G1, fallback::G2, mood::M, ::Type{T}=SVector{1, Float64}) where {PDE, G1, G2, M, T}
-        new{T, PDE, G1, G2, M}(pde, grad, fallback, mood, T[], T[], T[], T[], T[], T[])
+    function RalstonRK2(pde::HyperbolicPDE{D, M}, grad::G1, fallback::G2, mood::MOOD) where {G1, G2, MOOD, D, M}
+        new{M, typeof(pde), G1, G2, MOOD}(pde, grad, fallback, mood, State{M}[], State{M}[], State{M}[], State{M}[], State{M}[])
     end
 end
 
-struct RK4{T, PDE <: HyperbolicPDE, G1, G2, MOOD} <: MeshfreeTimeStepper
+struct RK3{M, PDE <: HyperbolicPDE, G1, G2, MOOD} <: MeshfreeTimeStepper
     pde::PDE
     gradientInterpolator::G1
     fallbackInterpolator::G2
     mood::MOOD
     
-    rhoInit::Vector{T}
-    rhos::Vector{T}
-    k1::Vector{T}
-    k2::Vector{T}
-    k3::Vector{T}
+    rhoInit::Vector{State{M}}
+    rhos::Vector{State{M}}
+    div1::Vector{State{M}}
+    div2::Vector{State{M}}
 
-    neighbor_fs::Vector{T}
-    neighbor_dfs::Vector{T}
+    neighbor_fs::Vector{State{M}}
+    neighbor_dfs::Vector{State{M}}
 
-    function RK4(pde::PDE, grad::G1, fallback::G2, mood::M, ::Type{T}=SVector{1, Float64}) where {PDE, G1, G2, M, T}
-        new{T, PDE, G1, G2, M}(pde, grad, fallback, mood, T[], T[], T[], T[], T[], T[], T[])
+    function RK3(pde::HyperbolicPDE{D, M}, grad::G1, fallback::G2, mood::MOOD) where {G1, G2, MOOD, D, M}
+        new{M, typeof(pde), G1, G2, MOOD}(pde, grad, fallback, mood, State{M}[], State{M}[], State{M}[], State{M}[], State{M}[], State{M}[])
     end
 end
 
-struct RalstonSwitchRK2{T, PDE <: HyperbolicPDE, G1, G2, MOOD} <: MeshfreeTimeStepper
+struct RK4{M, PDE <: HyperbolicPDE, G1, G2, MOOD} <: MeshfreeTimeStepper
     pde::PDE
     gradientInterpolator::G1
     fallbackInterpolator::G2
     mood::MOOD
     
-    rhoInit::Vector{T}
-    rhos::Vector{T}
-    rho_fallback::Vector{T}
-    div1::Vector{T}
+    rhoInit::Vector{State{M}}
+    rhos::Vector{State{M}}
+    k1::Vector{State{M}}
+    k2::Vector{State{M}}
+    k3::Vector{State{M}}
+
+    neighbor_fs::Vector{State{M}}
+    neighbor_dfs::Vector{State{M}}
+
+    function RK4(pde::HyperbolicPDE{D, M}, grad::G1, fallback::G2, mood::MOOD) where {G1, G2, MOOD, D, M}
+        new{M, typeof(pde), G1, G2, M}(pde, grad, fallback, mood, State{M}[], State{M}[], State{M}[], State{M}[], State{M}[], State{M}[], State{M}[])
+    end
+end
+
+struct RalstonSwitchRK2{M, PDE <: HyperbolicPDE, G1, G2, MOOD} <: MeshfreeTimeStepper
+    pde::PDE
+    gradientInterpolator::G1
+    fallbackInterpolator::G2
+    mood::MOOD
+    
+    rhoInit::Vector{State{M}}
+    rhos::Vector{State{M}}
+    rho_fallback::Vector{State{M}}
+    div1::Vector{State{M}}
 
     # Graph/Topology Propagation Buffers for MOOD Switching
     prop_indices::Vector{Int}
@@ -94,11 +94,11 @@ struct RalstonSwitchRK2{T, PDE <: HyperbolicPDE, G1, G2, MOOD} <: MeshfreeTimeSt
     mood_indices::Vector{Int}
     tol::Float64
 
-    neighbor_fs::Vector{T}
-    neighbor_dfs::Vector{T}
+    neighbor_fs::Vector{State{M}}
+    neighbor_dfs::Vector{State{M}}
 
-    function RalstonSwitchRK2(pde::PDE, grad::G1, fallback::G2, mood::M, tol::Float64=1e-6, ::Type{T}=SVector{1, Float64}) where {PDE, G1, G2, M, T}
-        new{T, PDE, G1, G2, M}(pde, grad, fallback, mood, T[], T[], T[], T[], Int[], Bool[], Int[], tol, T[], T[])
+    function RalstonSwitchRK2(pde::HyperbolicPDE{D, M}, grad::G1, fallback::G2, mood::MOOD, tol::Float64=1e-6) where {G1, G2, MOOD, D, M}
+        new{M, typeof(pde), G1, G2, M}(pde, grad, fallback, mood, State{M}[], State{M}[], State{M}[], State{M}[], Int[], Bool[], Int[], tol, State{M}[], State{M}[])
     end
 end
 
@@ -119,19 +119,19 @@ abstract type AbstractSourceTerm end
 
 struct NoSourceTerm <: AbstractSourceTerm end
 
-struct RelaxationSourceTerm{D, NM, NK} <: AbstractSourceTerm
+struct RelaxationSourceTerm{D, M, K} <: AbstractSourceTerm
     epsilon::Float64
     inv_epsilon::Float64
-    coefficients::NTuple{NM, Float64} # Sized to Macro variables
-    inv_relax_speeds::NTuple{NK, SVector{D, Float64}} # Sized to Kinetic, customized dot product!
-    interior_factors::NTuple{NK, Float64}
+    coefficients::State{M} # Sized to Macro variables
+    inv_relax_speeds::NTuple{K, Space{D}} # Sized to Kinetic, customized dot product!
+    interior_factors::Kinetic{K}
 end
 
-mutable struct NonLocalRelaxationSourceTerm{D, NM, NK} <: AbstractSourceTerm
+mutable struct NonLocalRelaxationSourceTerm{D, M, K} <: AbstractSourceTerm
     epsilon::Float64
     inv_epsilon::Float64
-    coefficients::NTuple{NM, Float64}
-    inv_relax_speeds::NTuple{NK, SVector{D, Float64}}
+    coefficients::State{M}
+    inv_relax_speeds::NTuple{K, Space{D}}
     interior_factor::Float64
     T_potential::Matrix{Float64}
 end
@@ -152,61 +152,59 @@ struct IMEXButcherTableau{M <: AbstractArray{Float64, 2}, V <: AbstractArray{Flo
     bt::V
 end
 
-struct GeneralIMEXTimeStepper{T, M_comp, G1, G2, M_crit, IS, ST_OBJ, BT} <: MeshfreeSystemTimeStepper
-    gradientInterpolators::NTuple{M_comp, G1}
-    fallbackInterpolators::NTuple{M_comp, G2}
-    mood::M_crit
+struct GeneralIMEXTimeStepper{M, G1, G2, MOOD, IS, ST_OBJ, BT} <: MeshfreeSystemTimeStepper
+    gradientInterpolators::NTuple{M, G1}
+    fallbackInterpolators::NTuple{M, G2}
+    mood::MOOD
     implicit_solver::IS
     source_term_object::ST_OBJ
     butcher_tableau::BT
     
-    # --- Buffers for local time stepping (Fully Converted to Vector{T}) ---
-    U_n::Vector{T}
-    Y_stages::Vector{Vector{T}}
-    K_E_stages::Vector{Vector{T}}
-    K_I_stages::Vector{Vector{T}}
+    # --- Buffers for local time stepping (Fully Converted to Vector{State{M}}) ---
+    U_n::Vector{State{M}}
+    Y_stages::Vector{Vector{State{M}}}
+    K_E_stages::Vector{Vector{State{M}}}
+    K_I_stages::Vector{Vector{State{M}}}
     
     mood_triggered::Matrix{Bool}
     
     # --- Buffers for parallel evaluation ---
-    U_n_sys::Vector{T}
-    Y_stages_sys::Vector{Vector{T}}
-    K_E_stages_sys::Vector{Vector{T}}
-    K_I_stages_sys::Vector{Vector{T}}
+    U_n_sys::Vector{State{M}}
+    Y_stages_sys::Vector{Vector{State{M}}}
+    K_E_stages_sys::Vector{Vector{State{M}}}
+    K_I_stages_sys::Vector{Vector{State{M}}}
     
     mood_triggered_sys::Array{Bool, 3}
     
     # Buffers for explicit fused loop 
-    all_neighbor_fs::Vector{T}
-    all_neighbor_dfs::Vector{T}
+    all_neighbor_fs::Vector{State{M}}
+    all_neighbor_dfs::Vector{State{M}}
     
     num_stages::Int
 
-    function GeneralIMEXTimeStepper(
-        gradientInterpolator::G1, fallbackInterpolator::G2, mood::M_crit,
+    function GeneralIMEXTimeStepper( eq::HyperbolicPDE{D, M},
+        gradientInterpolator::G1, fallbackInterpolator::G2, mood::MOOD,
         implicit_solver::IS, source_term_object::ST_OBJ, butcher_tableau::BT,
-        ::Type{T}=SVector{1, Float64} # Parameterized by SVector natively
-    ) where {G1, G2, M_crit, IS, ST_OBJ, BT, T}
+    ) where {G1, G2, MOOD, IS, ST_OBJ, BT, D, M}
         
         s = size(butcher_tableau.A, 1) # Number of stages
-        M_comp = source_term_object.num_total_kinetic_components
         
-        new{T, M_comp, G1, G2, M_crit, IS, ST_OBJ, BT}(
+        new{M, G1, G2, MOOD, IS, ST_OBJ, BT}(
             ntuple(_ -> deepcopy(gradientInterpolator), M_comp), 
             ntuple(_ -> deepcopy(fallbackInterpolator), M_comp), 
             mood, implicit_solver, source_term_object, butcher_tableau,
-            T[], 
-            [T[] for _ in 1:s],
-            [T[] for _ in 1:s], 
-            [T[] for _ in 1:s], 
+            State{M}[], 
+            [State{M}[] for _ in 1:s],
+            [State{M}[] for _ in 1:s], 
+            [State{M}[] for _ in 1:s], 
             falses(0, M_comp),
-            T[], 
-            [T[] for _ in 1:s],
-            [T[] for _ in 1:s], 
-            [T[] for _ in 1:s], 
+            State{M}[], 
+            [State{M}[] for _ in 1:s],
+            [State{M}[] for _ in 1:s], 
+            [State{M}[] for _ in 1:s], 
             falses(0, M_comp, s),
-            T[], 
-            T[],
+            State{M}[], 
+            State{M}[],
             s
         )
     end
@@ -239,8 +237,8 @@ struct ClassicalRK2LWTimeStepper <: FixedGridTimeStepper
     # No need for fluxPredict as a field, can be local
 end
 
-mutable struct ClassicalRichtmyerLWMOOD{M <: MOODCriterion} <: FixedGridTimeStepper
-    mood::M
+mutable struct ClassicalRichtmyerLWMOOD{MOOD <: MOODCriterion} <: FixedGridTimeStepper
+    mood::MOOD
     # --- Reusable Buffers (Workspace) ---
     rho_n::Vector{Float64}
     rho_candidate::Vector{Float64}

@@ -1,10 +1,10 @@
 # --- Linear Advection ---
-@inline velocity(eq::LinearAdvection{D}, u::SVector{1, Float64}) where {D} = SVector{D, Float64}(eq.vel...)
+@inline velocity(eq::LinearAdvection{D}, u::SVector{1, Float64}) where {D} = Space{D}(eq.vel...)
 # --- Multi-D Flux ---
-# Returns: SVector{D, SVector{NM, Float64}}
-@inline function flux(eq::LinearAdvection{D, NM}, U::SVector{NM, Float64}) where {D, NM}
+# Returns: Flux{D,M}
+@inline function flux(eq::LinearAdvection{D, M}, U::State{M}) where {D, M}
     # Builds the flux vector for each dimension 'd' using a generated tuple
-    return SVector{D, SVector{NM, Float64}}(ntuple(d -> eq.vel[d] .* U, Val(D)))
+    return Flux{D,M}(ntuple(d -> eq.vel[d] .* U, Val(D)))
 end
 
 # --- Burgers Equation 1D ---

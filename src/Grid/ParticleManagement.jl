@@ -30,8 +30,8 @@ end
     for c in 1:M; rhos[i, c] = U[c]; end
 end
 
-@inline function _sum_kinetic(rhos::AbstractMatrix, i::Int, km::Kin2Macro{NM}) where {NM}
-    return ntuple(m -> sum(rhos[i, k] for k in km.ranges[m]), Val(NM))
+@inline function _sum_kinetic(rhos::AbstractMatrix, i::Int, km::Kin2Macro{M}) where {M}
+    return ntuple(m -> sum(rhos[i, k] for k in km.ranges[m]), Val(M))
 end
 
 # --- Conservative Mathematics ---
@@ -54,7 +54,7 @@ end
 # MULTIPLE DISPATCH KINETIC RECONSTRUCTION
 # =========================================================================
 
-@inline function reconstruct_kinetic(U_macro::Tuple, st::RelaxationSourceTerm{NM, NK}) where {NM, NK}
+@inline function reconstruct_kinetic(U_macro::Tuple, st::RelaxationSourceTerm{M, NK}) where {M, NK}
     flux_vals = flux(st.system_eq, U_macro)
     return ntuple(Val(NK)) do k
         m_idx = st.kin2macro(k)
@@ -64,7 +64,7 @@ end
     end
 end
 
-@inline function reconstruct_kinetic(U_macro::Tuple, st::NonLocalRelaxationSourceTerm{NM, NK}, T_vals::Tuple) where {NM, NK}
+@inline function reconstruct_kinetic(U_macro::Tuple, st::NonLocalRelaxationSourceTerm{M, NK}, T_vals::Tuple) where {M, NK}
     return ntuple(Val(NK)) do k
         m_idx = st.kin2macro(k)
         T_val = T_vals[m_idx]

@@ -202,22 +202,22 @@ abstract type ClassicAlgorithm <: UpwindAlgorithm end
 
 abstract type UpwindWorkspace end
 
-struct UpwindWorkspaceTA{D, NM} <: UpwindWorkspace
-    distVec::Vector{SVector{D, Float64}}
-    dfVec::Vector{SVector{NM,Float64}} 
+struct UpwindWorkspaceTA{D, M} <: UpwindWorkspace
+    distVec::Vector{Space{D}}
+    dfVec::Vector{State{M}} 
     wVec::Vector{Float64}
     xWindow::BitVector
     yWindow::BitVector
 end
 
-struct UpwindWorkspaceCA{D, NM} <: UpwindWorkspace
-    distVec::Vector{SVector{D, Float64}}
-    dfVec::Vector{SVector{NM,Float64}} 
+struct UpwindWorkspaceCA{D, M} <: UpwindWorkspace
+    distVec::Vector{Space{D}}
+    dfVec::Vector{State{M}} 
     wVec::Vector{Float64}  
 end
 
 struct UpwindWorkspacePA{D} <: UpwindWorkspace
-    coeff_Vec::Vector{SVector{D, Float64}}
+    coeff_Vec::Vector{Space{D}}
     cijVec::Vector{Float64}     
 end
 

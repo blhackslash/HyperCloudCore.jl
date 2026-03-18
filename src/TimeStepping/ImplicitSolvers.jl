@@ -53,11 +53,11 @@ function solve!(
     ::LinearizedRelaxationImplicitSolver,
     Y_out_particle::AbstractVector{Float64},         
     dt_coeff::Float64,              
-    rs::RelaxationSourceTerm{D, NM, NK},     
+    rs::RelaxationSourceTerm{D, M, NK},     
     p_idx::Int,
     eq::HyperbolicPDE{D},
-    km::Kin2Macro{NM}      
-)::Bool where {D, NM, NK}
+    km::Kin2Macro{M}      
+)::Bool where {D, M, NK}
     
     epsilon = rs.epsilon
     coeff_sum_inv = 1.0 / (epsilon + dt_coeff)
@@ -84,11 +84,11 @@ function solve!(
     ::LinearizedRelaxationImplicitSolver,
     V_out::AbstractVector{Float64},       
     dt_coeff::Float64,              
-    st::NonLocalRelaxationSourceTerm{D, NM, NK},     
+    st::NonLocalRelaxationSourceTerm{D, M, NK},     
     p_idx::Int, 
     eq::HyperbolicPDE{D},
-    km::Kin2Macro{NM}
-)::Bool where {D, NM, NK}
+    km::Kin2Macro{M}
+)::Bool where {D, M, NK}
     
     epsilon = st.epsilon
     coeff_sum_inv = 1.0 / (epsilon + dt_coeff)

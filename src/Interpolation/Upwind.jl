@@ -5,27 +5,27 @@ using StaticArrays
 # WORKSPACE CONSTRUCTORS & CAPACITY MANAGERS
 # =========================================================================
 
-function UpwindWorkspaceTA{D, NM}(max_neighbors::Int=100) where {D, NM}
-    UpwindWorkspaceTA{D, NM}(
-        Vector{SVector{D, Float64}}(undef, max_neighbors),
-        Vector{SVector{NM, Float64}}(undef, max_neighbors),
+function UpwindWorkspaceTA{D, M}(max_neighbors::Int=100) where {D, M}
+    UpwindWorkspaceTA{D, M}(
+        Vector{Space{D}}(undef, max_neighbors),
+        Vector{State{M}}(undef, max_neighbors),
         Vector{Float64}(undef, max_neighbors),
         falses(max_neighbors),
         falses(max_neighbors)
     )
 end
 
-function UpwindWorkspaceCA{D, NM}(max_neighbors::Int=100) where {D, NM}
-    UpwindWorkspaceCA{D, NM}(
-        Vector{SVector{D, Float64}}(undef, max_neighbors),
-        Vector{SVector{NM, Float64}}(undef, max_neighbors),
+function UpwindWorkspaceCA{D, M}(max_neighbors::Int=100) where {D, M}
+    UpwindWorkspaceCA{D, M}(
+        Vector{Space{D}}(undef, max_neighbors),
+        Vector{State{M}}(undef, max_neighbors),
         Vector{Float64}(undef, max_neighbors)
     )
 end
 
 function UpwindWorkspacePA{D}(max_neighbors::Int=100) where {D}
     UpwindWorkspacePA{D}(
-        Vector{SVector{D, Float64}}(undef, max_neighbors),
+        Vector{Space{D}}(undef, max_neighbors),
         Vector{Float64}(undef, max_neighbors)
     )
 end
@@ -55,7 +55,7 @@ end
 # UPWIND GRADIENT SETUP
 # =========================================================================
 
-function UpwindGradient(order, dimension, NM; numericalFlux::NumericalFluxFunction=UpwindFlux(), algType::String="Classic")
+function UpwindGradient(order, dimension, M; numericalFlux::NumericalFluxFunction=UpwindFlux(), algType::String="Classic")
     @assert order >= 1 "Order must be larger or equal to one."
     
     local alg_type
@@ -67,22 +67,22 @@ function UpwindGradient(order, dimension, NM; numericalFlux::NumericalFluxFuncti
     elseif algType == "Tiwari"
         alg_type = TiwariAlgorithm
         WS_eltype = UpwindWorkspaceTA 
-        @assert NM == 1 "Tiwari Algorithm only supports Scalar Equations."
+        @assert M == 1 "Tiwari Algorithm only supports Scalar Equations."
     elseif algType == "Praveen"
         alg_type = PraveenAlgorithm 
         WS_eltype = UpwindWorkspacePA 
         @assert order == 1 "Praveen only supports 1st order."
-        @assert NM == 1 "Praveen Algorithm only supports Scalar Equations."
+        @assert M == 1 "Praveen Algorithm only supports Scalar Equations."
     else
         error("Algorithm type $algType not fully configured for workspace selection.")
     end
     n_threads = Threads.nthreads()
-    workspaces = [WS_eltype{dimension, NM}(100) for _ in 1:n_threads] 
+    workspaces = [WS_eltype{dimension, M}(100) for _ in 1:n_threads] 
 
     interpolator = Interpolator{dimension, order, 1}()
     I = typeof(interpolator)
 
-    UpwindGradient{dimension, WS_eltype{dimension, NM}, I, alg_type}(order, numericalFlux, workspaces, interpolator)
+    UpwindGradient{dimension, WS_eltype{dimension, M}, I, alg_type}(order, numericalFlux, workspaces, interpolator)
 end
 
 function _init_buffers_internal!(workspaces::Vector{WS}, max_neighbors::Int) where WS <: UpwindWorkspace 
@@ -113,17 +113,17 @@ end
 
 """
 Functor for UpwindGradient (ClassicAlgorithm).
-Works for 1D, 2D, 3D, and natively supports both Scalars and Systems via `T`.
+Works for 1D, 2D, 3D, and natively supports both Scalars and Systems via `State{M}`.
 """
-function (upwind::UpwindGradient{D, <:UpwindWorkspaceCA{D, T}, <:Any, ClassicAlgorithm})(
+function (upwind::UpwindGradient{D, <:UpwindWorkspaceCA{D, M}, <:Any, ClassicAlgorithm})(
     eq::PDE,
     i::Int,                         
-    f_i::T,                      
+    f_i::State{M},                      
     nb_slice::UnitRange{Int},       
     pg::ParticleGrid{D},             
-    f_neighbors::AbstractVector{T},    
-    df_neighbors::AbstractVector{T}    
- ) where {D, T, PDE <: HyperbolicPDE}
+    f_neighbors::AbstractVector{State{M}},    
+    df_neighbors::AbstractVector{State{M}}    
+ ) where {D, M, PDE <: HyperbolicPDE}
     
     thread_idx = mod1(Threads.threadid(),Threads.nthreads())
     ws = upwind.workspaces[thread_idx]
@@ -134,7 +134,7 @@ function (upwind::UpwindGradient{D, <:UpwindWorkspaceCA{D, T}, <:Any, ClassicAlg
     w_all_full = get_weights(pg) 
 
     num_nb = length(nb_slice)
-    if num_nb < upwind.order; return zero(T); end
+    if num_nb < upwind.order; return zeros(State{M}); end
     ensure_capacity!(ws, num_nb)
 
     dist_buf = ws.distVec
@@ -143,7 +143,7 @@ function (upwind::UpwindGradient{D, <:UpwindWorkspaceCA{D, T}, <:Any, ClassicAlg
 
     flux_i = flux(eq, f_i)
     
-    div = zero(T)
+    div = zeros(State{M})
     scale = pg.meta.dx
     
     # Unified Loop Over Dimensions
@@ -168,10 +168,10 @@ function (upwind::UpwindGradient{D, <:UpwindWorkspaceCA{D, T}, <:Any, ClassicAlg
         # Type-Stable row extraction from the SMatrix
         if upwind.order == 1
             res = interp(1:num_nb, dist_buf, w_buf, df_buf; scale = scale_d)
-            dF_dx = T(ntuple(c -> res[d, c], Val(length(T))))
+            dF_dx = State{M}(ntuple(c -> res[d, c], Val(M)))
         else
             res_tuple = interp(1:num_nb, dist_buf, w_buf, df_buf; scale = scale_d)
-            dF_dx = T(ntuple(c -> res_tuple[1][d, c], Val(length(T))))
+            dF_dx = State{M}(ntuple(c -> res_tuple[1][d, c], Val(M)))
         end
         
         div += dF_dx

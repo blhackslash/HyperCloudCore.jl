@@ -39,7 +39,7 @@ end
 #         if D == 1
 #             positions[p_idx] += v[1] * dt
 #         else
-#             positions[p_idx] += SVector{D, Float64}(v...) * dt
+#             positions[p_idx] += Space{D}(v...) * dt
 #         end
 #     end
 #     pg.neighbor(pg)
@@ -122,7 +122,7 @@ end
 #         if D == 1
 #             vel[i] = u_grid # Directly assign the float
 #         else
-#             vel[i] = SVector{D, Float64}(fill(u_grid, D)...)
+#             vel[i] = Space{D}(fill(u_grid, D)...)
 #         end
 #     end
 # end
@@ -147,7 +147,7 @@ end
 #         if D == 1
 #             vel[i] = u_grid # Directly assign the float
 #         else
-#             vel[i] = SVector{D, Float64}(fill(u_grid, D)...)
+#             vel[i] = Space{D}(fill(u_grid, D)...)
 #         end
 #     end
 # end
