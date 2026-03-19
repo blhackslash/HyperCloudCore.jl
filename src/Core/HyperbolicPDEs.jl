@@ -186,18 +186,18 @@ end
 end
 
 # Add these helpers to convert between states
-@inline function prim2cons(::LEuler1D{P}, U::Tuple) where {P}
+@inline function prim2cons(::LEuler1D{P}, U::State{M}) where {P,M}
     rho, u, p = U
     E = p / (GAS_GAMMA_EULER - 1.0) + 0.5 * rho * u^2
-    return (rho, rho * u, E)
+    return State{M}(rho, rho * u, E)
 end
 
-@inline function cons2prim(::LEuler1D{P}, W::Tuple) where {P}
+@inline function cons2prim(::LEuler1D{P}, W::State{M}) where {P,M}
     rho, m, E = W
     safe_rho = max(rho, 1e-7)
     u = m / safe_rho
     p = (GAS_GAMMA_EULER - 1.0) * (E - 0.5 * m^2 / safe_rho)
-    return (safe_rho, u, max(p, 1e-7))
+    return State{M}(safe_rho, u, max(p, 1e-7))
 end
 
 # Modified Path Integral

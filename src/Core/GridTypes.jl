@@ -39,10 +39,6 @@ struct inverseWeightFunction <: MLSWeightFunction
     range::Float64
 end
 
-struct Kin2Macro{M}
-    ranges::NTuple{M, UnitRange{Int}}
-end
-
 abstract type GridMover end
 
 # ---------------------------------------------------------
@@ -61,9 +57,11 @@ end
 # ---------------------------------------------------------
 # 3. PhysicalGridMover
 # ---------------------------------------------------------
-mutable struct PhysicalGridMover{D} <: GridMover
-    vel_indices::Space{D}
-    grid_velocities::Vector{Space{D}} # Pre-allocated workspace buffer
+# Inside GridTypes.jl
+struct PhysicalGridMover{D} <: GridMover
+    # Maps spatial dimensions to the macroscopic state index representing velocity
+    # e.g., for a 1D scalar it's (1,), for 2D Euler it might be (2, 3)
+    vel_indices::NTuple{D, Int} 
 end
 
 # ---------------------------------------------------------
@@ -79,6 +77,7 @@ mutable struct GridMetadata{D}
     inner_maxs::Space{D}
     R::Float64
     r::Float64
+    a::Float64
     dx::Space{D} 
     regular::Bool
     bc::Symbol              
@@ -96,30 +95,10 @@ mutable struct SharedBuffers{D, M}
     int_buffer::Vector{Int}
 end
 
-# # ---------------------------------------------------------
-# # 3. Neighbor Search Context
-# # ---------------------------------------------------------
-# mutable struct NeighborData{D, S, WF}
-#     system::S      
-#     weight_func::WF
-
-#     # CSR format using native UnitRanges
-#     ranges::Vector{UnitRange{Int}}
-#     indices::Vector{Int}
-    
-#     # --- THE MASSIVE CHANGE ---
-#     weights::Vector{Float64}
-#     distances::Vector{Space{D}} 
-
-#     atomic_counts::Vector{Atomic{Int}}
-#     atomic_offsets::Vector{Atomic{Int}}
-# end
-
 # ---------------------------------------------------------
 # 3. Neighbor Search Context
 # ---------------------------------------------------------
-mutable struct NeighborData{D, S, WF}
-    system::S      
+mutable struct NeighborData{D, WF}    
     weight_func::WF
 
     # CSR format using native UnitRanges
@@ -143,14 +122,6 @@ struct ReorderData{D}
     new_permutation_buffer::Vector{Int} 
     seen_buffer::Vector{Bool}            
 end
-
-# ---------------------------------------------------------
-# 5. Particle Management Context
-# ---------------------------------------------------------
-struct ManagementData{D, M}
-    local_voxels::LocalVoxels
-end
-
 # ---------------------------------------------------------
 # 6. Particle Grid Core (Geometry & Topology)
 # ---------------------------------------------------------
@@ -160,26 +131,38 @@ mutable struct ParticleGridCore{D}
     volumes::Vector{Float64}
 end
 
-# ---------------------------------------------------------
-# 7. The Top-Level Particle Grid
-# ---------------------------------------------------------
-mutable struct ParticleGrid{D, M, S, WF, GM}
+# Add BC parameter to GlobalBins
+struct GlobalBins{D, BC}
+    mins::Space{D}
+    maxs::Space{D}
+    coarse_size::Float64
+    coarse_dims::NTuple{D, Int}
+    head::Vector{Int}
+    next::Vector{Int}
+    fine_size::Float64
+    fine_dims::NTuple{D, Int}
+    fine_occupation::Vector{Bool}
+    fine_type::Vector{UInt8}
+end
+
+# Add BC parameter to ParticleGrid and pass it to GlobalBins
+mutable struct ParticleGrid{D, M, WF, GM, BC}
     meta::GridMetadata{D}
     core::ParticleGridCore{D}
     shared::SharedBuffers{D, M}
-    neighbor::NeighborData{D, S, WF}
+    neighbor::NeighborData{D, WF}
     reorder::ReorderData{D}
-    manage::ManagementData{D, M}
+    bins::GlobalBins{D, BC}    # <-- Now type-linked
     kin2macro::Kin2Macro{M}
     mover::GM
 
     rhos::Vector{State{M}}
     mood_events::Vector{SVector{M, Bool}}
     curvatures::Vector{State{M}}
-    
 end
 
-# --- Aliases for convenience ---
-const ParticleGrid1D{M, S, WF, GM} = ParticleGrid{1, M, S, WF, GM}
-const ParticleGrid2D{M, S, WF, GM} = ParticleGrid{2, M, S, WF, GM}
+# Update the Aliases
+const ParticleGrid1D{M, WF, GM, BC} = ParticleGrid{1, M, WF, GM, BC}
+const ParticleGrid2D{M, WF, GM, BC} = ParticleGrid{2, M, WF, GM, BC}
+
 

@@ -87,7 +87,7 @@ function (eu::EulerUpwind{M})(
     chunks = collect(Iterators.partition(1:N, chunk_size))
 
     # --- 3. Fused Pre-Gather and Slope Calculation ---
-    Threads.@threads for particle_range in chunks
+    @batch for particle_range in chunks
         for p_idx in particle_range
             fi = eu.rhoInit[p_idx]
             nb_slice = nb_slices[p_idx]
@@ -98,7 +98,7 @@ function (eu::EulerUpwind{M})(
     end
     
     # --- 4. Fused Divergence Calculation and Update ---
-    Threads.@threads for particle_range in chunks
+    @batch for particle_range in chunks
         for p_idx in particle_range
             if pg.core.is_boundary[p_idx]; continue; end 
             
@@ -153,7 +153,7 @@ function (ralston::RalstonRK2{M})(
     # Store initial state
     ralston.rhoInit[1:N] .= view(pg.rhos, 1:N)
 
-    Threads.@threads :static for p_idx in 1:N
+    @batch for p_idx in 1:N
         fi = ralston.rhoInit[p_idx]
         nb_slice = nb_slices[p_idx]
         
@@ -164,7 +164,7 @@ function (ralston::RalstonRK2{M})(
         initGI!(ralston.fallbackInterpolator, idx, fi, nb_slice, pg, ralston.neighbor_fs, ralston.neighbor_dfs)
     end
     
-    Threads.@threads :static for p_idx in 1:N
+    @batch for p_idx in 1:N
         if pg.core.is_boundary[p_idx]; continue; end 
 
         fi = ralston.rhoInit[p_idx]
@@ -197,7 +197,7 @@ function (ralston::RalstonRK2{M})(
     initTSBuffer!(ralston, pg)
     nb_slices = pg.neighbor.ranges
 
-    Threads.@threads :static for p_idx in 1:N
+    @batch for p_idx in 1:N
         fi = ralston.rhos[p_idx] # <-- Use intermediate state
         nb_slice = nb_slices[p_idx]
         
@@ -206,7 +206,7 @@ function (ralston::RalstonRK2{M})(
         initGI!(ralston.fallbackInterpolator, p_idx, fi, nb_slice, pg, ralston.neighbor_fs, ralston.neighbor_dfs)
     end
 
-    Threads.@threads :static for p_idx in 1:N
+    @batch for p_idx in 1:N
             if pg.core.is_boundary[p_idx]; continue; end 
     
             fi = ralston.rhos[p_idx]
@@ -274,7 +274,7 @@ function (rk3::RK3)(eq::ScalarHyperbolicPDE, pg::ParticleGrid, settings::SimSett
     rk3.rho_n[1:N] .= pg.rhos
 
     # 1.2: Threaded loop to calculate slopes/coefficients
-    Threads.@threads for particle_range in chunks
+    @batch for particle_range in chunks
         for p_idx in particle_range
             fi = rk3.rho_n[p_idx]
             nb_slice = nb_slices[p_idx]
@@ -285,7 +285,7 @@ function (rk3::RK3)(eq::ScalarHyperbolicPDE, pg::ParticleGrid, settings::SimSett
     end
     
     # 1.3: Threaded loop to calculate div1 and u^(1)
-    Threads.@threads for particle_range in chunks
+    @batch for particle_range in chunks
         for p_idx in particle_range
             if pg.core.is_boundary[p_idx]; continue; end
 
@@ -318,7 +318,7 @@ function (rk3::RK3)(eq::ScalarHyperbolicPDE, pg::ParticleGrid, settings::SimSett
     initTSBuffer!(rk3, pg)
 
     # 2.2: Threaded loop to calculate slopes/coefficients (using u^(1))
-    Threads.@threads for particle_range in chunks
+    @batch for particle_range in chunks
         for p_idx in particle_range
             fi = rk3.rho_stage1[p_idx] # <-- Use u^(1)
             nb_slice = nb_slices[p_idx]
@@ -329,7 +329,7 @@ function (rk3::RK3)(eq::ScalarHyperbolicPDE, pg::ParticleGrid, settings::SimSett
     end
     
     # 2.3: Threaded loop to calculate div2 and u^(2)
-    Threads.@threads for particle_range in chunks
+    @batch for particle_range in chunks
         for p_idx in particle_range
             if pg.core.is_boundary[p_idx]; continue; end
 
@@ -362,7 +362,7 @@ function (rk3::RK3)(eq::ScalarHyperbolicPDE, pg::ParticleGrid, settings::SimSett
     initTSBuffer!(rk3, pg)
 
     # 3.2: Threaded loop to calculate slopes/coefficients (using u^(2))
-    Threads.@threads for particle_range in chunks
+    @batch for particle_range in chunks
         for p_idx in particle_range
             fi = rk3.rho_stage2[p_idx] # <-- Use u^(2)
             nb_slice = nb_slices[p_idx]
@@ -373,7 +373,7 @@ function (rk3::RK3)(eq::ScalarHyperbolicPDE, pg::ParticleGrid, settings::SimSett
     end
     
     # 3.3: Threaded loop to calculate div3 and Final Solution
-    Threads.@threads for particle_range in chunks
+    @batch for particle_range in chunks
         for p_idx in particle_range
             if pg.core.is_boundary[p_idx]; continue; end
 
@@ -439,7 +439,7 @@ function (rk4::RK4)(eq::ScalarHyperbolicPDE, pg::ParticleGrid, settings::SimSett
     rk4.rho_n[1:N] .= pg.rhos
 
     # 1.2: Threaded loop to calculate slopes/coefficients
-    Threads.@threads for particle_range in chunks
+    @batch for particle_range in chunks
         for p_idx in particle_range
             fi = rk4.rho_n[p_idx]
             nb_slice = nb_slices[p_idx]
@@ -450,7 +450,7 @@ function (rk4::RK4)(eq::ScalarHyperbolicPDE, pg::ParticleGrid, settings::SimSett
     end
     
     # 1.3: Threaded loop to calculate k1 (divergence)
-    Threads.@threads for particle_range in chunks
+    @batch for particle_range in chunks
         for p_idx in particle_range
             if pg.core.is_boundary[p_idx]; continue; end
 
@@ -481,7 +481,7 @@ function (rk4::RK4)(eq::ScalarHyperbolicPDE, pg::ParticleGrid, settings::SimSett
     initTSBuffer!(rk4, pg)
 
     # 2.2: Threaded loop to calculate slopes/coefficients (using u^(1))
-    Threads.@threads for particle_range in chunks
+    @batch for particle_range in chunks
         for p_idx in particle_range
             fi = rk4.rho_stage[p_idx] # <-- Use u^(1) from rho_st
             nb_slice = nb_slices[p_idx]age
@@ -492,7 +492,7 @@ function (rk4::RK4)(eq::ScalarHyperbolicPDE, pg::ParticleGrid, settings::SimSett
     end
     
     # 2.3: Threaded loop to calculate k2 (divergence)
-    Threads.@threads for particle_range in chunks
+    @batch for particle_range in chunks
         for p_idx in particle_range
             if pg.core.is_boundary[p_idx]; continue; end
 
@@ -523,7 +523,7 @@ function (rk4::RK4)(eq::ScalarHyperbolicPDE, pg::ParticleGrid, settings::SimSett
     initTSBuffer!(rk4, pg)
 
     # 3.2: Threaded loop to calculate slopes/coefficients (using u^(2))
-    Threads.@threads for particle_range in chunks
+    @batch for particle_range in chunks
         for p_idx in particle_range
             fi = rk4.rho_stage[p_idx] # <-- Use u^(2) from rho_stage
             nb_slice = nb_slices[p_idx]
@@ -534,7 +534,7 @@ function (rk4::RK4)(eq::ScalarHyperbolicPDE, pg::ParticleGrid, settings::SimSett
     end
     
     # 3.3: Threaded loop to calculate k3 (divergence)
-    Threads.@threads for particle_range in chunks
+    @batch for particle_range in chunks
         for p_idx in particle_range
             if pg.core.is_boundary[p_idx]; continue; end
 
@@ -565,7 +565,7 @@ function (rk4::RK4)(eq::ScalarHyperbolicPDE, pg::ParticleGrid, settings::SimSett
     initTSBuffer!(rk4, pg)
 
     # 4.2: Threaded loop to calculate slopes/coefficients (using u^(3))
-    Threads.@threads for particle_range in chunks
+    @batch for particle_range in chunks
         for p_idx in particle_range
             fi = rk4.rho_stage[p_idx] # <-- Use u^(3) from rho_stage
             nb_slice = nb_slices[p_idx]
@@ -576,7 +576,7 @@ function (rk4::RK4)(eq::ScalarHyperbolicPDE, pg::ParticleGrid, settings::SimSett
     end
     
     # 4.3: Threaded loop to calculate k4 and Final Solution
-    Threads.@threads for particle_range in chunks
+    @batch for particle_range in chunks
         for p_idx in particle_range
             if pg.core.is_boundary[p_idx]; continue; end
 
@@ -651,7 +651,7 @@ function (ralston::RalstonSwitchRK2)(eq::ScalarHyperbolicPDE, pg::ParticleGrid, 
     # --- Store Initial State ---
     ralston.rho_n[1:N] .= pg.rhos
     # 1.2: Threaded loop to calculate slopes/coefficients
-    Threads.@threads for particle_range in chunks
+    @batch for particle_range in chunks
         for p_idx in particle_range
             fi = ralston.rho_n[p_idx]
             nb_slice = nb_slices[p_idx]
@@ -662,7 +662,7 @@ function (ralston::RalstonSwitchRK2)(eq::ScalarHyperbolicPDE, pg::ParticleGrid, 
     end
 
     # 1.3: Threaded loop to calculate fallback divergence
-    Threads.@threads for particle_range in chunks
+    @batch for particle_range in chunks
         for p_idx in particle_range
             if pg.core.is_boundary[p_idx]; continue; end
 
@@ -687,7 +687,7 @@ function (ralston::RalstonSwitchRK2)(eq::ScalarHyperbolicPDE, pg::ParticleGrid, 
     initTSBuffer!(ralston, pg)
 
     # 2.2: Threaded loop to calculate slopes/coefficients (High-order)
-    Threads.@threads for particle_range in chunks
+    @batch for particle_range in chunks
         for p_idx in particle_range
             fi = ralston.rho_n[p_idx]
             nb_slice = nb_slices[p_idx]
@@ -698,7 +698,7 @@ function (ralston::RalstonSwitchRK2)(eq::ScalarHyperbolicPDE, pg::ParticleGrid, 
     end
 
     # 2.3: Threaded loop to calculate div1 and u^(1)
-    Threads.@threads for particle_range in chunks
+    @batch for particle_range in chunks
         for p_idx in particle_range
             if pg.core.is_boundary[p_idx]; continue; end
 
@@ -722,7 +722,7 @@ function (ralston::RalstonSwitchRK2)(eq::ScalarHyperbolicPDE, pg::ParticleGrid, 
     initTSBuffer!(ralston, pg)
 
     # 3.2: Threaded loop to calculate slopes/coefficients (High-order, using u^(1))
-    Threads.@threads for particle_range in chunks
+    @batch for particle_range in chunks
         for p_idx in particle_range
             fi = ralston.rho_stage[p_idx]
             nb_slice = nb_slices[p_idx]

@@ -107,7 +107,7 @@ function (imex_ts::GeneralIMEXTimeStepper{M, G1, G2, MOOD, IS, ST_OBJ, BT})(
         # ==================================================================
         # PHASE 1: Accumulate Stages (Register Blocked over M)
         # ==================================================================
-        Threads.@threads :static for p_idx in 1:N_particles
+        @batch for p_idx in 1:N_particles
             if pg.core.is_boundary[p_idx]
                 for k in 1:M
                     current_Y_i_sys[p_idx, k] = pg.rhos[p_idx, k]
@@ -154,7 +154,7 @@ function (imex_ts::GeneralIMEXTimeStepper{M, G1, G2, MOOD, IS, ST_OBJ, BT})(
         time_implicit = time_n + bt.c[i] * dt
         
         if abs(bt.A[i,i]) > 1e-14
-            Threads.@threads :static for p_idx in 1:N_particles
+            @batch for p_idx in 1:N_particles
                 # Pass view of the particle's full multi-component state directly
                 u_particle_view = @view current_Y_i_sys[p_idx, :]
                 
@@ -170,7 +170,7 @@ function (imex_ts::GeneralIMEXTimeStepper{M, G1, G2, MOOD, IS, ST_OBJ, BT})(
         end
         
         # Evaluate Source Term K_I
-        Threads.@threads :static for p_idx in 1:N_particles
+        @batch for p_idx in 1:N_particles
             imex_ts.source_term_object(
                 @view(imex_ts.K_I_stages_sys[i][p_idx, :]), 
                 @view(current_Y_i_sys[p_idx, :]), 
@@ -192,7 +192,7 @@ function (imex_ts::GeneralIMEXTimeStepper{M, G1, G2, MOOD, IS, ST_OBJ, BT})(
         end
         
         # 2. Extract neighbor information & solve divergences
-        Threads.@threads :static for p_idx in 1:N_particles
+        @batch for p_idx in 1:N_particles
             # Fuses extraction of all M f_j values at once
             f_i_vec = @view current_Y_i_sys[p_idx, :]
             nb_slice = pg.neighbor.ranges[p_idx]
@@ -233,7 +233,7 @@ function (imex_ts::GeneralIMEXTimeStepper{M, G1, G2, MOOD, IS, ST_OBJ, BT})(
         dt_bt = dt * bt.bt[i]
         dt_b  = dt * bt.b[i]
         
-        Threads.@threads :static for p_idx in 1:N_particles
+        @batch for p_idx in 1:N_particles
             if pg.core.is_boundary[p_idx]
                 continue
             end

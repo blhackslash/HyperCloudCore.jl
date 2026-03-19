@@ -118,20 +118,27 @@ end
 abstract type AbstractSourceTerm end
 
 struct NoSourceTerm <: AbstractSourceTerm end
+struct KineticSourceTerm <: AbstractSourceTerm end
 
-struct RelaxationSourceTerm{D, M, K} <: AbstractSourceTerm
+struct Kin2Macro{M}
+    ranges::NTuple{M, UnitRange{Int}}
+end
+
+struct RelaxationSourceTerm{D, M, K} <: KineticSourceTerm
+    kin2macro::Kin2Macro{M}
     epsilon::Float64
     inv_epsilon::Float64
     coefficients::State{M} # Sized to Macro variables
-    inv_relax_speeds::NTuple{K, Space{D}} # Sized to Kinetic, customized dot product!
-    interior_factors::Kinetic{K}
+    inv_relax_speeds::SVector{K, Space{D}} # Sized to Kinetic, customized dot product!
+    interior_factors::State{K}
 end
 
-mutable struct NonLocalRelaxationSourceTerm{D, M, K} <: AbstractSourceTerm
+mutable struct NonLocalRelaxationSourceTerm{D, M, K} <: KineticSourceTerm
+    kin2macro::Kin2Macro{M}
     epsilon::Float64
     inv_epsilon::Float64
     coefficients::State{M}
-    inv_relax_speeds::NTuple{K, Space{D}}
+    inv_relax_speeds::SVector{K, Space{D}}
     interior_factor::Float64
     T_potential::Matrix{Float64}
 end

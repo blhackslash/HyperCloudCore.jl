@@ -5,6 +5,28 @@
 # 2D: f is a Tuple of Tuples (F, G)
 @inline flux_dot(f::Tuple, m_idx::Int, inv_speed::SVector{2, Float64}) = f[1][m_idx] * inv_speed[1] + f[2][m_idx] * inv_speed[2]
 
+function Kin2Macro(edges::Union{AbstractVector{Int},Tuple})
+    M = length(edges) - 1
+    ranges = ntuple(i -> edges[i]:(edges[i+1]-1), M)
+    return Kin2Macro{M}(ranges)
+end
+
+# Functor 1: Reconstruct Macro State natively into State{M}
+@inline function (km::Kin2Macro{M})(v::AbstractVector) where {M}
+    return State{M}(ntuple(i -> sum(v[k] for k in km.ranges[i]), Val(M)))
+end
+
+# Functor 2: Returns the macroscopic index 'm' that owns kinetic component 'k'
+@inline function (km::Kin2Macro{M})(k::Int) where {M}
+    for (i, range) in enumerate(km.ranges)
+        if k in range
+            return i 
+        end
+    end
+    @warn "Could not match given kinetic index to macro variable!"
+    return 1
+end
+
 # =========================================================================
 # LOCAL RELAXATION SOURCE TERM
 # =========================================================================

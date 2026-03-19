@@ -2,7 +2,6 @@ module Meshfree4ScalarEq
 
 export runSimulation, GAS_GAMMA_EULER, DEBUG_TARGET_PARTICLE, DEBUG_TARGET_STEP
 
-using CellListMap
 using Distributed
 using LinearAlgebra
 using Logging
@@ -12,6 +11,7 @@ using Random
 using StaticArrays
 using Statistics
 using Base.Threads
+using Polyester: @batch
 
 
 include("Core/CoreTypes.jl")
