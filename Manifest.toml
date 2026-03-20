@@ -1,6 +1,6 @@
 # This file is machine-generated - editing it directly is not advised
 
-julia_version = "1.12.5"
+julia_version = "1.12.4"
 manifest_format = "2.0"
 project_hash = "de2b7a2aebc7c5c163b1fa4427751bfda5096c52"
 
@@ -1008,7 +1008,7 @@ uuid = "7269a6da-0436-5bbc-96c2-40638cbb6118"
 version = "0.5.3"
 
 [[deps.Meshfree4ScalarEq]]
-deps = ["CellListMap", "Distributed", "IPlotPDESols", "LinearAlgebra", "Logging", "Printf", "ProgressMeter", "Random", "StaticArrays", "Statistics"]
+deps = ["CellListMap", "Distributed", "IPlotPDESols", "LinearAlgebra", "Logging", "Polyester", "Printf", "ProgressMeter", "Random", "StaticArrays", "Statistics"]
 path = "."
 uuid = "61b85536-db47-4754-9d50-4ccb1001a5ed"
 version = "0.1.0"

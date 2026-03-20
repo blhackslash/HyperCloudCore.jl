@@ -68,7 +68,7 @@ end
 # Case 3: Tuple of Tuples -> D-Dimensional Space, M Components (System PDE in Multi-D)
 # Example input: ((1.0, 0.0), (0.0, 1.0))
 # Output: SVector{2, SVector{2, Float64}}([ [1.0, 0.0], [0.0, 1.0] ])
-@inline param2svec(v::NTuple{D, NTuple{M, <:Real}}) where {D, M} = 
+@inline param2fvec(v::NTuple{D, NTuple{M, <:Real}}) where {D, M} = 
     Flux{D,M}(ntuple(i -> State{M}(Float64.(v[i])), Val(D)))
 
 # Case 4: Fallback if it is already correctly formatted

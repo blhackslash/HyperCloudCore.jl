@@ -1,20 +1,3 @@
-@inline function sort_flux(f_i::State{M}, f_j::State{M}, F_i::Flux{M, D}, F_j::Flux{M, D}, dist_k::Space{D}) where {D, M}
-    # Build Tuple of Columns based on direction
-    f_L_cols = ntuple(d -> dist_k[d] > 0 ? f_i : f_j, Val(D))
-    f_R_cols = ntuple(d -> dist_k[d] > 0 ? f_j : f_i, Val(D))
-    
-    F_L_cols = ntuple(d -> dist_k[d] > 0 ? F_i[:, d] : F_j[:, d], Val(D))
-    F_R_cols = ntuple(d -> dist_k[d] > 0 ? F_j[:, d] : F_i[:, d], Val(D))
-    
-    # hcat fuses the D SVectors into an MxD SMatrix natively!
-    f_L_mat = hcat(f_L_cols...)
-    f_R_mat = hcat(f_R_cols...)
-    F_L_mat = hcat(F_L_cols...)
-    F_R_mat = hcat(F_R_cols...)
-    
-    return f_L_mat, f_R_mat, F_L_mat, F_R_mat
-end
-
 # =========================================================================
 # WAVE SPEED CALCULATIONS
 # =========================================================================
@@ -28,7 +11,7 @@ end
 # --- Default Eigenvalue implementations ---
 
 # Scalars simply return the absolute velocity in dimension `d`
-@inline max_eigenvalue(eq::ScalarHyperbolicPDE, u::SVector{1, Float64}, d::Int) = abs(velocity(eq, u)[d][1])
+@inline max_eigenvalue(eq::ScalarHyperbolicPDE, u::SVector{1, Float64}, d::Int) = maximum(abs.(eq.vel[d]))
 
 # System PDEs
 @inline function max_eigenvalue(eq::Euler1D, U::SVector{3, Float64}, d::Int)
@@ -52,51 +35,42 @@ end
 @inline function max_eigenvalue(eq::LinearAdvection, U::State{M}, d::Int) where {M}
     return maximum(abs.(eq.vel[d]))
 end
-@inline function max_eigenvalues(eq::HyperbolicPDE{D, M}, f_L::Flux{M, D}, f_R::Flux{M, D}) where {D, M}
+@inline function max_eigenvalues(eq::HyperbolicPDE{D, M}, f_L::Flux{D, M}, f_R::Flux{D, M}) where {D, M}
     return SVector{D, Float64}(ntuple(Val(D)) do d
         # Extract the d-th column state
-        lamL = max_eigenvalue(eq, State{M}(f_L[:, d]), d)
-        lamR = max_eigenvalue(eq, State{M}(f_R[:, d]), d)
+        lamL = max_eigenvalue(eq, f_L[d], d)
+        lamR = max_eigenvalue(eq, f_R[d], d)
         max(lamL, lamR)
     end)
 end
 # =========================================================================
 # NUMERICAL FLUXES (Fully Unified)
 # =========================================================================
-# ---------------------------------------------------------
-# RUSANOV FLUX (Matrix Form)
-# ---------------------------------------------------------
-@inline function (rusanov::RusanovFlux)(f_L::Flux{M, D}, f_R::Flux{M, D}, F_L::Flux{M, D}, F_R::Flux{M, D}, eq::HyperbolicPDE{D, M}) where {D, M}
+@inline function (rusanov::RusanovFlux)(f_L::Flux{D, M}, f_R::Flux{D, M}, F_L::Flux{D, M}, F_R::Flux{D, M}, eq::HyperbolicPDE{D, M}) where {D, M}
+    s_vec = max_eigenvalues(eq, f_L, f_R)
     
-    s_vec = max_eigenvalues(eq, f_L, f_R) # Returns SVector{D, Float64}
-    
-    # Broadcast multiply the columns by their respective wave speeds
-    dissipation = (f_R - f_L) .* s_vec'
-    
-    return 0.5 * (F_L + F_R - dissipation)
+    # Loop over dimensions and construct the Flux
+    return Flux{D, M}(ntuple(Val(D)) do d
+        dissipation = s_vec[d] * (f_R[d] - f_L[d])
+        0.5 * (F_L[d] + F_R[d] - dissipation)
+    end)
 end
 
-# ---------------------------------------------------------
-# UPWIND FLUX (Matrix Form)
-# ---------------------------------------------------------
-@inline function (upwind::UpwindFlux)(f_L::Flux{1, D}, f_R::Flux{1, D}, F_L::Flux{1, D}, F_R::Flux{1, D}, eq::ScalarHyperbolicPDE{D}) where {D}
-    
-    delta_u = f_R - f_L # 1xD Matrix
-    
-    s_vec = SVector{D, Float64}(ntuple(Val(D)) do d
-        du = delta_u[1, d]
+@inline function (upwind::UpwindFlux)(f_L::Flux{D, 1}, f_R::Flux{D, 1}, F_L::Flux{D, 1}, F_R::Flux{D, 1}, eq::ScalarHyperbolicPDE{D}) where {D}
+    return Flux{D, 1}(ntuple(Val(D)) do d
+        du = f_R[d][1] - f_L[d][1]
+        
         if abs(du) < 1e-14
-            abs(velocity(eq, State{1}(f_L[:, d]))[d])
+            s = abs(velocity(eq, f_L[d])[d])
         else
-            abs((F_R[1, d] - F_L[1, d]) / du)
+            s = abs((F_R[d][1] - F_L[d][1]) / du)
         end
+        
+        0.5 * (F_L[d] + F_R[d] - s * (f_R[d] - f_L[d]))
     end)
-    
-    dissipation = delta_u .* s_vec'
-    return 0.5 * (F_L + F_R - dissipation)
 end
 
 # System Fallback
-@inline function (upwind::UpwindFlux)(f_L::Flux{M, D}, f_R::Flux{M, D}, F_L::Flux{M, D}, F_R::Flux{M, D}, eq::HyperbolicPDESystem{D, M}) where {D, M}
+@inline function (upwind::UpwindFlux)(f_L::Flux{D, M}, f_R::Flux{D, M}, F_L::Flux{D, M}, F_R::Flux{D, M}, eq::HyperbolicPDESystem{D, M}) where {D, M}
     return RusanovFlux()(f_L, f_R, F_L, F_R, eq)
 end

@@ -1,28 +1,26 @@
 function LinearAdvection(velocities)
-    # Converts input to SVector{D, SVector{M}}
-    svec_vel = param2svec(velocities) 
-    
+    svec_vel = param2fvec(velocities)
     D = length(svec_vel)
     M = length(svec_vel[1])
-    
-    # Flattening a Vector of SVectors into SMatrix 
-    # Perfectly fills columns 1...D in order
-    flat_data = reduce(vcat, svec_vel) 
-    mat = Flux{D, M}(flat_data)
-    
-    return LinearAdvection{D, M}(mat)
+    # It is already an SVector of SVectors, just cast it!
+    return LinearAdvection{D, M}(Flux{D, M}(svec_vel))
 end
 
 
-@generated function flux(eq::LinearAdvection{D, M}, U::State{M}) where {M, D}
-    # This block runs ONLY ONCE during compilation.
-    # It loops through the matrix in strict column-major order.
-    exprs = [:(eq.vel[$d, $m] * U[$m]) for d in 1:D for m in 1:M]
+@inline function flux(eq::LinearAdvection{D, M}, U::State{M}) where {M, D}
+    # Direct component-wise multiplication per spatial column!
+    return Flux{D, M}(ntuple(d -> eq.vel[d] .* U, Val(D)))
+end
+
+@inline function sort_flux(f_i::State{M}, f_j::State{M}, F_i::Flux{D, M}, F_j::Flux{D, M}, dist_k::Space{D}) where {D, M}
+    # Builds the arrays natively column-by-column
+    f_L = Flux{D, M}(ntuple(d -> dist_k[d] > 0 ? f_i : f_j, Val(D)))
+    f_R = Flux{D, M}(ntuple(d -> dist_k[d] > 0 ? f_j : f_i, Val(D)))
     
-    # We return the raw Abstract Syntax Tree (AST).
-    # For D=2, M=2, the compiler physically writes this code for you:
-    # return SMatrix{2, 2, Float64, 4}(tuple(eq.vel[1,1]*U[1], eq.vel[2,1]*U[2], eq.vel[1,2]*U[1], eq.vel[2,2]*U[2]))
-    return :( SMatrix{M, D, Float64}(tuple($(exprs...))) )
+    F_L = Flux{D, M}(ntuple(d -> dist_k[d] > 0 ? F_i[d] : F_j[d], Val(D)))
+    F_R = Flux{D, M}(ntuple(d -> dist_k[d] > 0 ? F_j[d] : F_i[d], Val(D)))
+    
+    return f_L, f_R, F_L, F_R
 end
 
 # --- Burgers Equation 1D ---

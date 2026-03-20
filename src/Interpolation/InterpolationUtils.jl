@@ -19,7 +19,7 @@ function (interp::Interpolator{D, IO, DO})(
     num_nb::Int,
     dists::AbstractVector{Space{D}},
     weights::AbstractVector{Float64},
-    dfMatVec::AbstractVector{Flux{M, D}},
+    dfFluxVec::AbstractVector{Flux{D, M}},
     dfVec_workspace::AbstractVector{State{M}};
     scale::Space{D}
 ) where {D, IO, DO, M}
@@ -27,9 +27,10 @@ function (interp::Interpolator{D, IO, DO})(
     # LLVM unrolls this D-loop at compile time
     div_tuple = ntuple(Val(D)) do d
         
-        # 1. Extract the d-th column from the MxD matrices into the safe workspace
+
+        # Pull the exact column natively! No 2D bounds-checking!
         @inbounds for local_idx in 1:num_nb
-            dfVec_workspace[local_idx] = State{M}(dfMatVec[local_idx][:, d])
+            dfVec_workspace[local_idx] = dfFluxVec[local_idx][d] 
         end
         
         scale_d = scale[d]

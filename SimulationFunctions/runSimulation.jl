@@ -159,6 +159,7 @@ function runSimulation(params::ParamDictType)::Union{AbstractSimData, Nothing}
             get_size(::LinearAdvection{D, NM}) where {D, NM} = D, NM
             eq = LinearAdvection(pde_params)
             dimension, N_macro_vars = get_size(eq)
+            println(dimension, N_macro_vars)
             vel_var = (1,)
         elseif eq_name == "burgers"
             dimension = 1

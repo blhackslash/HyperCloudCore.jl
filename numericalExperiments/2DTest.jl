@@ -7,8 +7,8 @@ function main()
     params = ParamDict(
         # --- Shared Parameters ---
         "tmax" => 5.0,
-        "Nx" => 50,
-        "Ny" => 50,
+        "Nx" => 250,
+        "Ny" => 250,
         "xmin" => -5.0,
         "xmax" => 5.0,
         "ymin" => -5.0,
@@ -25,8 +25,8 @@ function main()
         #"init_params" => (0.,1.,-2.,2.,-2.,2.),
         "randomness_factor" => (0.2, 0.2), # (x_rand_factor, y_rand_factor)
         "SEED_value" => 42,
-        "PDE" => "burgers2d",
-        #"PDE_params" => (.5,1.), # 2D velocity vector (vx, vy)
+        "PDE" => "linear",
+        "PDE_params" => ((.5,),(1.,)), # 2D velocity vector (vx, vy)
         "bc" => :outflow,
         "sim_function" => "runSimulation",
         "weight_function" => "exponential",

@@ -1,7 +1,7 @@
 ## ------------------------------- SVector Types -------------------------------
 const Space{D} = SVector{D, Float64}
 const State{M} = SVector{M, Float64}
-const Flux{M, D} = SMatrix{M, D, Float64}
+const Flux{D, M} = SVector{D, State{M}}
 const Kinetic{K} = SVector{K, Float64}
 
 ## ------------------------------- HyperbolicPDEs -------------------------------

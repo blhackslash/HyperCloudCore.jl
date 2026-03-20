@@ -27,7 +27,7 @@ end
 function ensure_capacity!(ws::UpwindWorkspaceCA, n::Int)
     if length(ws.distVec) < n
         N = n + n ÷ 4
-        resize!.((ws.distVec, ws.dfVec, ws.wVec, ws.dfMatVec), N) # <-- Resize
+        resize!.((ws.distVec, ws.dfVec, ws.wVec, ws.dfFluxVec), N) # <-- Resize
     end
 end
 
@@ -149,12 +149,12 @@ function (upwind::UpwindGradient{D, <:UpwindWorkspaceCA{D, M}, <:Any, ClassicAlg
         
         ws.distVec[local_idx]  = dist_k
         ws.wVec[local_idx]     = w_all_full[global_idx]
-        ws.dfMatVec[local_idx] = F_num - F_i
+        ws.dfFluxVec[local_idx] = F_num - F_i
     end
     
     # 3. Dispatched Matrix Interpolation (Passing dfVec as the workspace)
     div = upwind.interpolator(
-        num_nb, ws.distVec, ws.wVec, ws.dfMatVec, ws.dfVec; 
+        num_nb, ws.distVec, ws.wVec, ws.dfFluxVec, ws.dfVec; 
         scale = pg.meta.dx
     )
     

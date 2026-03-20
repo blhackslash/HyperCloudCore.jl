@@ -214,7 +214,7 @@ struct UpwindWorkspaceCA{D, M} <: UpwindWorkspace
     distVec::Vector{Space{D}}
     dfVec::Vector{State{M}}
     wVec::Vector{Float64}
-    dfMatVec::Vector{Flux{M, D}} # <-- NEW MATRIX BUFFER
+    dfFluxVec::Vector{Flux{D, M}} # <-- NEW MATRIX BUFFER
 end
 
 struct UpwindWorkspacePA{D} <: UpwindWorkspace
