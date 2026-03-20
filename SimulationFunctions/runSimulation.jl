@@ -159,33 +159,33 @@ function runSimulation(params::ParamDictType)::Union{AbstractSimData, Nothing}
             get_size(::LinearAdvection{D, NM}) where {D, NM} = D, NM
             eq = LinearAdvection(pde_params)
             dimension, N_macro_vars = get_size(eq)
-            vel_var = 1
+            vel_var = (1,)
         elseif eq_name == "burgers"
             dimension = 1
             eq = BurgersEquation(get(run_params,"PDE_params", 0.))
             N_macro_vars = 1
-            vel_var = 1
+            vel_var = (1,)
         elseif eq_name == "burgers2d"
             dimension = 2
             eq = BurgersEquation2D()
             N_macro_vars = 1
-            vel_var = 1
+            vel_var = (1,)
         elseif eq_name == "testU3"
             dimension = 1
             eq = TestU3Equation(get(run_params,"PDE_params", 0.))
             N_macro_vars = 1
-            vel_var = 1
+            vel_var = (1,)
         elseif eq_name == "euler1d"
             dimension = 1
             eq = Euler1D()
             N_macro_vars = 3 
-            vel_var = 2
+            vel_var = (2,)
         elseif eq_name == "leuler1d"
             @assert !isnothing(grid_mover_name) "Lagrangian Euler simulation needs grid movement!"
             dimension = 1
             eq = LEuler1D()
             N_macro_vars = 3 
-            vel_var = 2
+            vel_var = (2,)
             lagrange = true
         elseif eq_name == "euler2d"
             dimension = 2
@@ -198,12 +198,12 @@ function runSimulation(params::ParamDictType)::Union{AbstractSimData, Nothing}
 
         IC = getInitialCondition(initFunc_name, init_params)
 
-        # --- 3. Set Up Kinetic Components & Source Term (If applicable) ---
+# --- 3. Set Up Kinetic Components & Source Term (If applicable) ---
         local M_components::Int
         local km = nothing
         local kinetic_to_macro_map = nothing
         local kinetic_eqs_vec = nothing
-        local source_term = nothing
+        local source_term = NoSourceTerm() # Default initialized
         
         if is_kinetic
             relax_eps::Float64 = run_params["relax_epsilon"]
@@ -237,8 +237,10 @@ function runSimulation(params::ParamDictType)::Union{AbstractSimData, Nothing}
                         global_k_idx += 1
                     end
                 end
+                
                 coeffs = Tuple(map(x -> 1/x, num_kinetic_per_macro))
-                source_term = NonLocalRelaxationSourceTerm(eq, relax_eps, km, coeffs, Tuple(relax_speeds), int_factor)
+                # NEW: Clean constructor using Val(dimension)
+                source_term = NonLocalRelaxationSourceTerm(km, relax_eps, coeffs, Tuple(relax_speeds), int_factor, Val(dimension))
             else
                 coeffs_k, speeds_k, dims_k, ints_k = Float64[], Float64[], Int[], Float64[]
                 global_k_idx = 1
@@ -257,7 +259,8 @@ function runSimulation(params::ParamDictType)::Union{AbstractSimData, Nothing}
                         global_k_idx += 1
                     end
                 end
-                source_term = RelaxationSourceTerm(eq, relax_eps, km, Tuple(coeffs_k), Tuple(speeds_k), Tuple(ints_k), Tuple(dims_k))
+                # NEW: Clean constructor using Val(dimension)
+                source_term = RelaxationSourceTerm(km, relax_eps, Tuple(coeffs_k), Tuple(speeds_k), Tuple(ints_k), Tuple(dims_k), Val(dimension))
             end
         else
             km = Kin2Macro{N_macro_vars}(ntuple(i -> i:i,Val(N_macro_vars)))
@@ -266,11 +269,8 @@ function runSimulation(params::ParamDictType)::Union{AbstractSimData, Nothing}
 
         # --- 4. Setup Grid Mover ---
         if grid_mover_name == "physical"
-            if is_kinetic && !isnothing(vel_var)
-                grid_mover = PhysicalGridMover(eq, Interpolator{dimension,1,1}(), km[vel_var], Val(dimension))
-            else
-                grid_mover = PhysicalGridMover(eq, Interpolator{dimension,1,1}())
-            end
+            # NEW: Pass dimension and the velocity indices extracted in Phase 2
+            grid_mover = PhysicalGridMover{dimension}(vel_var)
         elseif grid_mover_name == "custom"
             grid_mover = CustomGridMover(run_params["grid_mover_func"], run_params["grid_mover_params"])
         elseif isnothing(grid_mover_name) || (grid_mover_name == "none")
@@ -324,7 +324,7 @@ function runSimulation(params::ParamDictType)::Union{AbstractSimData, Nothing}
             upwind_alg_2d = "Classic"
             weight_func = exponentialWeightFunction(interp_alpha, interp_range)
             
-            pg = createParticleGrid((xmin,), (xmax,), (Nx,), bc, interp_range_factor; M=M_components, rng=rng, randomness=(randomness_factor * dx_nom,), merge_factor=merge_factor, weight_func=weight_func, km = km, mover = grid_mover)
+            pg = createParticleGrid((xmin,), (xmax,), (Nx,), bc, interp_range_factor; M=M_components, rng=rng, randomness=(randomness_factor * dx_nom,), merge_factor=merge_factor, weight_func=weight_func, mover = grid_mover)
         else
             Nx, Ny = haskey(run_params, "N") ? (run_params["N"], run_params["N"]) : (run_params["Nx"], run_params["Ny"])
             ymin, ymax = run_params["ymin"], run_params["ymax"]
@@ -334,7 +334,7 @@ function runSimulation(params::ParamDictType)::Union{AbstractSimData, Nothing}
             upwind_alg_2d = (main_grad_name == "Upwind" || fallback_grad_name == "Upwind") ? run_params["upwind_alg_2d"] : nothing
             weight_func = exponentialWeightFunction(interp_alpha, interp_range)
             
-            pg = createParticleGrid((xmin,ymin), (xmax, ymax), (Nx, Ny), bc, interp_range_factor; M=M_components, weight_func=weight_func, rng=rng, randomness=(randomness_factor[1]*dx_nom, randomness_factor[2]*dy_nom), km = km, mover = grid_mover)
+            pg = createParticleGrid((xmin,ymin), (xmax, ymax), (Nx, Ny), bc, interp_range_factor; M=M_components, weight_func=weight_func, rng=rng, randomness=(randomness_factor[1]*dx_nom, randomness_factor[2]*dy_nom), mover = grid_mover)
         end
 
         # --- 7. Time Step Calculation ---
@@ -439,21 +439,24 @@ function runSimulation(params::ParamDictType)::Union{AbstractSimData, Nothing}
         end
 
         # --- 9. Final Execution Dispatch ---
-if !is_kinetic
+        if !is_kinetic
             # We determine the exact state type based on the number of macro variables
+# We determine the exact state type based on the number of macro variables
             state_type = SVector{M_components, Float64}
             
-            if timestepper_name == "EulerUpwind"
-                method = EulerUpwind(eq, MainGrad, FallbackGrad, mood_fun)
-            elseif timestepper_name == "RalstonRK2"
-                method = RalstonRK2(eq, MainGrad, FallbackGrad, mood_fun)
+            # Instantiate the unified GeneralRKTimeStepper with the corresponding Tableau
+            if timestepper_name == "Euler"
+                method = GeneralRKTimeStepper(eq, MainGrad, FallbackGrad, mood_fun, EulerTableau())
+            elseif timestepper_name == "RK2"
+                method = GeneralRKTimeStepper(eq, MainGrad, FallbackGrad, mood_fun, RalstonRK2Tableau())
             elseif timestepper_name == "RK3"
-                method = RK3(eq, MainGrad, FallbackGrad, mood_fun)
+                method = GeneralRKTimeStepper(eq, MainGrad, FallbackGrad, mood_fun, SSPRK3Tableau())
             elseif timestepper_name == "RK4"
-                method = RK4(eq, MainGrad, FallbackGrad, mood_fun)
+                method = GeneralRKTimeStepper(eq, MainGrad, FallbackGrad, mood_fun, RK4Tableau())
             else
                 error("Unknown direct TimeStepper: '$timestepper_name'")
             end
+            
             # Note: Ensure your setInitialConditions! is updated to write SVectors!
             setInitialConditions!(pg, eq, IC)
             

@@ -5,112 +5,36 @@ abstract type MeshfreeSystemTimeStepper <: MeshfreeTimeStepper end
 
 ## ------------------------------- Meshfree Direct Steppers -------------------------------
 
-struct EulerUpwind{M, PDE <: HyperbolicPDE, G1 <: GradientInterpolator, G2 <: GradientInterpolator, MOOD <: MOODCriterion} <: MeshfreeTimeStepper
-    pde::PDE
-    gradientInterpolator::G1
-    fallbackInterpolator::G2
-    mood::MOOD
-    
-    rhoInit::Vector{State{M}}      
-    neighbor_fs::Vector{State{M}}  
-    neighbor_dfs::Vector{State{M}} 
-
-    function EulerUpwind(pde::HyperbolicPDE{D, M}, grad::G1, fallback::G2, mood::MOOD) where {G1, G2, MOOD, D, M}
-        new{M, typeof(pde), G1, G2, M}(pde, grad, fallback, mood, State{M}[], State{M}[], State{M}[])
-    end
-end
-
-struct RalstonRK2{M, PDE, G1, G2, MOOD} <: MeshfreeTimeStepper
-    pde::PDE
-    gradientInterpolator::G1
-    fallbackInterpolator::G2
-    mood::MOOD
-    
-    rhoInit::Vector{State{M}}
-    rhos::Vector{State{M}}
-    div1::Vector{State{M}}
-
-    neighbor_fs::Vector{State{M}}
-    neighbor_dfs::Vector{State{M}}
-
-    function RalstonRK2(pde::HyperbolicPDE{D, M}, grad::G1, fallback::G2, mood::MOOD) where {G1, G2, MOOD, D, M}
-        new{M, typeof(pde), G1, G2, MOOD}(pde, grad, fallback, mood, State{M}[], State{M}[], State{M}[], State{M}[], State{M}[])
-    end
-end
-
-struct RK3{M, PDE <: HyperbolicPDE, G1, G2, MOOD} <: MeshfreeTimeStepper
-    pde::PDE
-    gradientInterpolator::G1
-    fallbackInterpolator::G2
-    mood::MOOD
-    
-    rhoInit::Vector{State{M}}
-    rhos::Vector{State{M}}
-    div1::Vector{State{M}}
-    div2::Vector{State{M}}
-
-    neighbor_fs::Vector{State{M}}
-    neighbor_dfs::Vector{State{M}}
-
-    function RK3(pde::HyperbolicPDE{D, M}, grad::G1, fallback::G2, mood::MOOD) where {G1, G2, MOOD, D, M}
-        new{M, typeof(pde), G1, G2, MOOD}(pde, grad, fallback, mood, State{M}[], State{M}[], State{M}[], State{M}[], State{M}[], State{M}[])
-    end
-end
-
-struct RK4{M, PDE <: HyperbolicPDE, G1, G2, MOOD} <: MeshfreeTimeStepper
-    pde::PDE
-    gradientInterpolator::G1
-    fallbackInterpolator::G2
-    mood::MOOD
-    
-    rhoInit::Vector{State{M}}
-    rhos::Vector{State{M}}
-    k1::Vector{State{M}}
-    k2::Vector{State{M}}
-    k3::Vector{State{M}}
-
-    neighbor_fs::Vector{State{M}}
-    neighbor_dfs::Vector{State{M}}
-
-    function RK4(pde::HyperbolicPDE{D, M}, grad::G1, fallback::G2, mood::MOOD) where {G1, G2, MOOD, D, M}
-        new{M, typeof(pde), G1, G2, M}(pde, grad, fallback, mood, State{M}[], State{M}[], State{M}[], State{M}[], State{M}[], State{M}[], State{M}[])
-    end
-end
-
-struct RalstonSwitchRK2{M, PDE <: HyperbolicPDE, G1, G2, MOOD} <: MeshfreeTimeStepper
-    pde::PDE
-    gradientInterpolator::G1
-    fallbackInterpolator::G2
-    mood::MOOD
-    
-    rhoInit::Vector{State{M}}
-    rhos::Vector{State{M}}
-    rho_fallback::Vector{State{M}}
-    div1::Vector{State{M}}
-
-    # Graph/Topology Propagation Buffers for MOOD Switching
-    prop_indices::Vector{Int}
-    switched_to_fallback::Vector{Bool}
-    mood_indices::Vector{Int}
-    tol::Float64
-
-    neighbor_fs::Vector{State{M}}
-    neighbor_dfs::Vector{State{M}}
-
-    function RalstonSwitchRK2(pde::HyperbolicPDE{D, M}, grad::G1, fallback::G2, mood::MOOD, tol::Float64=1e-6) where {G1, G2, MOOD, D, M}
-        new{M, typeof(pde), G1, G2, M}(pde, grad, fallback, mood, State{M}[], State{M}[], State{M}[], State{M}[], Int[], Bool[], Int[], tol, State{M}[], State{M}[])
-    end
-end
-
-## ------------------------------- Butcher Tableaus -------------------------------
-
-struct ButcherTableau
+struct RKButcherTableau
     A::Matrix{Float64}
     b::Vector{Float64}
     c::Vector{Float64}
-    A_tilde::Matrix{Float64}
-    b_tilde::Vector{Float64}
-    c_tilde::Vector{Float64}
+end
+struct GeneralRKTimeStepper{M, PDE <: HyperbolicPDE, G1 <: GradientInterpolator, G2, MOOD} <: MeshfreeTimeStepper
+    pde::PDE
+    gradientInterpolator::G1
+    fallbackInterpolator::G2
+    mood::MOOD
+    tableau::RKButcherTableau
+    
+    rho_n::Vector{State{M}}
+    rho_stage::Vector{State{M}}
+    K_stages::Vector{Vector{State{M}}} 
+    mood_triggered::Vector{Bool} # Tracks if a particle dropped to Euler
+
+    neighbor_fs::Vector{State{M}}
+    neighbor_dfs::Vector{State{M}}
+
+    function GeneralRKTimeStepper(pde::HyperbolicPDE{D, M}, grad::G1, fallback::G2, mood::MOOD, tableau::RKButcherTableau) where {G1, G2, MOOD, D, M}
+        s = size(tableau.A, 1)
+        new{M, typeof(pde), G1, G2, MOOD}(
+            pde, grad, fallback, mood, tableau, 
+            State{M}[], State{M}[], 
+            [State{M}[] for _ in 1:s],
+            Bool[], 
+            State{M}[], State{M}[]
+        )
+    end
 end
 
 ## ------------------------------- Source Terms -------------------------------
@@ -118,7 +42,7 @@ end
 abstract type AbstractSourceTerm end
 
 struct NoSourceTerm <: AbstractSourceTerm end
-struct KineticSourceTerm <: AbstractSourceTerm end
+abstract type KineticSourceTerm <: AbstractSourceTerm end
 
 struct Kin2Macro{M}
     ranges::NTuple{M, UnitRange{Int}}
@@ -150,7 +74,7 @@ struct PicardIterationSolver <: AbstractImplicitSolver
 end
 struct LinearizedRelaxationImplicitSolver <: AbstractImplicitSolver end
 
-struct IMEXButcherTableau{M <: AbstractArray{Float64, 2}, V <: AbstractArray{Float64, 1}}
+struct IMEXButcherTableau{M <: AbstractArray{Float64, 2}, V <: AbstractArray{Float64, 1}} 
     A::M  # Implicit coefficient matrix
     At::M # Explicit coefficient matrix (Atilde)
     c::V  # Implicit time nodes

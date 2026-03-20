@@ -1,3 +1,20 @@
+@inline function sort_flux(f_i::State{M}, f_j::State{M}, F_i::Flux{M, D}, F_j::Flux{M, D}, dist_k::Space{D}) where {D, M}
+    # Build Tuple of Columns based on direction
+    f_L_cols = ntuple(d -> dist_k[d] > 0 ? f_i : f_j, Val(D))
+    f_R_cols = ntuple(d -> dist_k[d] > 0 ? f_j : f_i, Val(D))
+    
+    F_L_cols = ntuple(d -> dist_k[d] > 0 ? F_i[:, d] : F_j[:, d], Val(D))
+    F_R_cols = ntuple(d -> dist_k[d] > 0 ? F_j[:, d] : F_i[:, d], Val(D))
+    
+    # hcat fuses the D SVectors into an MxD SMatrix natively!
+    f_L_mat = hcat(f_L_cols...)
+    f_R_mat = hcat(f_R_cols...)
+    F_L_mat = hcat(F_L_cols...)
+    F_R_mat = hcat(F_R_cols...)
+    
+    return f_L_mat, f_R_mat, F_L_mat, F_R_mat
+end
+
 # =========================================================================
 # WAVE SPEED CALCULATIONS
 # =========================================================================
@@ -35,43 +52,51 @@ end
 @inline function max_eigenvalue(eq::LinearAdvection, U::State{M}, d::Int) where {M}
     return maximum(abs.(eq.vel[d]))
 end
-
+@inline function max_eigenvalues(eq::HyperbolicPDE{D, M}, f_L::Flux{M, D}, f_R::Flux{M, D}) where {D, M}
+    return SVector{D, Float64}(ntuple(Val(D)) do d
+        # Extract the d-th column state
+        lamL = max_eigenvalue(eq, State{M}(f_L[:, d]), d)
+        lamR = max_eigenvalue(eq, State{M}(f_R[:, d]), d)
+        max(lamL, lamR)
+    end)
+end
 # =========================================================================
 # NUMERICAL FLUXES (Fully Unified)
 # =========================================================================
-
 # ---------------------------------------------------------
-# RUSANOV FLUX (Handles everything natively via broadcasting!)
+# RUSANOV FLUX (Matrix Form)
 # ---------------------------------------------------------
-@inline function (rusanov::RusanovFlux)(fL::State{M}, fR::State{M}, eq::HyperbolicPDE, d::Int) where {M}
-    F_L = flux(eq, fL)[d] # Extracts SVector{M} for dimension d
-    F_R = flux(eq, fR)[d]
-    s = max_wave_speed(eq, fL, fR, d)
+@inline function (rusanov::RusanovFlux)(f_L::Flux{M, D}, f_R::Flux{M, D}, F_L::Flux{M, D}, F_R::Flux{M, D}, eq::HyperbolicPDE{D, M}) where {D, M}
     
-    # SVector broadcasting makes this a single line for both 1D and Multi-D systems!
-    return @. 0.5 * (F_L + F_R - s * (fR - fL))
+    s_vec = max_eigenvalues(eq, f_L, f_R) # Returns SVector{D, Float64}
+    
+    # Broadcast multiply the columns by their respective wave speeds
+    dissipation = (f_R - f_L) .* s_vec'
+    
+    return 0.5 * (F_L + F_R - dissipation)
 end
 
 # ---------------------------------------------------------
-# UPWIND FLUX
+# UPWIND FLUX (Matrix Form)
 # ---------------------------------------------------------
-# Scalar Dispatch
-@inline function (upwind::UpwindFlux)(fL::SVector{1, Float64}, fR::SVector{1, Float64}, eq::ScalarHyperbolicPDE, d::Int)
-    F_L = flux(eq, fL)[d]
-    F_R = flux(eq, fR)[d]
+@inline function (upwind::UpwindFlux)(f_L::Flux{1, D}, f_R::Flux{1, D}, F_L::Flux{1, D}, F_R::Flux{1, D}, eq::ScalarHyperbolicPDE{D}) where {D}
     
-    uL, uR = fL[1], fR[1]
+    delta_u = f_R - f_L # 1xD Matrix
     
-    if uL == uR
-        a = velocity(eq, fL)[d][1]
-    else
-        a = (F_L[1] - F_R[1]) / (uL - uR)
-    end
+    s_vec = SVector{D, Float64}(ntuple(Val(D)) do d
+        du = delta_u[1, d]
+        if abs(du) < 1e-14
+            abs(velocity(eq, State{1}(f_L[:, d]))[d])
+        else
+            abs((F_R[1, d] - F_L[1, d]) / du)
+        end
+    end)
     
-    return SVector{1, Float64}(0.5 * (F_L[1] + F_R[1] - abs(a) * (uR - uL)))
+    dissipation = delta_u .* s_vec'
+    return 0.5 * (F_L + F_R - dissipation)
 end
 
-# System Dispatch (Systems fall back to Rusanov for safety)
-@inline function (upwind::UpwindFlux)(fL::State{M}, fR::State{M}, eq::HyperbolicPDESystem, d::Int=1) where {M}
-    return RusanovFlux()(fL, fR, eq, d)
+# System Fallback
+@inline function (upwind::UpwindFlux)(f_L::Flux{M, D}, f_R::Flux{M, D}, F_L::Flux{M, D}, F_R::Flux{M, D}, eq::HyperbolicPDESystem{D, M}) where {D, M}
+    return RusanovFlux()(f_L, f_R, F_L, F_R, eq)
 end

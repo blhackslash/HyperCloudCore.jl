@@ -11,6 +11,42 @@
 # 3D: [x, y, z, x^2/2, y^2/2, z^2/2, xy, xz, yz]
 @inline build_o2_basis(d::SVector{3, Float64}) = SVector(d[1], d[2], d[3], 0.5 * d[1]^2, 0.5 * d[2]^2, 0.5 * d[3]^2, d[1]*d[2], d[1]*d[3], d[2]*d[3])
 
+# =========================================================================
+# MATRIX-VECTORIZED INTERPOLATOR DISPATCH (Stateless)
+# =========================================================================
+
+function (interp::Interpolator{D, IO, DO})(
+    num_nb::Int,
+    dists::AbstractVector{Space{D}},
+    weights::AbstractVector{Float64},
+    dfMatVec::AbstractVector{Flux{M, D}},
+    dfVec_workspace::AbstractVector{State{M}};
+    scale::Space{D}
+) where {D, IO, DO, M}
+    
+    # LLVM unrolls this D-loop at compile time
+    div_tuple = ntuple(Val(D)) do d
+        
+        # 1. Extract the d-th column from the MxD matrices into the safe workspace
+        @inbounds for local_idx in 1:num_nb
+            dfVec_workspace[local_idx] = State{M}(dfMatVec[local_idx][:, d])
+        end
+        
+        scale_d = scale[d]
+        
+        # 2. Call the BASE scalar/state interpolator! 
+        if IO == 1
+            res = interp(1:num_nb, dists, weights, dfVec_workspace; scale = scale_d)
+            return State{M}(ntuple(c -> res[d, c], Val(M)))
+        else
+            res_tuple = interp(1:num_nb, dists, weights, dfVec_workspace; scale = scale_d)
+            return State{M}(ntuple(c -> res_tuple[1][d, c], Val(M)))
+        end
+    end
+    
+    # Return the full aggregated divergence vector
+    return sum(div_tuple)
+end
 
 # =========================================================================
 # ORDER 0 INTERPOLATOR (Weighted Average)

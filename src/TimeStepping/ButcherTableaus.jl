@@ -1,3 +1,32 @@
+function EulerTableau()::RKButcherTableau
+    # c = 1.0 ensures the grid moves by the full dt BEFORE divergence is evaluated
+    return RKButcherTableau(zeros(Float64, 1, 1), [1.0], [1.0])
+end
+
+function RalstonRK2Tableau()::RKButcherTableau
+    A = [0.0 0.0;
+         2/3 0.0]
+    return RKButcherTableau(A, [1/4, 3/4], [0.0, 2/3])
+end
+
+function SSPRK3Tableau()::RKButcherTableau
+    # Shu-Osher SSPRK3
+    A = [0.0  0.0  0.0;
+         1.0  0.0  0.0;
+         0.25 0.25 0.0]
+    return RKButcherTableau(A, [1/6, 1/6, 2/3], [0.0, 1.0, 0.5])
+end
+
+function RK4Tableau()::RKButcherTableau
+    # Standard Classical RK4
+    A = [0.0 0.0 0.0 0.0;
+         0.5 0.0 0.0 0.0;
+         0.0 0.5 0.0 0.0;
+         0.0 0.0 1.0 0.0]
+    return RKButcherTableau(A, [1/6, 1/3, 1/3, 1/6], [0.0, 0.5, 0.5, 1.0])
+end
+
+
 function IMEXButcherTableau(A::M, At::M, c::V, ct::V, b::V) where {M <: AbstractArray{Float64, 2}, V <: AbstractArray{Float64, 1}}
     s = size(A, 1) # Number of stages
     @assert (size(A, 2) == s && size(At, 1) == s && size(At, 2) == s &&

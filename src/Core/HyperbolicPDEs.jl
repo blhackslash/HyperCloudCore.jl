@@ -1,10 +1,28 @@
-# --- Linear Advection ---
-@inline velocity(eq::LinearAdvection{D}, u::SVector{1, Float64}) where {D} = Space{D}(eq.vel...)
-# --- Multi-D Flux ---
-# Returns: Flux{D,M}
-@inline function flux(eq::LinearAdvection{D, M}, U::State{M}) where {D, M}
-    # Builds the flux vector for each dimension 'd' using a generated tuple
-    return Flux{D,M}(ntuple(d -> eq.vel[d] .* U, Val(D)))
+function LinearAdvection(velocities)
+    # Converts input to SVector{D, SVector{M}}
+    svec_vel = param2svec(velocities) 
+    
+    D = length(svec_vel)
+    M = length(svec_vel[1])
+    
+    # Flattening a Vector of SVectors into SMatrix 
+    # Perfectly fills columns 1...D in order
+    flat_data = reduce(vcat, svec_vel) 
+    mat = Flux{D, M}(flat_data)
+    
+    return LinearAdvection{D, M}(mat)
+end
+
+
+@generated function flux(eq::LinearAdvection{D, M}, U::State{M}) where {M, D}
+    # This block runs ONLY ONCE during compilation.
+    # It loops through the matrix in strict column-major order.
+    exprs = [:(eq.vel[$d, $m] * U[$m]) for d in 1:D for m in 1:M]
+    
+    # We return the raw Abstract Syntax Tree (AST).
+    # For D=2, M=2, the compiler physically writes this code for you:
+    # return SMatrix{2, 2, Float64, 4}(tuple(eq.vel[1,1]*U[1], eq.vel[2,1]*U[2], eq.vel[1,2]*U[1], eq.vel[2,2]*U[2]))
+    return :( SMatrix{M, D, Float64}(tuple($(exprs...))) )
 end
 
 # --- Burgers Equation 1D ---
@@ -15,12 +33,16 @@ BurgersEquation() = BurgersEquation{0.0}()
     return SVector{1, Float64}((1.0 - a) * u[1])
 end
 
-@inline function flux(::BurgersEquation{a}, u::SVector{1, Float64}) where {a}
-    return SVector{1, Float64}(0.5 * (1.0 - a) * u[1]^2)
+@inline function flux(::BurgersEquation{a}, u::State{1}) where {a}
+    return Flux{1, 1}(0.5 * (1.0 - a) * u[1]^2)
+end
+
+@inline function flux(eq::BurgersEquation2D, u::State{1})
+    # First argument is X-flux, second is Y-flux. Matrix handles it perfectly.
+    return Flux{1, 2}(0.5 * u[1]^2, 0.5 * u[1]^2)
 end
 
 @inline velocity(eq::BurgersEquation2D, u::SVector{1, Float64}) = SVector{2, Float64}(u[1], u[1])
-@inline flux(eq::BurgersEquation2D, u::SVector{1, Float64}) = SVector{2, Float64}(0.5 * u[1]^2, 0.5 * u[1]^2)
 
 # --- TestU3 Equation ---
 TestU3Equation(a::Float64) = TestU3Equation{a}()
@@ -45,14 +67,16 @@ function pressure_from_euler_conserved(rho::Float64, m::Float64, E::Float64)::Fl
     return max(pressure, 1e-9)
 end
 
-function flux(eq::Euler1D, U::SVector{3, Float64})::SVector{3, Float64}
+function flux(eq::Euler1D, U::State{3})::Flux{1, 3}
     rho, m, E = U[1], U[2], U[3]
     if rho < 1e-9
-        return SVector{3, Float64}(0.0, pressure_from_euler_conserved(1e-9, 0.0, 0.0), 0.0)
+        return Flux{3, 1}(0.0, pressure_from_euler_conserved(1e-9, 0.0, 0.0), 0.0)
     end
     ux = m / rho
     p = pressure_from_euler_conserved(rho, m, E)
-    return SVector{3, Float64}(m, m * ux + p, (E + p) * ux)
+    
+    # 3 rows, 1 column
+    return Flux{3, 1}(m, m * ux + p, (E + p) * ux)
 end
 
 # --- 2D Euler Equations ---
@@ -65,25 +89,30 @@ function pressure_from_euler_conserved(U::SVector{4, Float64})::Float64
     return max(pressure, 1e-9)
 end
 
-function flux(eq::Euler2D, U::SVector{4, Float64})::SVector{2, SVector{4, Float64}}
+function flux(eq::Euler2D, U::State{4})::Flux{4, 2}
     rho, mx, my, E = U[1], U[2], U[3], U[4]
+    
     if rho < 1e-9
         p_fallback = pressure_from_euler_conserved(SVector{4, Float64}(1e-9, 0.0, 0.0, 0.0))
-        return SVector{2, SVector{4, Float64}}(
-            SVector{4, Float64}(0.0, p_fallback, 0.0, 0.0),
-            SVector{4, Float64}(0.0, 0.0, p_fallback, 0.0)
+        
+        return SMatrix{4, 2, Float64}(
+            0.0, p_fallback, 0.0, 0.0,  # Column 1
+            0.0, 0.0, p_fallback, 0.0   # Column 2
         )
     end
+    
     p = pressure_from_euler_conserved(U)
     ux = mx / rho
     uy = my / rho
     
+    # Compute the spatial fluxes as standard SVectors
     F = SVector{4, Float64}(rho * ux, rho * ux^2 + p, rho * ux * uy, (E + p) * ux)
     G = SVector{4, Float64}(rho * uy, rho * ux * uy, rho * uy^2 + p, (E + p) * uy)
     
-    # Returning an SVector of SVectors allows flux(eq, U)[d] to magically work!
-    return SVector{2, SVector{4, Float64}}(F, G)
+    # Splat them into the Matrix! F becomes Column 1, G becomes Column 2.
+    return Flux{4, 2}(F..., G...)
 end
+
 """
 Lagrangian Euler implementation using primitive variables, i.e. 
 U = (ρ,u,p) and A(U) matrix: [[0,ρ,0],[0,0,1/ρ],[0,γp,0]]

@@ -19,8 +19,16 @@ function UpwindWorkspaceCA{D, M}(max_neighbors::Int=100) where {D, M}
     UpwindWorkspaceCA{D, M}(
         Vector{Space{D}}(undef, max_neighbors),
         Vector{State{M}}(undef, max_neighbors),
-        Vector{Float64}(undef, max_neighbors)
+        Vector{Float64}(undef, max_neighbors),
+        Vector{Flux{D, M}}(undef, max_neighbors) # <-- Init
     )
+end
+
+function ensure_capacity!(ws::UpwindWorkspaceCA, n::Int)
+    if length(ws.distVec) < n
+        N = n + n ÷ 4
+        resize!.((ws.distVec, ws.dfVec, ws.wVec, ws.dfMatVec), N) # <-- Resize
+    end
 end
 
 function UpwindWorkspacePA{D}(max_neighbors::Int=100) where {D}
@@ -34,13 +42,6 @@ function ensure_capacity!(ws::UpwindWorkspaceTA, n::Int)
     if length(ws.distVec) < n
         N = n + n ÷ 4
         resize!.((ws.distVec, ws.dfVec, ws.wVec, ws.xWindow, ws.yWindow), N)
-    end
-end
-
-function ensure_capacity!(ws::UpwindWorkspaceCA, n::Int)
-    if length(ws.distVec) < n
-        N = n + n ÷ 4
-        resize!.((ws.distVec, ws.dfVec, ws.wVec), N)
     end
 end
 
@@ -116,66 +117,46 @@ Functor for UpwindGradient (ClassicAlgorithm).
 Works for 1D, 2D, 3D, and natively supports both Scalars and Systems via `State{M}`.
 """
 function (upwind::UpwindGradient{D, <:UpwindWorkspaceCA{D, M}, <:Any, ClassicAlgorithm})(
-    eq::PDE,
-    i::Int,                         
-    f_i::State{M},                      
-    nb_slice::UnitRange{Int},       
-    pg::ParticleGrid{D},             
-    f_neighbors::AbstractVector{State{M}},    
+    eq::PDE, i::Int, f_i::State{M}, nb_slice::UnitRange{Int},       
+    pg::ParticleGrid{D}, f_neighbors::AbstractVector{State{M}},    
     df_neighbors::AbstractVector{State{M}}    
  ) where {D, M, PDE <: HyperbolicPDE}
     
-    thread_idx = mod1(Threads.threadid(),Threads.nthreads())
-    ws = upwind.workspaces[thread_idx]
-    interp = upwind.interpolator
-    nFlux = upwind.numericalFlux
-
-    dist_all_full = get_distances(pg)
-    w_all_full = get_weights(pg) 
-
     num_nb = length(nb_slice)
-    if num_nb < upwind.order; return zeros(State{M}); end
+    
+    # We can extract the IO (Interpolation Order) parameter directly from the interpolator type
+    if num_nb < upwind.order
+        return State{M}(ntuple(_->0.0, Val(M)))
+    end
+
+    thread_idx = mod1(Threads.threadid(), Threads.nthreads())
+    ws = upwind.workspaces[thread_idx]
     ensure_capacity!(ws, num_nb)
 
-    dist_buf = ws.distVec
-    w_buf = ws.wVec
-    df_buf = ws.dfVec 
-
-    flux_i = flux(eq, f_i)
+    # 1. Base Physical Flux
+    F_i = flux(eq, f_i) 
+    dist_all_full = get_distances(pg)
+    w_all_full = get_weights(pg) 
     
-    div = zeros(State{M})
-    scale = pg.meta.dx
-    
-    # Unified Loop Over Dimensions
-    for d in 1:D
+    # 2. Extract, Sort, and compute Numerical Flux Matrices
+    @inbounds for (local_idx, global_idx) in enumerate(nb_slice)
+        dist_k = dist_all_full[global_idx]
+        f_j    = f_neighbors[global_idx]
+        F_j    = flux(eq, f_j)
         
-        @inbounds for (local_idx, global_idx) in enumerate(nb_slice)
-            dist_k = dist_all_full[global_idx]
-            f_j = f_neighbors[global_idx]
-            
-            dist_buf[local_idx] = dist_k
-            w_buf[local_idx]  = w_all_full[global_idx]
-            
-            # Inline directional sorting logic
-            f_L, f_R = dist_k[d] > 0 ? (f_i, f_j) : (f_j, f_i)
-            
-            flux_num = nFlux(f_L, f_R, eq, d)
-            df_buf[local_idx] = flux_num - flux_i[d]
-        end
+        f_L, f_R, F_L, F_R = sort_flux(f_i, f_j, F_i, F_j, dist_k)
+        F_num = upwind.numericalFlux(f_L, f_R, F_L, F_R, eq)
         
-        scale_d = scale[d]
-        
-        # Type-Stable row extraction from the SMatrix
-        if upwind.order == 1
-            res = interp(1:num_nb, dist_buf, w_buf, df_buf; scale = scale_d)
-            dF_dx = State{M}(ntuple(c -> res[d, c], Val(M)))
-        else
-            res_tuple = interp(1:num_nb, dist_buf, w_buf, df_buf; scale = scale_d)
-            dF_dx = State{M}(ntuple(c -> res_tuple[1][d, c], Val(M)))
-        end
-        
-        div += dF_dx
+        ws.distVec[local_idx]  = dist_k
+        ws.wVec[local_idx]     = w_all_full[global_idx]
+        ws.dfMatVec[local_idx] = F_num - F_i
     end
+    
+    # 3. Dispatched Matrix Interpolation (Passing dfVec as the workspace)
+    div = upwind.interpolator(
+        num_nb, ws.distVec, ws.wVec, ws.dfMatVec, ws.dfVec; 
+        scale = pg.meta.dx
+    )
     
     return 2.0 * div
 end

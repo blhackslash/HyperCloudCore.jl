@@ -209,11 +209,12 @@ struct UpwindWorkspaceTA{D, M} <: UpwindWorkspace
     xWindow::BitVector
     yWindow::BitVector
 end
-
+# Inside Upwind.jl (Around line 15)
 struct UpwindWorkspaceCA{D, M} <: UpwindWorkspace
     distVec::Vector{Space{D}}
-    dfVec::Vector{State{M}} 
-    wVec::Vector{Float64}  
+    dfVec::Vector{State{M}}
+    wVec::Vector{Float64}
+    dfMatVec::Vector{Flux{M, D}} # <-- NEW MATRIX BUFFER
 end
 
 struct UpwindWorkspacePA{D} <: UpwindWorkspace

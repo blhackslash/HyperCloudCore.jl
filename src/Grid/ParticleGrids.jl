@@ -159,10 +159,9 @@ function createParticleGrid(
     bc::Symbol, interp_range_factor::Real;
     M::Int = 1, randomness::Tuple = ntuple(i->0.0, D), 
     rng = Random.default_rng(), merge_factor = 0.3, split_factor = 1., 
-    weight_func = exponentialWeightFunction(1.,1.), km = nothing, mover = NoGridMover()
+    weight_func = exponentialWeightFunction(1.,1.), mover = NoGridMover()
 ) where {D}
     
-    km = isnothing(km) ? Kin2Macro(1:M) : km  
     N_ghost::Int = bc == :periodic ? 0 : ceil(Int, interp_range_factor)
     
     if bc == :periodic
@@ -251,7 +250,7 @@ function createParticleGrid(
     )
 
     pg = ParticleGrid{D, M, typeof(weight_func), typeof(mover), bc}(
-        meta, core, shared, neighbors, reorder, bins, km, mover,
+        meta, core, shared, neighbors, reorder, bins, mover,
         zeros(State{M}, N), zeros(SVector{M, Bool}, N), zeros(State{M}, N)
     )
 
@@ -300,65 +299,115 @@ end
 
 sort_particles!(pg::ParticleGrid) = pg.reorder(pg) 
 
-function (rd::ReorderData{D})(pg::ParticleGrid{D, M, WF}) where {D, M, WF}
-    N = pg.meta.N
-    visited = rd.seen_buffer
-    fill!(visited, false)
-    perm_idx = 0
-    queue = Int[]
-    neighbor_buffer = Int[]
-
-    for i in 1:N 
-        if !visited[i]
-            start_node = i
-            visited[start_node] = true
-            resize!(queue, 0)
-            push!(queue, start_node)
-
-            while !isempty(queue)
-                current_node = popfirst!(queue)
-                perm_idx += 1
-                rd.permutation[perm_idx] = current_node
-
-                resize!(neighbor_buffer, 0)
-                nb_slice = pg.neighbor.ranges[current_node]
-                
-                if !isempty(nb_slice)
-                    @inbounds for k in nb_slice
-                        nb_idx = pg.neighbor.indices[k]
-                        if !visited[nb_idx]
-                            visited[nb_idx] = true 
-                            push!(neighbor_buffer, nb_idx)
-                        end
-                    end
-                end
-                
-                # Sort neighbors by their degree (length of their UnitRange)
-                sort!(neighbor_buffer, by = idx -> length(pg.neighbor.ranges[idx]))
-                append!(queue, neighbor_buffer)
-            end
-        end
-    end
+# function (rd::ReorderData{D})(pg::ParticleGrid{D, M, WF}) where {D, M, WF}
+#     N = pg.meta.N
     
-    reverse!(rd.permutation)
+#     # 1. Lexicographical Spatial Sort (e.g., sort by X, then by Y)
+#     # This guarantees particles physically next to each other are adjacent in memory
+#     pos = pg.core.positions
+#     p = sortperm(view(pos, 1:N), by = p -> D == 1 ? p[1] : (p[1], p[2]))
+    
+#     # Check if already mostly sorted to save time
+#     if issorted(p); return nothing; end
+    
+#     # 2. Native Julia In-Place Permutations
+#     Base.permute!(pg.core.positions, p)
+#     Base.permute!(pg.core.is_boundary, p)
+#     Base.permute!(pg.rhos, p)          
+#     Base.permute!(pg.curvatures, p)    
+#     Base.permute!(pg.mood_events, p)   
+    
+#     return nothing
+# end
+# =========================================================================
+# MORTON Z-ORDER CURVE GENERATORS (For 2D and 3D Spatial Hashing)
+# =========================================================================
 
-    copyto!(pg.shared.pos_buffer, pg.core.positions)
-    copyto!(pg.shared.bit_buffer, pg.core.is_boundary)
-    copyto!(pg.shared.rho_buffer, pg.rhos)
-
-    @batch for i in 1:N
-        src_idx = rd.permutation[i]
-        pg.core.positions[i]   = pg.shared.pos_buffer[src_idx]
-        pg.core.is_boundary[i] = pg.shared.bit_buffer[src_idx]
-        pg.rhos[i]             = pg.shared.rho_buffer[src_idx] # Single vector copy!
-    end
-
-    @batch for i in 1:N
-        rd.inv_permutation[rd.permutation[i]] = i
-    end
-    return nothing
+# Expands a 16-bit integer by inserting a 0 bit after every bit
+@inline function expand_bits_2D(w::UInt32)
+    w &= 0x0000ffff
+    w = (w | (w << 8)) & 0x00FF00FF
+    w = (w | (w << 4)) & 0x0F0F0F0F
+    w = (w | (w << 2)) & 0x33333333
+    w = (w | (w << 1)) & 0x55555555
+    return w
 end
 
+@inline morton_2D(x::UInt32, y::UInt32) = expand_bits_2D(x) | (expand_bits_2D(y) << 1)
+
+# Expands a 10-bit integer by inserting two 0 bits after every bit
+@inline function expand_bits_3D(w::UInt32)
+    w &= 0x000003ff
+    w = (w | (w << 16)) & 0xFF0000FF
+    w = (w | (w <<  8)) & 0x0300F00F
+    w = (w | (w <<  4)) & 0x030C30C3
+    w = (w | (w <<  2)) & 0x09249249
+    return w
+end
+
+@inline morton_3D(x::UInt32, y::UInt32, z::UInt32) = expand_bits_3D(x) | (expand_bits_3D(y) << 1) | (expand_bits_3D(z) << 2)
+
+
+# =========================================================================
+# PROXIMITY-OPTIMIZED SPATIAL REORDERING
+# =========================================================================
+
+function (rd::ReorderData{D})(pg::ParticleGrid{D, M, WF}) where {D, M, WF}
+    N = pg.meta.N
+    if N <= 1; return nothing; end
+    
+    pos = pg.core.positions
+    p = rd.permutation # Alias the existing pre-allocated buffer
+    
+    # 1. Update permutation buffer to current range
+    for i in 1:N
+        p[i] = i
+    end
+    
+    # 2. Extract domain boundaries for normalization
+    mins = pg.meta.mins
+    extents = pg.meta.maxs .- mins
+    
+    # 3. Sort using the Morton Curve
+    if D == 1
+        # 1D is naturally perfectly local
+        sort!(view(p, 1:N), by = i -> pos[i][1], alg=QuickSort)
+        
+    elseif D == 2
+        sort!(view(p, 1:N), by = i -> begin
+            # Normalize to 16-bit integers
+            nx = UInt32(clamp(floor(((pos[i][1] - mins[1]) / extents[1]) * 65535.0), 0, 65535))
+            ny = UInt32(clamp(floor(((pos[i][2] - mins[2]) / extents[2]) * 65535.0), 0, 65535))
+            morton_2D(nx, ny)
+        end, alg=QuickSort)
+        
+    else # D == 3
+        sort!(view(p, 1:N), by = i -> begin
+            # Normalize to 10-bit integers
+            nx = UInt32(clamp(floor(((pos[i][1] - mins[1]) / extents[1]) * 1023.0), 0, 1023))
+            ny = UInt32(clamp(floor(((pos[i][2] - mins[2]) / extents[2]) * 1023.0), 0, 1023))
+            nz = UInt32(clamp(floor(((pos[i][3] - mins[3]) / extents[3]) * 1023.0), 0, 1023))
+            morton_3D(nx, ny, nz)
+        end, alg=QuickSort)
+    end
+    
+    # Check if already mostly sorted to prevent unnecessary memory writes
+    if issorted(view(p, 1:N)); return nothing; end
+    
+    # 4. Native Julia In-Place Permutations
+    Base.permute!(pg.core.positions, p)
+    Base.permute!(pg.core.is_boundary, p)
+    Base.permute!(pg.rhos, p)          
+    Base.permute!(pg.curvatures, p)    
+    Base.permute!(pg.mood_events, p)   
+    
+    # 5. Optional: Update volumes if they exist
+    if length(pg.core.volumes) >= N
+        Base.permute!(pg.core.volumes, p)
+    end
+    
+    return nothing
+end
 updateNeighbors!(pg::ParticleGrid) = pg.neighbor(pg)
 
 function (nd::NeighborData{1, WF})(pg::ParticleGrid{1, M, WF}) where {M, WF}

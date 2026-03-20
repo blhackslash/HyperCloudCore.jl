@@ -7,8 +7,8 @@ function main()
     params = ParamDict(
         # --- Shared Parameters ---
         "tmax" => 5.0,
-        "Nx" => 250,
-        "Ny" => 250,
+        "Nx" => 50,
+        "Ny" => 50,
         "xmin" => -5.0,
         "xmax" => 5.0,
         "ymin" => -5.0,
@@ -25,15 +25,15 @@ function main()
         #"init_params" => (0.,1.,-2.,2.,-2.,2.),
         "randomness_factor" => (0.2, 0.2), # (x_rand_factor, y_rand_factor)
         "SEED_value" => 42,
-        "PDE" => "linear",
-        "PDE_params" => (.5,1.), # 2D velocity vector (vx, vy)
+        "PDE" => "burgers2d",
+        #"PDE_params" => (.5,1.), # 2D velocity vector (vx, vy)
         "bc" => :outflow,
         "sim_function" => "runSimulation",
         "weight_function" => "exponential",
         #"limiter" => "VK",
 
         # --- Method-Specific Parameters for "RK4-MUSCL2-2D" ---
-        "timestepper" => "RalstonRK2",
+        "timestepper" => "RK3",
         "main_gradient" => "Upwind",
         "order" => 1,
         "upwind_alg_2d" => "Classic",
@@ -92,7 +92,6 @@ function main()
     sim_data = nothing
     sim_data = runSimulation(params);
     @profview runSimulation(params)
-    #@code_warntype runScalarSimulation(params)
     # 3. `sim_data` will now hold the results (a SimData2D object), which you can inspect.
     #
     test_config = SimulationConfig(

@@ -153,7 +153,6 @@ mutable struct ParticleGrid{D, M, WF, GM, BC}
     neighbor::NeighborData{D, WF}
     reorder::ReorderData{D}
     bins::GlobalBins{D, BC}    # <-- Now type-linked
-    kin2macro::Kin2Macro{M}
     mover::GM
 
     rhos::Vector{State{M}}

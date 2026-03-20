@@ -1,7 +1,7 @@
 ## ------------------------------- SVector Types -------------------------------
 const Space{D} = SVector{D, Float64}
 const State{M} = SVector{M, Float64}
-const Flux{D,M} = SVector{D, State{M}}
+const Flux{M, D} = SMatrix{M, D, Float64}
 const Kinetic{K} = SVector{K, Float64}
 
 ## ------------------------------- HyperbolicPDEs -------------------------------
@@ -30,18 +30,7 @@ abstract type NCHyperbolicPDESystem{D, M} <: HyperbolicPDESystem{D, M} end
 const DiagonalHyperbolicSystem{M, D} = NTuple{M, <: ScalarHyperbolicPDE{D}}
 
 struct LinearAdvection{D, M} <: HyperbolicPDESystem{D, M}
-    vel::SVector{D, State{M}}
-end
-
-# Single constructor handles Floats, Tuples, and Tuples-of-Tuples!
-function LinearAdvection(velocities)
-    svec_vel = param2svec(velocities)
-    
-    # Extract D and M directly from the generated SVector's type!
-    D = length(svec_vel)
-    M = length(svec_vel[1])
-    
-    return LinearAdvection{D, M}(svec_vel)
+    vel::Flux{D, M}
 end
 
 struct BurgersEquation{a} <: ScalarHyperbolicPDE{1} end

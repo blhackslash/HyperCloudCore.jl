@@ -28,6 +28,49 @@ end
 end
 
 # =========================================================================
+# SMART SOURCE TERM CONSTRUCTORS
+# =========================================================================
+
+function RelaxationSourceTerm(
+    km::Kin2Macro{M}, eps::Float64, coeffs::NTuple{M, Float64}, 
+    speeds::NTuple{K, Float64}, ints::NTuple{K, Float64}, dims::NTuple{K, Int}, ::Val{D}
+) where {D, M, K}
+    
+    inv_eps = 1.0 / eps
+    state_coeffs = State{M}(coeffs)
+    state_ints = State{K}(ints)
+    
+    # Safely build the D-dimensional inverse velocity vectors
+    # e.g., if dimension 1 is x-velocity, it makes SVector(1/v, 0). If dimension 2, SVector(0, 1/v)
+    inv_speeds = ntuple(Val(K)) do k
+        Space{D}(ntuple(d -> d == dims[k] ? 1.0 / speeds[k] : 0.0, Val(D)))
+    end
+    inv_speeds_sv = SVector{K, Space{D}}(inv_speeds)
+    
+    return RelaxationSourceTerm{D, M, K}(km, eps, inv_eps, state_coeffs, inv_speeds_sv, state_ints)
+end
+
+function NonLocalRelaxationSourceTerm(
+    km::Kin2Macro{M}, eps::Float64, coeffs::NTuple{M, Float64}, 
+    speeds::NTuple{K, Float64}, int_factor::Float64, ::Val{D}
+) where {D, M, K}
+    
+    inv_eps = 1.0 / eps
+    state_coeffs = State{M}(coeffs)
+    
+    # Lagrange mapping typically acts on the primary wave direction
+    inv_speeds = ntuple(Val(K)) do k
+        Space{D}(ntuple(d -> d == 1 ? 1.0 / speeds[k] : 0.0, Val(D)))
+    end
+    inv_speeds_sv = SVector{K, Space{D}}(inv_speeds)
+    
+    # Matrix allocated as empty, must be sized later based on N
+    T_pot = Matrix{Float64}(undef, 0, M)
+    
+    return NonLocalRelaxationSourceTerm{D, M, K}(km, eps, inv_eps, state_coeffs, inv_speeds_sv, int_factor, T_pot)
+end
+
+# =========================================================================
 # LOCAL RELAXATION SOURCE TERM
 # =========================================================================
 
