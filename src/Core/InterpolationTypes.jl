@@ -217,10 +217,7 @@ struct UpwindWorkspaceCA{D, M} <: UpwindWorkspace
     dfFluxVec::Vector{Flux{D, M}} # <-- NEW MATRIX BUFFER
 end
 
-struct UpwindWorkspacePA{D} <: UpwindWorkspace
-    coeff_Vec::Vector{Space{D}}
-    cijVec::Vector{Float64}     
-end
+struct UpwindWorkspacePA{D,M} <: UpwindWorkspace end
 
 struct UpwindGradient{D, WS <: UpwindWorkspace, I <: Interpolator, Algorithm <: UpwindAlgorithm} <: GradientInterpolator
     order::Int

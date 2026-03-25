@@ -11,6 +11,14 @@ end
     # Direct component-wise multiplication per spatial column!
     return Flux{D, M}(ntuple(d -> eq.vel[d] .* U, Val(D)))
 end
+@inline function velocity(eq::LinearAdvection{D, M}, U::State{M}) where {M, D}
+    # Direct component-wise multiplication per spatial column!
+    return eq.vel
+end
+@inline function velocity(eq::LinearAdvection{D, 1}, U::State{1}) where {D}
+    # Direct component-wise multiplication per spatial column!
+    return Space{D}(ntuple(i->eq.vel[i][1],Val(D)))
+end
 
 @inline function sort_flux(f_i::State{M}, f_j::State{M}, F_i::Flux{D, M}, F_j::Flux{D, M}, dist_k::Space{D}) where {D, M}
     # Builds the arrays natively column-by-column

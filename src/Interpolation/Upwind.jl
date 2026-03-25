@@ -31,13 +31,6 @@ function ensure_capacity!(ws::UpwindWorkspaceCA, n::Int)
     end
 end
 
-function UpwindWorkspacePA{D}(max_neighbors::Int=100) where {D}
-    UpwindWorkspacePA{D}(
-        Vector{Space{D}}(undef, max_neighbors),
-        Vector{Float64}(undef, max_neighbors)
-    )
-end
-
 function ensure_capacity!(ws::UpwindWorkspaceTA, n::Int)
     if length(ws.distVec) < n
         N = n + n ÷ 4
@@ -46,10 +39,7 @@ function ensure_capacity!(ws::UpwindWorkspaceTA, n::Int)
 end
 
 function ensure_capacity!(ws::UpwindWorkspacePA, n::Int)
-    if length(ws.coeff_Vec) < n
-        N = n + n ÷ 4
-        resize!.((ws.coeff_Vec, ws.cijVec), N)
-    end
+    return
 end
 
 # =========================================================================
@@ -78,7 +68,7 @@ function UpwindGradient(order, dimension, M; numericalFlux::NumericalFluxFunctio
         error("Algorithm type $algType not fully configured for workspace selection.")
     end
     n_threads = Threads.nthreads()
-    workspaces = [WS_eltype{dimension, M}(100) for _ in 1:n_threads] 
+    workspaces = [WS_eltype{dimension, M}() for _ in 1:n_threads] 
 
     interpolator = Interpolator{dimension, order, 1}()
     I = typeof(interpolator)
@@ -160,24 +150,23 @@ function (upwind::UpwindGradient{D, <:UpwindWorkspaceCA{D, M}, <:Any, ClassicAlg
     
     return 2.0 * div
 end
-
 """
 Functor for TiwariAlgorithm. (Restricted to Scalar PDEs)
 """
-function (upwind::UpwindGradient{D, <:UpwindWorkspaceTA{D, SVector{1, Float64}}, <:Any, TiwariAlgorithm})(
-    eq::PDE,
+function (upwind::UpwindGradient{D, <:UpwindWorkspaceTA{D, 1}, <:Any, TiwariAlgorithm})(
+    eq,
     i::Int,                         
-    f_i::SVector{1, Float64},             
+    f_i::State{1},             
     nb_slice::UnitRange{Int},       
     pg::ParticleGrid{D},             
-    f_neighbors::AbstractVector{SVector{1, Float64}},    
-    df_neighbors::AbstractVector{SVector{1, Float64}},   
-) where {D, PDE <: ScalarHyperbolicPDE}
+    f_neighbors::AbstractVector{State{1}},    
+    df_neighbors::AbstractVector{State{1}}   
+) where {D}
     
-    # f_i[1] strips the scalar from the SVector to feed the velocity function
-    vel = D == 1 ? SVector{1,Float64}(velocity(eq, f_i[1])) : SVector{D,Float64}(velocity(eq, f_i[1])...)
+    # Extract the velocity vector uniformly into Space{D}
+    vel = velocity(eq, f_i)
     
-    thread_idx = mod1(Threads.threadid(),Threads.nthreads())
+    thread_idx = mod1(Threads.threadid(), Threads.nthreads())
     ws = upwind.workspaces[thread_idx] 
     interp = upwind.interpolator
 
@@ -185,75 +174,74 @@ function (upwind::UpwindGradient{D, <:UpwindWorkspaceTA{D, SVector{1, Float64}},
     w_all_full = get_weights(pg) 
 
     num_nb = length(nb_slice)
-    if num_nb < upwind.order; return zero(SVector{1, Float64}); end
+    if num_nb < upwind.order; return State{1}(0.0); end
     
-    scale = D == 1 ? SVector(pg.meta.dx[1]) : pg.meta.dx
     ensure_capacity!(ws, num_nb) 
     
     distVec = ws.distVec
-    dfVec = ws.dfVec
-    wVec  = ws.wVec 
-
-    div = zero(SVector{1, Float64})
+    dfVec   = ws.dfVec
+    wVec    = ws.wVec 
+    scale   = pg.meta.dx
     
-    for d in 1:D
+    # 1. Unroll over spatial dimensions natively
+    div_tuple = ntuple(Val(D)) do d
         stencil_size = 0 
         
+        # 2. Build the upwind-only stencil for this dimension
         @inbounds for global_idx in nb_slice
             dist_k = dist_all_full[global_idx]
             
             if (vel[d] * dist_k[d] <= 0.0) 
                 stencil_size += 1
                 distVec[stencil_size] = dist_k
-                dfVec[stencil_size] = df_neighbors[global_idx] 
-                wVec[stencil_size]  = w_all_full[global_idx]
+                dfVec[stencil_size]   = df_neighbors[global_idx] 
+                wVec[stencil_size]    = w_all_full[global_idx]
             end
         end
 
+        # 3. Interpolate the spatial derivative and multiply by dimension velocity
         if stencil_size >= upwind.order
+            scale_d = scale[d]
             if upwind.order == 1
-                res = interp(1:stencil_size, distVec, wVec, dfVec; scale = scale[d])
-                dF_dx = SVector{1, Float64}(res[d, 1])
+                res = interp(1:stencil_size, distVec, wVec, dfVec; scale = scale_d)
+                dF_dx = State{1}(res[d, 1])
             else
-                res_tuple = interp(1:stencil_size, distVec, wVec, dfVec; scale = scale[d])
-                dF_dx = SVector{1, Float64}(res_tuple[1][d, 1])
+                res_tuple = interp(1:stencil_size, distVec, wVec, dfVec; scale = scale_d)
+                dF_dx = State{1}(res_tuple[1][d, 1])
             end
-            div += dF_dx * vel[d]
+            return dF_dx * vel[d]
+        else
+            return State{1}(0.0)
         end
     end
 
-    return div 
+    # Return the aggregated divergence sum
+    return sum(div_tuple) 
 end
-
 """
 Functor for PraveenAlgorithm. (Restricted to Scalar PDEs in 2D)
 """
 function (upwind::UpwindGradient{2, <:UpwindWorkspacePA{2}, <:Any, PraveenAlgorithm})(
-    eq::PDE,
+    eq,
     i::Int,                         
-    f_i::SVector{1, Float64},                  
+    f_i::State{1},                  
     nb_slice::UnitRange{Int},       
     pg::ParticleGrid{2},             
-    f_neighbors::AbstractVector{SVector{1, Float64}},    
-    df_neighbors::AbstractVector{SVector{1, Float64}}    
-) where {PDE <: ScalarHyperbolicPDE}
-    
-    vel = SVector{2,Float64}(velocity(eq, f_i[1]))
-    
-    thread_idx = mod1(Threads.threadid(),Threads.nthreads())
-    ws = upwind.workspaces[thread_idx]
+    f_neighbors::AbstractVector{State{1}},    
+    df_neighbors::AbstractVector{State{1}}    
+)
+    # Extract 2D Velocity
+    vel = Space{2}(velocity(eq, f_i))
 
     dist_all_full = get_distances(pg)
     w_all_full = get_weights(pg)
 
     num_nb = length(nb_slice)
-    if num_nb < 3; return zero(SVector{1, Float64}); end 
+    if num_nb < 3; return State{1}(0.0); end 
     
     scale = min(pg.meta.dx[1], pg.meta.dx[2])
-    if scale < 1e-14; return zero(SVector{1, Float64}); end
+    if scale < 1e-14; return State{1}(0.0); end
     invL = 1.0 / scale
-    
-    ensure_capacity!(ws, num_nb) 
 
     N_s = @SMatrix zeros(Float64, 2, 2)
     
@@ -263,12 +251,12 @@ function (upwind::UpwindGradient{2, <:UpwindWorkspacePA{2}, <:Any, PraveenAlgori
         N_s += w_k * (dist_s * dist_s')
     end
     
-    if abs(det(N_s)) < 1e-14; return zero(SVector{1, Float64}); end
+    if abs(det(N_s)) < 1e-14; return State{1}(0.0); end
 
-    div = zero(SVector{1, Float64})
+    div = State{1}(0.0)
 
     @inbounds for global_idx in nb_slice
-        w_k  = w_all_full[global_idx] 
+        w_k    = w_all_full[global_idx] 
         dist_k = dist_all_full[global_idx] 
        
         b_s = w_k * dist_k * invL

@@ -36,7 +36,7 @@ function main()
         "timestepper" => "RK3",
         "main_gradient" => "Upwind",
         "order" => 1,
-        "upwind_alg_2d" => "Classic",
+        "upwind_alg_2d" => "Praveen",
         "main_flux" => "Rusanov",
         "remove_ghosts" => true
         #"relax_velocities" => [[ (2.0, 0.), (-2., 0.), (0., -2.), (0., 2.) ]], "relax_epsilon" => 1e-6, "save_relax" => false,

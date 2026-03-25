@@ -29,7 +29,7 @@ abstract type NCHyperbolicPDESystem{D, M} <: HyperbolicPDESystem{D, M} end
 
 const DiagonalHyperbolicSystem{M, D} = NTuple{M, <: ScalarHyperbolicPDE{D}}
 
-struct LinearAdvection{D, M} <: HyperbolicPDESystem{D, M}
+struct LinearAdvection{D, M} <: HyperbolicPDE{D, M}
     vel::Flux{D, M}
 end
 
