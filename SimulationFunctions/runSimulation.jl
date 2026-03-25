@@ -25,17 +25,30 @@ end
 # Inside them, all types (method, eq, pg) are strictly known, ensuring C-speed.
 # ==============================================================================
 
+# Tiny, type-stable dispatch helpers to strip 1D SVectors into raw floats
+@inline _unwrap(v::SVector{1, Float64}) = v[1]
+@inline _unwrap(v) = v # Fallback for D>1 or M>1 (passes them through unchanged)
+
 @noinline function _execute_analytic_sim(IC, eq, grid_analytic, tmax, snapshots, run_params)
     ts = tmax > 0 ? collect(0.0:(tmax/snapshots):tmax) : [0.0]
-    xs = grid_analytic.positions
-    us = [[IC(p, t, eq, grid_analytic) for p in xs] for t in ts]
+    
+    # Original raw positions (Space{D})
+    raw_xs = grid_analytic.core.positions
+    
+    # Unwrap positions for saving (Space{1} -> Float64)
+    xs_saved = [_unwrap(p) for p in raw_xs]
+    
+    # Evaluate ICs using raw positions, but unwrap the resulting State{M} for saving
+    us = [[_unwrap(IC(p, t, eq, grid_analytic)) for p in raw_xs] for t in ts]
 
-    sim_data = createSimData([xs for _ in ts], us, ts, run_params)
+    # Duplicate the positions array for each timestep to match the structure
+    sim_data = createSimData([xs_saved for _ in ts], us, ts, run_params)
     sim_data.stats["time"] = 0.0
+    
     return sim_data
 end
 
-@noinline function _execute_explicit_sim!(method, eq, pg, settings, run_params, dimension, snapshots, remove_ghosts, M_components)
+@noinline function _execute_explicit_sim!(IC, method, eq, pg, settings, run_params, dimension, snapshots, remove_ghosts, M_components)
     xs_svector, us_svector, ts_full, k_step, elapsed_time = mainTimeIntegrator!(method, eq, pg, settings; snapshots = snapshots, remove_ghosts = remove_ghosts)
     
     @info "Explicit Simulation (D=$dimension) finished in $(round(elapsed_time, digits=2)) seconds."
@@ -83,7 +96,7 @@ end
     sim_data_result = createSimData(xs_final, us_final, ts, run_params)
     sim_data_result.stats["time"] = elapsed_time
     sim_data_result.stats["k_step"] = k_step
-    
+    #calculateAllStats!(sim_data_result, (x,t) -> IC(x,t,eq,pg); discontinuity_points_func = t -> get_discontinuity_points(IC, eq, t, pg), quad_tol = 10e-9, dierckx_k = 4)
     return sim_data_result
 end
 
@@ -284,11 +297,15 @@ function runSimulation(params::ParamDictType)::Union{AbstractSimData, Nothing}
         if !is_kinetic && (isnothing(timestepper_name) || timestepper_name == "Analytic")
             @info "  Computing analytical solution for a D=$dimension PDE..."
             local grid_analytic
+            
+            # Fix: Use a dummy interaction range > 0 (e.g., 1.0) to prevent division by zero in GlobalBins
+            dummy_interp = 1.0 
+            
             if dimension == 1
-                grid_analytic = createParticleGrid(Val(1), xmin, xmax, run_params["N"] , bc, 0.; rng = MersenneTwister(1))
+                grid_analytic = createParticleGrid((xmin,), (xmax,), (run_params["N"],) , bc, dummy_interp; rng = MersenneTwister(1))
             else 
                 Nx, Ny = haskey(run_params, "N") ? (run_params["N"], run_params["N"]) : (run_params["Nx"], run_params["Ny"])
-                grid_analytic = createParticleGrid(Val(1), xmin, xmax, run_params["ymin"], run_params["ymax"], Nx, Ny, bc, 0.)
+                grid_analytic = createParticleGrid((xmin, run_params["ymin"]), (xmax, run_params["ymax"]), (Nx, Ny), bc, dummy_interp)
             end
             return _execute_analytic_sim(IC, eq, grid_analytic, tmax, snapshots, run_params)
         end
@@ -418,7 +435,7 @@ function runSimulation(params::ParamDictType)::Union{AbstractSimData, Nothing}
         end
         
         MainGrad = if main_grad_name == "MUSCL"
-            MUSCL(order-1, dimension; numericalFlux = MainFlux, limiter = limiter, mood = mood_fun2)
+            MUSCL(dimension, N_macro_vars, order-1; numericalFlux = MainFlux, limiter = limiter, mood = mood_fun2)
         elseif main_grad_name == "Upwind"
             UpwindGradient(order, dimension, N_macro_vars; numericalFlux=MainFlux, algType=upwind_alg_2d)
         elseif main_grad_name == "Central"
@@ -461,7 +478,7 @@ function runSimulation(params::ParamDictType)::Union{AbstractSimData, Nothing}
             # Note: Ensure your setInitialConditions! is updated to write SVectors!
             setInitialConditions!(pg, eq, IC)
             
-            return _execute_explicit_sim!(method, eq, pg, settings, run_params, dimension, snapshots, remove_ghosts, M_components)
+            return _execute_explicit_sim!(IC,method, eq, pg, settings, run_params, dimension, snapshots, remove_ghosts, M_components)
         else
             error("Kinetic / IMEX simulations are temporarily disabled for refactoring.")
         end

@@ -9,19 +9,19 @@ end
 sim_config_burgers = SimulationConfig(
     runSimulation,
     ParamDict(
-        "tmax" => 10., "N" => 200, "xmin" => -5.0, "xmax" => 5.0,
-        "dt" => .01, "snapshots" => 25, "interp_alpha" => 1.0,
+        "tmax" => 10., "N" => 2000, "xmin" => -5.0, "xmax" => 5.0,
+        "CFL" => .2, "snapshots" => 25, "interp_alpha" => 1.0,
         "interp_range" => 3.5, "remove_ghosts" => false,
-        "init_func" => "riemann",
-        #"init_params" => (1., 0., 1.),
+        "init_func" => "gauss",
+        "init_params" => (1., 0., 1.),
         #"init_params" => (0.0, 1.0, -2., 2.),#(0., 1., -2.,2.),#(0., 1., -4., -2.), #(0.,1.,-2,2.),
-        "init_params" => (1., 0., -2.),
+        #"init_params" => (1., 0., -2.),
         #"init_params" => (2., 0., -2., .1),
         "randomness_factor" => 0.,
         "SEED" => 10, "sim_function" => (:const, "runSimulation"),
-        "bc" => :fixed_dirichlet, "weight_function" => "exponential",
-        "order" => 1, "PDE" => "burgers", "PDE_params" => 1., "merge_factor" => .3,
-        "grid_mover" => "physical", # "grid_mover_func" => grid_velocity, "grid_mover_params" => Tuple([]),
+        "bc" => :periodic, "weight_function" => "exponential",
+        "order" => 1, "PDE" => "linear", "PDE_params" => ((1.,),), "merge_factor" => .3,
+        "grid_mover" => "none", # "grid_mover_func" => grid_velocity, "grid_mover_params" => Tuple([]),
     ),
 
     MethodDict(
@@ -548,7 +548,8 @@ sim_config_burgers = SimulationConfig(
 
     ),
     #["ARS233MUSCL2","ARS233MUSCL3","ARS233MUSCL4","ARS233MUSCL5"],
-    #["RK4MUSCL2","RK4MUSCL3","RK4MUSCL4","RK4MUSCL5"]
+    #
+    ["RK4MUSCL2","RK4MUSCL3","RK4MUSCL4","RK4MUSCL5"]
     #["RK4MUSCL2MOOD","RK4MUSCL3MOOD","RK4MUSCL4MOOD","RK4MUSCL5MOOD"]
     #["ARS233MUSCL2MOOD","ARS233MUSCL3MOOD","ARS233MUSCL4MOOD","ARS233MUSCL5MOOD"]
     #"RK4MUSCL5"
@@ -567,7 +568,7 @@ sim_config_burgers = SimulationConfig(
     #["EulerUpwind", "Analytical Solution"]
     #["EulerUpwind","Analytical Solution","RK2MUSCL2(VK)","RK2MUSCL2"]
     #["Analytical Solution", "ARS233MUSCL2","ARS233MUSCL2MOOD", "ARS233MUSCL2(VK)", "ARS233Upwind"]
-    ["ARS233Upwind","Analytical Solution"]
+    #["ARS233Upwind","Analytical Solution"]
     #"RK2WENO"
     #["RK2MUSCL2", "RK2Upwind", "RK2MUSCL2MOOD", "RK2MUSCL2(minmod)", "RK2MUSCL2(VK)"]
 );

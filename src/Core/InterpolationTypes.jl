@@ -44,13 +44,6 @@ abstract type GradientInterpolator end
 struct NoFallbackGrad <: GradientInterpolator end
 
 ## ------------------------------- MUSCL -------------------------------
-abstract type MUSCLORDER end
-struct MUSCLORDER0 <: MUSCLORDER end
-struct MUSCLORDER1 <: MUSCLORDER end
-struct MUSCLORDER2 <: MUSCLORDER end
-struct MUSCLORDER3 <: MUSCLORDER end
-struct MUSCLORDER4 <: MUSCLORDER end
-
 abstract type AbstractSlopeLimiter end
 abstract type RealSlopeLimiter <: AbstractSlopeLimiter end
 struct BarthJespersenLimiter <: RealSlopeLimiter end
@@ -59,138 +52,24 @@ struct SuperbeeLimiter <: RealSlopeLimiter end
 struct MinmodLimiter <: RealSlopeLimiter end
 struct NoLimiter <: AbstractSlopeLimiter end
 
-abstract type MUSCLWorkspace end
-
-# --- NEW: 1D Workspaces split by order ---
-abstract type MUSCLWorkspace1D <: MUSCLWorkspace end
-
-# 1D Workspace for Order 0
-struct MUSCLWorkspace1D0O <: MUSCLWorkspace1D
-    # Only stores geometric coefficients for divergence
-    alfaij_bars::Vector{Float64} 
-end
-
-"""
-Workspace for 1D, 1st/2nd Order MUSCL.
-Stores 1st/2nd order coefficients and derivatives.
-(O1 and O2 are combined, as O1 slope limiting (MOOD) needs curvature).
-"""
-struct MUSCLWorkspace1D1O <: MUSCLWorkspace1D
-    # --- FLATTENED per-interaction coefficient storage ---
-    alfaij_bars::Vector{Float64} # for 1st-order slope
-    betaijs::Vector{Float64}     # for 2nd-order curve
-
-    # --- PER-PARTICLE derivative storage (already flat) ---
-    slopes::Vector{Float64}
-    curves_xx::Vector{Float64}
-end
-
-"""
-Workspace for 1D, 1st/2nd Order MUSCL.
-Stores 1st/2nd order coefficients and derivatives.
-(O1 and O2 are combined, as O1 slope limiting (MOOD) needs curvature).
-"""
-struct MUSCLWorkspace1D2O <: MUSCLWorkspace1D
-    # --- FLATTENED per-interaction coefficient storage ---
-    alfaij_bars::Vector{Float64} # for 1st-order slope
-    betaijs::Vector{Float64}     # for 2nd-order curve
-
-    # --- PER-PARTICLE derivative storage (already flat) ---
-    slopes::Vector{Float64}
-    curves_xx::Vector{Float64}
-end
-
-"""
-Workspace for 1D, 3rd Order MUSCL.
-Includes thread-local buffers for stable QR decomposition.
-"""
-struct MUSCLWorkspace1D3O <: MUSCLWorkspace1D
-    # --- Coeffs ---
-    alfaijs::Vector{Float64}     # for d3 [cite: 9]
-    alfaij_bars::Vector{Float64} # for d1 [cite: 9]
-    betaijs::Vector{Float64}     # for d2 [cite: 9]
+struct MUSCLWorkspace{D, M, B_LEN}
+    distVec::Vector{Space{D}}
+    wVec::Vector{Float64}
+    dfVec::Vector{State{M}}
+    dfFluxVec::Vector{Flux{D, M}}
     
-    # --- Derivatives ---
-    slopes::Vector{Float64}
-    curves_xx::Vector{Float64}
-    d3fdx3::Vector{Float64}
-
-end 
-
-"""
-Workspace for 1D, 4th Order MUSCL.
-"""
-struct MUSCLWorkspace1D4O <: MUSCLWorkspace1D
-    # --- Coeffs ---
-    alfaijs::Vector{Float64}     # for d3
-    alfaij_bars::Vector{Float64} # for d1
-    betaijs::Vector{Float64}     # for d2
-    gammaijs::Vector{Float64}    # for d4
-    
-    # --- Derivatives ---
-    slopes::Vector{Float64}
-    curves_xx::Vector{Float64}
-    d3fdx3::Vector{Float64}
-    d4fdx4::Vector{Float64} # Field for 4th derivative
-
-
+    # The ultimate unified storage: 
+    # Holds ALL derivatives (slopes, curves, etc.) in a single, strictly-typed SVector per particle!
+    gradients::Vector{SVector{B_LEN, State{M}}} 
 end
 
-# --- NEW: 2D Workspaces split by order ---
-abstract type MUSCLWorkspace2D <: MUSCLWorkspace end
 
-# 2D Workspace for Order 0
-struct MUSCLWorkspace2D0O <: MUSCLWorkspace2D
-    # Only stores geometric coefficients for divergence
-    alfaijs::Vector{Float64}
-    betaijs::Vector{Float64}
-end
-
-"""
-Workspace for 2D, 1st Order MUSCL.
-Contains flat buffers for coefficients and per-particle slope storage.
-"""
-struct MUSCLWorkspace2D1O <: MUSCLWorkspace2D
-    # --- FLATTENED per-interaction coefficient storage ---
-    alfaijs::Vector{Float64}
-    betaijs::Vector{Float64}
-
-    # --- PER-PARTICLE slope storage (already flat) ---
-    slopes_x::Vector{Float64}
-    
-    slopes_y::Vector{Float64}
-
-end
-
-"""
-Workspace for 2D, 2nd Order MUSCL.
-Contains extended flat buffers for coefficients, per-particle derivative storage,
-and a temporary matrix buffer for the pseudo-inverse calculation.
-"""
-struct MUSCLWorkspace2D2O <: MUSCLWorkspace2D
-    # --- FLATTENED per-interaction coefficient storage ---
-    alfaijs::Vector{Float64}     # for fx
-    betaijs::Vector{Float64}     # for fy
-    alfaij_bars::Vector{Float64} # for fxx
-    betaij_bars::Vector{Float64} # for fyy
-    gammaijs::Vector{Float64}    # for fxy
-
-    # --- PER-PARTICLE derivative storage (already flat) ---
-    slopes_x::Vector{Float64}
-    slopes_y::Vector{Float64}
-    curves_xx::Vector{Float64} 
-    curves_yy::Vector{Float64} 
-    curves_xy::Vector{Float64} 
-
-end
-
-struct MUSCL{D,ORDER<:MUSCLORDER, L<:AbstractSlopeLimiter, NFF <: NumericalFluxFunction, WS<:MUSCLWorkspace, M<:MOODCriterion} <: GradientInterpolator
-    order::ORDER
+struct MUSCL{D, M, B_LEN, ORDER, I <: Interpolator, L <: AbstractSlopeLimiter, NF, MOOD} <: GradientInterpolator
+    interpolator::I
     limiter::L
-    res::Vector{Float64}
-    numericalFlux::NFF
-    workspace::WS
-    mood::M
+    numericalFlux::NF
+    mood::MOOD
+    workspaces::Vector{MUSCLWorkspace{D, M, B_LEN}}
 end
 
 ## ------------------------------- Upwind -------------------------------

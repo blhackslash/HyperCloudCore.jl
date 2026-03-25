@@ -23,22 +23,22 @@ function main()
         #"init_params" => ((1.,1.),(0.,0.),(-2.,-2.),(1.,1.)),
         #"init_params" => (1.0, (0.0, 0.0), 1.5), # (amplitude, (centerX, centerY), width)
         #"init_params" => (0.,1.,-2.,2.,-2.,2.),
-        "randomness_factor" => (0.2, 0.2), # (x_rand_factor, y_rand_factor)
+        "randomness_factor" => (0., 0.), # (x_rand_factor, y_rand_factor)
         "SEED_value" => 42,
         "PDE" => "linear",
         "PDE_params" => ((.5,),(1.,)), # 2D velocity vector (vx, vy)
         "bc" => :outflow,
         "sim_function" => "runSimulation",
         "weight_function" => "exponential",
-        #"limiter" => "VK",
+        "limiter" => "VK",
 
         # --- Method-Specific Parameters for "RK4-MUSCL2-2D" ---
-        "timestepper" => "RK3",
-        "main_gradient" => "Upwind",
-        "order" => 1,
+        "timestepper" => "RK2",
+        "main_gradient" => "MUSCL",
+        "order" => 2,
         "upwind_alg_2d" => "Praveen",
         "main_flux" => "Rusanov",
-        "remove_ghosts" => true
+        "remove_ghosts" => false
         #"relax_velocities" => [[ (2.0, 0.), (-2., 0.), (0., -2.), (0., 2.) ]], "relax_epsilon" => 1e-6, "save_relax" => false,
         #"MOOD" => "U2", "delta_relax" => 0., "fallback_gradient" => "Upwind", "fallback_flux" => "Rusanov",
         #"mood" => "none", # No MOOD for this run
@@ -47,7 +47,7 @@ function main()
     # params = ParamDict(
     #     # --- Shared Parameters ---
     #     "tmax" => 5.,
-    #     "N" => 200,
+    #     "N" => 2000,
         
     #     "xmin" => -5.0,
     #     "xmax" => 5.0,
@@ -62,17 +62,17 @@ function main()
     #     #"init_params" => (0.,1.,-2.,2.),
     #     "randomness_factor" => 0.0, # (x_rand_factor, y_rand_factor)
     #     "SEED_value" => 42,
-    #     "PDE" => "linear", "PDE_params" => ((1.,.5),), #"merge_factor" => .3,
+    #     "PDE" => "linear", "PDE_params" => ((1.,.5,),), #"merge_factor" => .3,
     #     "weight_function" => "exponential",
     #     "grid_mover" => "none",
-    #     "bc" => :outflow,
+    #     "bc" => :fixed_dirichlet,
     #     "sim_function" => "runSimulation",
 
     #     # --- Method-Specific Parameters for "RK4-MUSCL2-2D" ---
-    #     "timestepper" => "RalstonRK2",
+    #     "timestepper" => "RK2",
     #     #"relax_velocities" => [[1.,-1.]],  "relax_epsilon" => 1e-6, "save_relax" => false,
-    #     "main_gradient" => "Upwind",
-    #     "order" =>1,
+    #     "main_gradient" => "MUSCL",
+    #     "order" =>2,
     #     "main_flux" => "Rusanov",
     #     "remove_ghosts" => false
     #     #"MOOD" => "U2", "delta_relax" => 0., "fallback_gradient" => "Upwind", "fallback_flux" => "Rusanov",
@@ -115,4 +115,4 @@ sim_data, test_config = main()
 #show1DSolutionFig(test_config)
 #scene_options = Dict{String, Any}("line_vector" => (1.,0.), "deviation" => 2)
 #show2DCutFig(test_config;scene_options = scene_options)
-#show2DSolutionFig(test_config)
+show2DSolutionFig(test_config)

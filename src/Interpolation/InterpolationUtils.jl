@@ -1,157 +1,167 @@
 # =========================================================================
-# BASIS BUILDERS (For Higher Order Interpolations)
+# BASIS BUILDERS & MLS METADATA
 # =========================================================================
 
-# 1D: [x, x^2/2]
-@inline build_o2_basis(d::SVector{1, Float64}) = SVector(d[1], 0.5 * d[1]^2)
+# =========================================================================
+# BASIS BUILDERS & MLS METADATA
+# =========================================================================
 
-# 2D: [x, y, x^2/2, y^2/2, xy]
-@inline build_o2_basis(d::SVector{2, Float64}) = SVector(d[1], d[2], 0.5 * d[1]^2, 0.5 * d[2]^2, d[1]*d[2])
+# B_LEN Resolver (Dimension D, Order IO) -> Length of basis
+@inline basis_length(::Val{1}, ::Val{1}) = Val(1)
+@inline basis_length(::Val{2}, ::Val{1}) = Val(2)
+@inline basis_length(::Val{3}, ::Val{1}) = Val(3)
 
-# 3D: [x, y, z, x^2/2, y^2/2, z^2/2, xy, xz, yz]
-@inline build_o2_basis(d::SVector{3, Float64}) = SVector(d[1], d[2], d[3], 0.5 * d[1]^2, 0.5 * d[2]^2, 0.5 * d[3]^2, d[1]*d[2], d[1]*d[3], d[2]*d[3])
+@inline basis_length(::Val{1}, ::Val{2}) = Val(2)
+@inline basis_length(::Val{2}, ::Val{2}) = Val(5)
+@inline basis_length(::Val{3}, ::Val{2}) = Val(9)
+
+@inline basis_length(::Val{1}, ::Val{3}) = Val(3)
+@inline basis_length(::Val{2}, ::Val{3}) = Val(9)
+@inline basis_length(::Val{3}, ::Val{3}) = Val(19)
+
+@inline basis_length(::Val{1}, ::Val{4}) = Val(4)
+@inline basis_length(::Val{1}, ::Val{5}) = Val(5)
+
 
 # =========================================================================
-# MATRIX-VECTORIZED INTERPOLATOR DISPATCH (Stateless)
+# BASIS VECTOR EVALUATORS
+# =========================================================================
+# Evaluates the polynomial basis natively.
+
+# --- Order 1 ---
+@inline build_basis(::Val{1}, d::SVector{1, Float64}) = SVector(d[1])
+@inline build_basis(::Val{1}, d::SVector{2, Float64}) = SVector(d[1], d[2])
+@inline build_basis(::Val{1}, d::SVector{3, Float64}) = SVector(d[1], d[2], d[3])
+
+# --- Order 2 ---
+@inline build_basis(::Val{2}, d::SVector{1, Float64}) = SVector(d[1], 0.5*d[1]^2)
+@inline build_basis(::Val{2}, d::SVector{2, Float64}) = SVector(d[1], d[2], 0.5*d[1]^2, 0.5*d[2]^2, d[1]*d[2])
+@inline build_basis(::Val{2}, d::SVector{3, Float64}) = SVector(
+    d[1], d[2], d[3], 
+    0.5*d[1]^2, 0.5*d[2]^2, 0.5*d[3]^2, d[1]*d[2], d[1]*d[3], d[2]*d[3]
+)
+
+# --- Order 3 ---
+@inline build_basis(::Val{3}, d::SVector{1, Float64}) = SVector(d[1], 0.5*d[1]^2, (1.0/6.0)*d[1]^3)
+@inline build_basis(::Val{3}, d::SVector{2, Float64}) = SVector(
+    d[1], d[2], 
+    0.5*d[1]^2, 0.5*d[2]^2, d[1]*d[2], 
+    (1.0/6.0)*d[1]^3, (1.0/6.0)*d[2]^3, 0.5*d[1]^2*d[2], 0.5*d[1]*d[2]^2
+)
+@inline build_basis(::Val{3}, d::SVector{3, Float64}) = SVector(
+    d[1], d[2], d[3], 
+    0.5*d[1]^2, 0.5*d[2]^2, 0.5*d[3]^2, d[1]*d[2], d[1]*d[3], d[2]*d[3],
+    (1.0/6.0)*d[1]^3, (1.0/6.0)*d[2]^3, (1.0/6.0)*d[3]^3, 
+    0.5*d[1]^2*d[2], 0.5*d[1]^2*d[3], 0.5*d[1]*d[2]^2, 0.5*d[2]^2*d[3], 0.5*d[1]*d[3]^2, 0.5*d[2]*d[3]^2, 
+    d[1]*d[2]*d[3]
+)
+
+# --- Order 4 & 5 (1D Only) ---
+@inline build_basis(::Val{4}, d::SVector{1, Float64}) = SVector(d[1], 0.5*d[1]^2, (1.0/6.0)*d[1]^3, (1.0/24.0)*d[1]^4)
+@inline build_basis(::Val{5}, d::SVector{1, Float64}) = SVector(d[1], 0.5*d[1]^2, (1.0/6.0)*d[1]^3, (1.0/24.0)*d[1]^4, (1.0/120.0)*d[1]^5)
+
+
+# =========================================================================
+# PHYSICAL SCALE FACTORS
+# =========================================================================
+# Matches the basis terms to convert the scaled c_s back into true physical derivatives
+
+# --- Order 1 ---
+@inline build_scale_factors(::Val{1}, ::Val{1}, invL) = SVector(invL)
+@inline build_scale_factors(::Val{2}, ::Val{1}, invL) = SVector(invL, invL)
+@inline build_scale_factors(::Val{3}, ::Val{1}, invL) = SVector(invL, invL, invL)
+
+# --- Order 2 ---
+@inline build_scale_factors(::Val{1}, ::Val{2}, invL) = SVector(invL, invL^2)
+@inline build_scale_factors(::Val{2}, ::Val{2}, invL) = SVector(invL, invL, invL^2, invL^2, invL^2)
+@inline build_scale_factors(::Val{3}, ::Val{2}, invL) = SVector(invL, invL, invL, invL^2, invL^2, invL^2, invL^2, invL^2, invL^2)
+
+# --- Order 3 ---
+@inline build_scale_factors(::Val{1}, ::Val{3}, invL) = SVector(invL, invL^2, invL^3)
+@inline build_scale_factors(::Val{2}, ::Val{3}, invL) = SVector(invL, invL, invL^2, invL^2, invL^2, invL^3, invL^3, invL^3, invL^3)
+@inline build_scale_factors(::Val{3}, ::Val{3}, invL) = SVector(
+    invL, invL, invL, 
+    invL^2, invL^2, invL^2, invL^2, invL^2, invL^2, 
+    invL^3, invL^3, invL^3, invL^3, invL^3, invL^3, invL^3, invL^3, invL^3, invL^3
+)
+
+# --- Order 4 & 5 (1D Only) ---
+@inline build_scale_factors(::Val{1}, ::Val{4}, invL) = SVector(invL, invL^2, invL^3, invL^4)
+@inline build_scale_factors(::Val{1}, ::Val{5}, invL) = SVector(invL, invL^2, invL^3, invL^4, invL^5)
+# =========================================================================
+# UPWIND MATRIX-VECTORIZED DISPATCH (Stateless)
 # =========================================================================
 
 function (interp::Interpolator{D, IO, DO})(
-    num_nb::Int,
-    dists::AbstractVector{Space{D}},
-    weights::AbstractVector{Float64},
-    dfFluxVec::AbstractVector{Flux{D, M}},
-    dfVec_workspace::AbstractVector{State{M}};
+    num_nb::Int, dists::AbstractVector{Space{D}}, weights::AbstractVector{Float64},
+    dfFluxVec::AbstractVector{Flux{D, M}}, dfVec_workspace::AbstractVector{State{M}};
     scale::Space{D}
 ) where {D, IO, DO, M}
     
-    # LLVM unrolls this D-loop at compile time
     div_tuple = ntuple(Val(D)) do d
         
-
-        # Pull the exact column natively! No 2D bounds-checking!
+        # Pull the exact directional flux column natively
         @inbounds for local_idx in 1:num_nb
             dfVec_workspace[local_idx] = dfFluxVec[local_idx][d] 
         end
         
-        scale_d = scale[d]
+        # Call the Universal Interpolator
+        res = interp(1:num_nb, dists, weights, dfVec_workspace; scale = scale[d])
         
-        # 2. Call the BASE scalar/state interpolator! 
-        if IO == 1
-            res = interp(1:num_nb, dists, weights, dfVec_workspace; scale = scale_d)
-            return State{M}(ntuple(c -> res[d, c], Val(M)))
-        else
-            res_tuple = interp(1:num_nb, dists, weights, dfVec_workspace; scale = scale_d)
-            return State{M}(ntuple(c -> res_tuple[1][d, c], Val(M)))
-        end
+        # The first `D` elements of the basis are always the linear spatial slopes!
+        # E.g., for d=1 (X-direction), res[1] is exactly dFx/dx. 
+        return res[d] 
     end
     
-    # Return the full aggregated divergence vector
     return sum(div_tuple)
 end
-
 # =========================================================================
-# ORDER 0 INTERPOLATOR (Weighted Average)
-# =========================================================================
-
-function (interp::Interpolator{D, 0, 0})(
-    nb_slice::UnitRange{Int},
-    wVec::AbstractVector{Float64},
-    fVec::AbstractVector{State{M}}
-) where {D, M}
-    
-    sum_w = 0.0
-    sum_wf = zeros(SVector{M})
-
-    @inbounds for i in nb_slice
-        w = wVec[i]
-        sum_w += w
-        sum_wf += w * fVec[i]
-    end
-
-    if abs(sum_w) < 1e-14
-        return zeros(SVector{M})
-    else
-        return sum_wf / sum_w 
-    end
-end
-
-# =========================================================================
-# ORDER 1 INTERPOLATOR (Linear MLS)
+# THE UNIVERSAL MLS INTERPOLATOR
 # =========================================================================
 
-function (interp::Interpolator{D, 1, 1})(
+function (interp::Interpolator{D, IO, 1})(
     nb_slice::UnitRange{Int},
     distVec::AbstractVector{Space{D}}, 
     wVec::AbstractVector{Float64},
     dfVec::AbstractVector{State{M}};
     scale::Float64=1.0
-) where {D, M}
+) where {D, IO, M}
     
-    invL = 1.0 / scale
+    # Resolves the matrix sizes perfectly at compile time
+    B_LEN_VAL = basis_length(Val(D), Val(IO))
     
-    N_s = @SMatrix zeros(Float64, D, D)
-    b_s = zero(SMatrix{D, M, Float64, D * M})
-
-    @inbounds for i in nb_slice
-        w = wVec[i]
-        p_s = distVec[i] * invL 
-        
-        N_s += w * (p_s * p_s') 
-        b_s += w * (p_s * dfVec[i]') # Outer product builds the block RHS
-    end
-    
-    if abs(det(N_s)) < 1e-14
-        return zero(b_s) 
-    end
-    
-    # StaticArrays solves gradients for ALL macroscopic variables at once
-    c_s = N_s \ b_s 
-    
-    # Returns an SMatrix of size (D x M)
-    return c_s * invL 
+    return _mls_solve(nb_slice, distVec, wVec, dfVec, scale, B_LEN_VAL, Val(IO), Val(D))
 end
 
-# =========================================================================
-# ORDER 2 INTERPOLATOR (Quadratic MLS)
-# =========================================================================
-
-function (interp::Interpolator{D, 2, 1})(
+@inline function _mls_solve(
     nb_slice::UnitRange{Int},
-    distVec::AbstractVector{Space{D}},
+    distVec::AbstractVector{Space{D}}, 
     wVec::AbstractVector{Float64},
-    dfVec::AbstractVector{State{M}};
-    scale::Float64=1.0
-) where {D, M}
+    dfVec::AbstractVector{State{M}},
+    scale::Float64,
+    ::Val{B_LEN}, ::Val{IO}, ::Val{D}
+) where {B_LEN, IO, D, M}
     
     invL = 1.0 / scale
-    invL2 = invL * invL
-    
-    # Compile-time resolution of basis size based on Dimension
-    B_LEN = D == 1 ? 2 : (D == 2 ? 5 : 9)
-    
-    N_s = @SMatrix zeros(Float64, B_LEN, B_LEN)
+    N_s = zero(SMatrix{B_LEN, B_LEN, Float64, B_LEN * B_LEN})
     b_s = zero(SMatrix{B_LEN, M, Float64, B_LEN * M})
 
     @inbounds for i in nb_slice
         w = wVec[i]
-        p_s = build_o2_basis(distVec[i] * invL) 
+        p_s = build_basis(Val(IO), distVec[i] * invL) 
         
-        N_s += w * (p_s * p_s')
-        b_s += w * (p_s * dfVec[i]')
+        N_s += w * (p_s * p_s') 
+        b_s += w * (p_s * dfVec[i]') 
     end
     
     if abs(det(N_s)) < 1e-14
-        return zero(SMatrix{D, M, Float64, D * M}), zero(SMatrix{B_LEN - D, M, Float64, (B_LEN - D) * M})
+        return SVector{B_LEN, State{M}}(ntuple(_ -> zero(State{M}), Val(B_LEN)))
     end
     
-    c_s = N_s \ b_s
+    c_s = N_s \ b_s 
+    scales = build_scale_factors(Val(D), Val(IO), invL)
     
-    # Slice the SMatrix to separate first derivatives from higher-order curves
-    # Row indices 1:D are the slopes. Remaining rows are curvatures.
-    slopes = c_s[SOneTo(D), :] * invL
-    curves = c_s[(D+1):B_LEN, :] * invL2
-    
-    # Both are returned as SMatrix. 
-    # slopes is size (D x M). curves is size ((B_LEN - D) x M).
-    return slopes, curves
+    # Unscale the coefficients into pure physical derivatives (slopes, curves, etc.)
+    # Returns SVector{B_LEN, State{M}}
+    return SVector{B_LEN, State{M}}(ntuple(k -> State{M}(c_s[k, :] * scales[k]), Val(B_LEN)))
 end

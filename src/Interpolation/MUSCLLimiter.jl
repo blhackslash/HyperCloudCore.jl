@@ -1,223 +1,168 @@
-function _limit_slopes(::NoLimiter, slopes, kwargs...)
-    return slopes
+# =========================================================================
+# MATHEMATICAL BRANCHLESS SIMD HELPERS
+# =========================================================================
+@inline math_max(a::Float64, b::Float64) = 0.5 * (a + b + abs(a - b))
+@inline math_min(a::Float64, b::Float64) = 0.5 * (a + b - abs(a - b))
+@inline math_max(a::AbstractVector, b::AbstractVector) = 0.5 * (a + b + abs.(a - b))
+@inline math_min(a::AbstractVector, b::AbstractVector) = 0.5 * (a + b - abs.(a - b))
+# =========================================================================
+# BASE LIMITER FUNCTIONS (Dispatched on Strategy!)
+# =========================================================================
+
+@inline _limit_slopes(::NoLimiter, raw_grad, args...) = raw_grad
+
+@inline limiter_phi(::BarthJespersenLimiter, r::Real) = math_min(1.0, Float64(r))
+
+@inline function limiter_phi(::VenkatakrishnanLimiter, r::Real)
+    # math_max cleanly replaces the `if r <= 0.0 return 0.0` branch!
+    r_pos = math_max(0.0, Float64(r)) 
+    return (r_pos^2 + 2.0 * r_pos) / (r_pos^2 + r_pos + 2.0)
 end
 
-function _limit_slopes(::RealSlopeLimiter, kwargs...)
-    error("Slope limiting not implemented for the requested order, dimension or method!")
+@inline function limiter_phi(::SuperbeeLimiter, r::Real)
+    r_f = Float64(r)
+    min1 = math_min(1.0, 2.0 * r_f)
+    min2 = math_min(2.0, r_f)
+    return math_max(0.0, math_max(min1, min2))
 end
 
-function minmod_phi(r::Real)::Float64
-    if r <= 0.0
-        return 0.0
-    else
-        return min(1.0, r)
-    end
-end
-
-function superbee_phi(r::Real)::Float64
-    if r <= 0.0
-        return 0.0
- 
-   else
-        return max(min(1.0, 2.0 * r), min(2.0, r))
-    end
-end
-
-function venkatakrishnan_psi(r::Real)::Float64
-    if r <= 0.0
-        return 0.0
-    end
-    return (r^2 + 2.0 * r) / (r^2 + r + 2.0)
+@inline function limiter_phi(::MinmodLimiter, r::Real)
+    min1 = math_min(1.0, Float64(r))
+    return math_max(0.0, min1)
 end
 
 """
-    find_closest_lr_neighbors_1D(nb_slice, dx_global, f_neighbors_global)
-
-Finds the closest neighbor to the left and right of a particle,
-using the pre-calculated flat neighbor arrays.
+Generalized local extrema limiting. Works flawlessly for 1D, 2D, and 3D, 
+and applies component-wise limiting for Systems of Equations (State{M}).
 """
-function find_closest_lr_neighbors_1D(
+function _limit_slopes(
+    strategy::Union{BarthJespersenLimiter, VenkatakrishnanLimiter},
+    raw_grad::SVector{B_LEN, State{M}},
     nb_slice::UnitRange{Int},
-    dx_global::AbstractVector,
-    f_neighbors_global::AbstractVector
-)
-    # Initialize return values
-    val_L, dist_L = 0.0, 0.0
-    val_R, dist_R = 0.0, 0.0
+    f_i::State{M},
+    f_neighbors::AbstractVector{State{M}}, 
+    pg::ParticleGrid{D},
+    distVec::AbstractVector{Space{D}}
+) where {B_LEN, M, D}
     
-    # Initialize minimum distances found so far
-    min_abs_dist_L = Inf
-    min_dist_R = Inf
+    # 1. Stack-allocated Mutable Vectors! ZERO GC allocations.
+    u_max = MVector{M, Float64}(f_i)
+    u_min = MVector{M, Float64}(f_i)
+    
+    @inbounds for local_idx in 1:length(nb_slice)
+        global_idx = nb_slice[local_idx]
+        f_j = f_neighbors[global_idx]
+        
+        # Simple, native loops. M is a type parameter, so this unrolls perfectly.
+        for m in 1:M
+            u_max[m] = max(u_max[m], f_j[m])
+            u_min[m] = min(u_min[m], f_j[m])
+        end
+    end
 
-    # Access the neighbor data directly from the flat global arrays
-    @inbounds for k in nb_slice
-        dx_ij = dx_global[k]
-
-        if dx_ij > 1e-9 # Potential right neighbor
-            if dx_ij < min_dist_R
-                min_dist_R = dx_ij
-                val_R = f_neighbors_global[k]
-                dist_R = dx_ij
+    # 2. Calculate limiting factor phi
+    phi_i = MVector{M, Float64}(undef)
+    fill!(phi_i, 1.0)
+    
+    # Pre-allocate a stack buffer for the Taylor reconstruction
+    delta_recon = MVector{M, Float64}(undef)
+    
+    @inbounds for local_idx in 1:length(nb_slice)
+        dist_k = distVec[local_idx]
+        
+        # Reconstruct difference at neighbor using ONLY the linear slopes (first D elements)
+        fill!(delta_recon, 0.0)
+        for d in 1:D
+            grad_d = raw_grad[d]
+            dist_d = dist_k[d]
+            for m in 1:M
+                delta_recon[m] += grad_d[m] * dist_d
             end
-        elseif dx_ij < -1e-9 # Potential left neighbor
-            abs_dx_ij = abs(dx_ij)
-            if abs_dx_ij < min_abs_dist_L
-                min_abs_dist_L = abs_dx_ij
-                val_L = f_neighbors_global[k]
-                dist_L = dx_ij # Keep its negative sign
+        end
+        
+        # Calculate phi component-by-component in-place
+        for m in 1:M
+            recon_m = delta_recon[m]
+            if abs(recon_m) > 1e-12
+                r = recon_m > 0.0 ? (u_max[m] - f_i[m]) / recon_m : (u_min[m] - f_i[m]) / recon_m
+                phi_j = limiter_phi(strategy, r)
+                phi_i[m] = min(phi_i[m], phi_j)
             end
         end
     end
+
+    # 3. Apply limiting factor ONLY to the linear slopes
+    # Repackages everything safely back into your strictly typed SVector
+    limited_grad = SVector{B_LEN, State{M}}(ntuple(Val(B_LEN)) do k
+        if k <= D
+            State{M}(ntuple(m -> raw_grad[k][m] * phi_i[m], Val(M)))
+        else
+            raw_grad[k]
+        end
+    end)
     
-    return val_L, dist_L, val_R, dist_R
+    return limited_grad
 end
 
-# --- 1D Limiters (matching 2D signature) ---
-
+# =========================================================================
+# 1D DIRECTIONAL LIMITERS (Minmod & Superbee)
+# =========================================================================
 """
-(1D Dispatch) Minmod/Superbee. Limits slope_x.
+(1D Exclusive) Applies Left/Right sweeping limiters component-wise.
 """
 function _limit_slopes(
     strategy::Union{SuperbeeLimiter, MinmodLimiter},
-    slope_x::Real,
+    raw_grad::SVector{B_LEN, State{M}},
     nb_slice::UnitRange{Int},
-    f_i::Real,
-    f_neighbors::AbstractVector,
-    pg::ParticleGrid1D # Dispatches on 1D grid
-)
-    dx = get_xdistance(pg)
-
-    # Find neighbors (using the existing 1D helper)
-    val_L, dist_L, val_R, dist_R = find_closest_lr_neighbors_1D(nb_slice, dx, f_neighbors) # Needs fix
-
-    # --- This logic is simplified from your helper ---
-    # We need to find the closest L/R *from the neighbor list*
-    val_L, dist_L = 0.0, 0.0
-    val_R, dist_R = 0.0, 0.0
+    f_i::State{M},
+    f_neighbors::AbstractVector{State{M}},
+    pg::ParticleGrid{1},
+    distVec::AbstractVector{Space{1}}
+) where {B_LEN, M}
+    
+    val_L, val_R = f_i, f_i
+    dist_L, dist_R = 0.0, 0.0
     min_dist_L, min_dist_R = Inf, Inf
 
-    @inbounds for k in nb_slice
-        dx_k = dx[k]
+    # Find the closest Left and Right neighbors
+    @inbounds for local_idx in 1:length(nb_slice)
+        global_idx = nb_slice[local_idx]
+        dx_k = distVec[local_idx][1]
+        
         if dx_k > 1e-9 && dx_k < min_dist_R # Right neighbor
             min_dist_R = dx_k
-            val_R = f_neighbors[k]
+            val_R = f_neighbors[global_idx]
             dist_R = dx_k
         elseif dx_k < -1e-9 && -dx_k < min_dist_L # Left neighbor
             min_dist_L = -dx_k
-            val_L = f_neighbors[k]
+            val_L = f_neighbors[global_idx]
             dist_L = dx_k
         end
     end
-    # --- End find neighbors ---
 
-    slope_L = abs(dist_L) > 1e-12 ? (f_i - val_L) / (-dist_L) : 0.0
-    slope_R = abs(dist_R) > 1e-12 ? (val_R - f_i) / dist_R  : 0.0
+    # Calculate backward and forward differences
+    slope_L = abs(dist_L) > 1e-12 ? (f_i - val_L) / (-dist_L) : zero(State{M})
+    slope_R = abs(dist_R) > 1e-12 ? (val_R - f_i) / dist_R    : zero(State{M})
 
-    local limited_slope_x
-    if slope_L * slope_R <= 0.0
-        limited_slope_x = 0.0
-    else
-        r = slope_R ≈ 0.0 ? 1.0 : slope_L / slope_R
-        phi = strategy isa SuperbeeLimiter ? superbee_phi(r) : minmod_phi(r)
-        limited_slope_x = phi * slope_R
-    end
-    
-    return limited_slope_x
-end
-
-"""
-(1D Dispatch) Barth-Jespersen/Venkatakrishnan. Limits slope_x.
-"""
-function _limit_slopes(
-    strategy::Union{BarthJespersenLimiter, VenkatakrishnanLimiter},
-    slope_x::Real,
-    nb_slice::UnitRange{Int},
-    f_i::Real,
-    f_neighbors::AbstractVector,
-    pg::ParticleGrid1D # Dispatches on 1D grid
-)
-    dx = get_xdistance(pg)
-    if isempty(nb_slice) || abs(slope_x) < 1e-12
-        return 0.0
-    end
-
-    u_max_stencil = f_i
-    u_min_stencil = f_i
-    @inbounds for k in nb_slice
-        u_max_stencil = max(u_max_stencil, f_neighbors[k])
-        u_min_stencil = min(u_min_stencil, f_neighbors[k])
-    end
-
-    phi_i = 1.0
-    @inbounds for k in nb_slice
-        dx_ij = dx[k] # 1D uses only dx
-        delta_recon = slope_x * dx_ij 
+    # Apply limiter component-by-component
+    limited_slope = State{M}(ntuple(Val(M)) do m
+        sL = slope_L[m]
+        sR = slope_R[m]
         
-        if abs(delta_recon) < 1e-12; continue; end
-        
-        r = if delta_recon > 0.0 # Overshoot
-            (u_max_stencil - f_i) / delta_recon
-        else # Undershoot
-            (u_min_stencil - f_i) / delta_recon
+        if sL * sR <= 0.0
+            return 0.0
+        else
+            r = abs(sR) < 1e-12 ? 1.0 : sL / sR
+            # Automatically dispatches to Minmod or Superbee!
+            phi = limiter_phi(strategy, r)
+            return phi * sR
         end
-        
-        phi_j = strategy isa BarthJespersenLimiter ? min(1.0, r) : venkatakrishnan_psi(r)
-        phi_i = min(phi_i, phi_j)
-    end
+    end)
     
-    limited_slope_x = slope_x * clamp(phi_i, 0.0, 1.0)
-    return limited_slope_x
-end
-
-"""
-Local slope limiting function (RealSlopeLimiter dispatch).
-Applies geometric limiting logic from the old `limit_slopes!(...)`
-"""
-function _limit_slopes(
-    strategy::Union{BarthJespersenLimiter, VenkatakrishnanLimiter},
-    slopes::NTuple{2,<:Real},
-    nb_slice::UnitRange{Int},
-    f_i::Real,
-    f_neighbors::AbstractVector, # View of neighbor f-values
-    pg::ParticleGrid2D
-)
-    dx = get_xdistance(pg)
-    dy = get_ydistance(pg)
-    slope_x = slopes[1]
-    slope_y = slopes[2]
-
-    ui = f_i
-    if slope_x^2 + slope_y^2 < 1e-12
-        return 0.0, 0.0
-    end
-
-    # Find min/max among neighbors
-    u_max = ui
-    u_min = ui
-    @inbounds for k in nb_slice
-        f_neighbor = f_neighbors[k]
-     
-        u_max = max(u_max, f_neighbor)
-        u_min = min(u_min, f_neighbor)
-    end
-
-    phi_i = 1.0
+    # Re-pack into the unified SVector. (1D Linear slope is always index 1)
+    limited_grad = SVector{B_LEN, State{M}}(ntuple(Val(B_LEN)) do k
+        k == 1 ? limited_slope : raw_grad[k]
+    end)
     
-    @inbounds for k in nb_slice
-     
-        delta_recon = slope_x * dx[k] + slope_y * dy[k]
-        
-        if abs(delta_recon) < 1e-12; continue; end
-        
-        r = delta_recon > 0.0 ? (u_max - ui) / delta_recon : (u_min - ui) / delta_recon
-        phi_j = strategy isa BarthJespersenLimiter ? min(1.0, r) : venkatakrishnan_psi(r)
-        phi_i = min(phi_i, phi_j)
-    end
-
-    phi_i = clamp(phi_i, 0.0, 1.0)
-    
-    limited_slope_x = slope_x * phi_i
-    limited_slope_y = slope_y * phi_i
-    
-    return limited_slope_x, limited_slope_y
+    return limited_grad
 end

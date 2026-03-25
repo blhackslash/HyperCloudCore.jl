@@ -410,85 +410,6 @@ function (rd::ReorderData{D})(pg::ParticleGrid{D, M, WF}) where {D, M, WF}
 end
 updateNeighbors!(pg::ParticleGrid) = pg.neighbor(pg)
 
-function (nd::NeighborData{1, WF})(pg::ParticleGrid{1, M, WF}) where {M, WF}
-    N = pg.meta.N
-    maxDist = pg.meta.range_factor * pg.meta.dx[1]
-    weightFunc = nd.weight_func
-    
-    max_nb = 0
-    total_neighbors = 0
-    for i in 1:N
-        num_nb = length(_find_neighbors_1d(pg, i, maxDist))
-        pg.neighbor.ranges[i] = (total_neighbors + 1):(total_neighbors + num_nb)
-        total_neighbors += num_nb
-        max_nb = max(max_nb, num_nb)
-    end
-    pg.neighbor.ranges[N+1] = (total_neighbors + 1):total_neighbors
-    pg.meta.max_nb = max_nb
-    
-    current_capacity = length(pg.neighbor.indices)
-    if total_neighbors > current_capacity
-        new_capacity = ceil(Int, total_neighbors * 1.25)
-        resize!(pg.neighbor.indices, new_capacity)
-        resize!(pg.neighbor.weights, new_capacity)
-        resize!(pg.neighbor.distances, new_capacity)
-    end
-
-    offset_counts = zeros(Int, N) 
-    for i in 1:N
-        neighbor_list = _find_neighbors_1d(pg, i, maxDist)
-        for j in neighbor_list
-            offset = offset_counts[i]
-            write_idx = pg.neighbor.ranges[i].start + offset
-            
-            dist_x = getDistance(pg, i, j)[1] 
-            d2 = dist_x^2
-
-            pg.neighbor.indices[write_idx] = j
-            pg.neighbor.weights[write_idx] = weightFunc(d2)
-            pg.neighbor.distances[write_idx] = SVector{1,Float64}(dist_x)
-            
-            offset_counts[i] += 1
-        end
-    end
-    determineVolumes!(pg) 
-    return nothing
-end
-
-function _find_neighbors_1d(pg::ParticleGrid1D, i::Int, maxDist::Float64)
-    N = pg.meta.N
-    positions = get_positions(pg)
-    pos_i = positions[i][1]
-    
-    neighbor_list = Vector{Int}()
-    sizehint!(neighbor_list, 2 * ceil(Int, maxDist / pg.meta.dx[1]) + 2)
-
-    if pg.meta.bc == :periodic
-        for j_offset in 1:div(N, 2)
-            j = mod1(i - j_offset, N)
-            dist = abs(getDistance(pg, i, j)[1])
-            if dist <= maxDist; push!(neighbor_list, j)
-            else; break; end
-        end
-        for j_offset in 1:div(N, 2)
-            j = mod1(i + j_offset, N)
-            dist = abs(getDistance(pg, i, j)[1])
-            if dist <= maxDist; push!(neighbor_list, j)
-            else; break; end
-        end
-    else 
-        for j in (i-1):-1:1
-            if abs(positions[j][1] - pos_i) <= maxDist; push!(neighbor_list, j)
-            else; break; end
-        end
-        for j in (i+1):N
-            if abs(positions[j][1] - pos_i) <= maxDist; push!(neighbor_list, j)
-            else; break; end
-        end
-    end
-    return neighbor_list
-end
-
 # =========================================================================
 # GLOBAL BIN BUILDING (Dispatched)
 # =========================================================================
@@ -778,21 +699,6 @@ end
 
 reorder_particles!(pg::ParticleGrid) = pg.reorder(pg)
 
-function (rd::ReorderData{1})(pg::ParticleGrid{1, M, WF}) where {M, WF}
-    N = pg.meta.N
-    range = (N + 1):length(pg.core.positions)
-    p = [sortperm(pg.core.positions[1:N]); collect(range)]
-    if issorted(p); return nothing; end
-    
-    Base.permute!(pg.core.positions, p)
-    Base.permute!(pg.core.is_boundary, p)
-    Base.permute!(pg.rhos, p)          # Native permutation!
-    Base.permute!(pg.curvatures, p)    # Native permutation!
-    Base.permute!(pg.mood_events, p)   # Native permutation!
-    
-    return nothing
-end
-
 function apply_boundary_conditions!(pg::ParticleGrid{D, M}, rhos_buffer::AbstractVector{State{M}}) where {D, M}
     bc = pg.meta.bc
     
@@ -811,38 +717,64 @@ function apply_boundary_conditions!(pg::ParticleGrid{D, M}, rhos_buffer::Abstrac
         return nothing
     end
     
-    # 3. Outflow (Zero-Gradient): Adopt the state of the closest interior neighbor
+
+# 3. Outflow (Zero-Gradient): Adopt the state of the closest interior neighbor
     if bc == :outflow
         dist_vec = get_distances(pg)
         
+        # Use int_buffer to track the "generation" of the update to prevent directional bias
+        # 0 = unresolved. 
+        status = pg.shared.int_buffer 
+        fill!(status, 0)
+        
+        # Generation 1: All interior particles are valid initial donors
         @inbounds for i in 1:pg.meta.N
-            if pg.core.is_boundary[i]
-                nb_slice = pg.neighbor.ranges[i]
-                
-                closest_j = -1
-                min_dist_sq = Inf
-                
-                # Search the local support domain for the nearest interior particle
-                for k in nb_slice
-                    j = pg.neighbor.indices[k]
+            if !pg.core.is_boundary[i]
+                status[i] = 1 
+            end
+        end
+        
+        # Symmetrically propagate the boundary condition outwards
+        for pass in 1:5 # 5 passes is enough to clear thick ghost layers
+            all_resolved = true
+            
+            @inbounds for i in 1:pg.meta.N
+                if status[i] == 0
+                    nb_slice = pg.neighbor.ranges[i]
+                    closest_j = -1
+                    min_dist_sq = Inf
                     
-                    if !pg.core.is_boundary[j] # Ensure it's an interior particle!
-                        dx = dist_vec[k]       # dx is natively a Space{D}
-                        d2 = sum(abs2, dx)     # Fast squared distance
+                    for k in nb_slice
+                        j = pg.neighbor.indices[k]
                         
-                        if d2 < min_dist_sq
-                            min_dist_sq = d2
-                            closest_j = j
+                        # A particle can ONLY copy from a donor resolved in a PREVIOUS pass!
+                        # This prevents 1-to-N loop indexing from creating directional bias.
+                        if status[j] > 0 && status[j] <= pass
+                            d2 = sum(abs2, dist_vec[k])
+                            if d2 < min_dist_sq
+                                min_dist_sq = d2
+                                closest_j = j
+                            end
                         end
                     end
+                    
+                    if closest_j != -1
+                        rhos_buffer[i] = rhos_buffer[closest_j]
+                        # Mark as resolved for the NEXT generation
+                        status[i] = pass + 1 
+                    else
+                        all_resolved = false
+                    end
                 end
-                
-                if closest_j != -1
-                    rhos_buffer[i] = rhos_buffer[closest_j]
-                else
-                    # Fallback in case the support domain is too small to see the interior
-                    rhos_buffer[i] = pg.rhos[i]
-                end
+            end
+            
+            if all_resolved; break; end
+        end
+        
+        # Ultimate fallback for completely orphaned particles (safety net)
+        @inbounds for i in 1:pg.meta.N
+            if status[i] == 0
+                rhos_buffer[i] = pg.rhos[i]
             end
         end
     end
@@ -852,19 +784,21 @@ end
 
 determineVolumes!(pg) = return
 
-function determineVolumes!(pg::ParticleGrid1D)
+function determineVolumes!(pg::ParticleGrid{1, M, WF, GM, BC}) where {M, WF, GM, BC}
     N = pg.meta.N
-
     if N == 0; return; end
+    
     positions = get_positions(pg)
     volumes = pg.core.volumes
     
-    if pg.meta.bc == :periodic
+    if BC == :periodic
+        L = pg.meta.maxs .- pg.meta.mins
         for i in 1:N
             prev_idx = mod1(i - 1, N)
             next_idx = mod1(i + 1, N)
-            deltaPosL = abs(getDistance(pg, i, prev_idx)[1])
-            deltaPosR = abs(getDistance(pg, i, next_idx)[1])
+            # Use the generalized periodic distance function
+            deltaPosL = abs(getPeriodicDistance(positions, prev_idx, i, L)[1])
+            deltaPosR = abs(getPeriodicDistance(positions, i, next_idx, L)[1])
             volumes[i] = (deltaPosL + deltaPosR) / 2.0
         end
     else
