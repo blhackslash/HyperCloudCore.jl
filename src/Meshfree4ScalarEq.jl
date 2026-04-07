@@ -12,10 +12,20 @@ using Base.Threads
 using Polyester: @batch
 
 
-include("Core/CoreTypes.jl")
-include("Grid/ParticleGrids.jl")
-include("Interpolation/Interpolations.jl")
-include("TimeStepping/TimeIntegration.jl")
+include("CoreTypes.jl")
+
+# Order important!
+include("GridTypes.jl")
+include("InterpolationTypes.jl")
+include("TimestepperTypes.jl")
+
+include("HyperbolicPDEs.jl")
+include("CoreUtils.jl")
+
+
+include("../Grid/ParticleGrids.jl")
+include("../Interpolation/Interpolations.jl")
+include("../TimeStepping/TimeIntegration.jl")
 
 # ==============================================================================
 # --- PUBLIC API EXPORTS ---
@@ -24,6 +34,9 @@ include("TimeStepping/TimeIntegration.jl")
 # 1. Geometries & State (from CoreTypes.jl)
 export Space, State, Flux, Kinetic
 export DifferentialOrder, Order0, Order1, DO0, DO1
+
+# Conversions
+export param2uvec, param2xvec, param2svec, param2fvec
 
 # 2. Physics Equations (from CoreTypes.jl)
 export HyperbolicPDE, ScalarHyperbolicPDE, HyperbolicPDESystem, NCHyperbolicPDESystem, DiagonalHyperbolicSystem
@@ -38,7 +51,7 @@ export TimeStepper, MeshfreeTimeStepper
 export initTS!, initTSBuffer!, saveData!, time_integration_loop!
 
 # 5. Core Simulation Structs (Assuming these exist in your other files)
-export ParticleGrid, SimSetting, setInitialConditions!
+export ParticleGrid, SimSetting
 
 # 6. Specific Time Steppers (Export the ones you actually use)
 export SimpleSplitting, ARS233, PRSSP3, ARS222, ARS232

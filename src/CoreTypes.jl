@@ -47,10 +47,3 @@ struct SimSetting
     saveFreq::Int64
 end
 
-# Order important!
-include("GridTypes.jl")
-include("InterpolationTypes.jl")
-include("TimestepperTypes.jl")
-
-include("HyperbolicPDEs.jl")
-include("CoreUtils.jl")
