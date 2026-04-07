@@ -38,50 +38,6 @@ struct TestU3Equation{a} <: ScalarHyperbolicPDE{1} end
 struct Euler1D <: HyperbolicPDESystem{1, 3} end
 # --- Burgers Equation 2D ---
 struct BurgersEquation2D <: ScalarHyperbolicPDE{2} end
-## ------------------------------- Initial Conditions -------------------------------
-abstract type InitialCondition end
-abstract type SmoothInitialCondition <: InitialCondition end
-
-struct Gauss{D, M} <: SmoothInitialCondition
-    a::State{M}
-    b::Space{D}
-    width::Float64
-end
-
-struct Box{D, M} <: InitialCondition
-    u_bg::State{M}
-    u_box::State{M}
-    mins::Space{D}
-    maxs::Space{D}
-end
-
-struct Sine{D, M} <: SmoothInitialCondition
-    a::State{M}
-    period::Space{D}
-    c_offset::State{M}
-end
-
-struct Riemann{D, M} <: InitialCondition
-    uL::State{M}
-    uR::State{M}
-    p0::Space{D}
-    n::Space{D}
-end
-
-struct SRiemann{D, M} <: SmoothInitialCondition
-    uL::State{M}
-    uR::State{M}
-    p0::Space{D}
-    n::Space{D}
-    width::Float64
-end
-
-struct QuadrantRiemann{D, M, N_states} <: InitialCondition
-    u_states::NTuple{N_states, State{M}} 
-    p0::Space{D}
-end
-
-const EulerShockTube = Riemann{Float64,NTuple{3,Float64}}
 
 struct SimSetting
     tmax::Float64
