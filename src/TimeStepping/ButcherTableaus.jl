@@ -45,20 +45,7 @@ function IMEXButcherTableau(A::M, At::M, c::V, ct::V, b::V) where {M <: Abstract
     IMEXButcherTableau{M, V}(A, At, c, ct, b, b)
 end
 
-function IMEXButcherTableau(A::M, At::M, c::V, ct::V, b::V, bt::V) where {M <: AbstractArray{Float64, 2}, V <: AbstractArray{Float64, 1}}
-    s = size(A, 1) # Number of stages
-    @assert (size(A, 2) == s && size(At, 1) == s && size(At, 2) == s &&
-                length(c) == s && length(ct) == s && length(b) == s && length(bt) == s) "All Butcher tableau components must match number of stages"    
-    # Check A is lower triangular (a_ij = 0 for j > i)
-    for i in 1:s, j in (i+1):s
-        @assert A[i,j] == 0.0 "Implicit matrix A must be lower triangular."
-    end
-    # Check At is strictly lower triangular (atilde_ij = 0 for j >= i)
-    for i in 1:s, j in i:s # Check elements on and above diagonal
-        @assert At[i,j] == 0.0 "Explicit matrix At (Atilde) must be strictly lower triangular."
-    end
-    IMEXButcherTableau{M, V}(A, At, c, ct, b, bt)
-end
+
 
 function IMEXARS233ButcherTableau(gamma_val::Float64 = (3.0 + sqrt(3.0))/6.0)::IMEXButcherTableau
     # This is the ARS(2,3,3) scheme from Ascher, Ruuth, Spiteri (1997), Table 2.4, k=3 column.

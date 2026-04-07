@@ -81,6 +81,20 @@ struct IMEXButcherTableau{M <: AbstractArray{Float64, 2}, V <: AbstractArray{Flo
     ct::V # Explicit time nodes (ctilde)
     b::V  # Final weights (assumed same for explicit and implicit parts by your old code's use)
     bt::V
+function IMEXButcherTableau(A::M, At::M, c::V, ct::V, b::V, bt::V) where {M <: AbstractArray{Float64, 2}, V <: AbstractArray{Float64, 1}}
+    s = size(A, 1) # Number of stages
+    @assert (size(A, 2) == s && size(At, 1) == s && size(At, 2) == s &&
+                length(c) == s && length(ct) == s && length(b) == s && length(bt) == s) "All Butcher tableau components must match number of stages"    
+    # Check A is lower triangular (a_ij = 0 for j > i)
+    for i in 1:s, j in (i+1):s
+        @assert A[i,j] == 0.0 "Implicit matrix A must be lower triangular."
+    end
+    # Check At is strictly lower triangular (atilde_ij = 0 for j >= i)
+    for i in 1:s, j in i:s # Check elements on and above diagonal
+        @assert At[i,j] == 0.0 "Explicit matrix At (Atilde) must be strictly lower triangular."
+    end
+    new{M, V}(A, At, c, ct, b, bt)
+end
 end
 
 struct GeneralIMEXTimeStepper{M, G1, G2, MOOD, IS, ST_OBJ, BT} <: MeshfreeSystemTimeStepper

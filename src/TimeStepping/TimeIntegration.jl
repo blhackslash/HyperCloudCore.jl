@@ -18,13 +18,6 @@ function initTSBuffer!(ts::MeshfreeTimeStepper, pg::ParticleGrid)
     return nothing
 end
 
-function _ensure_capacity!(v::AbstractVector, n::Int)
-    if length(v) < n
-        resize!(v, n)
-    end
-    return nothing
-end
-
 include("MeshfreeTimeSteppers.jl")
 include("FixedGridTimeSteppers.jl")
 include("ButcherTableaus.jl")

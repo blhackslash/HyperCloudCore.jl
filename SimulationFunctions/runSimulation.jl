@@ -1,6 +1,7 @@
 using Random
 using LinearAlgebra
 using StaticArrays
+using Meshfree4ScalarEq
 
 # ==============================================================================
 # HELPER UTILITIES
@@ -20,30 +21,21 @@ function stable_vel_config(relax_vel::Union{Vector{Vector{Float64}}, Vector{Vect
 end
 
 # ==============================================================================
-# HELPER FUNCTION BARRIERS
-# These @noinline functions break the Type-Inference loop. 
-# Inside them, all types (method, eq, pg) are strictly known, ensuring C-speed.
+# EXECUTION BARRIERS
 # ==============================================================================
-
-# Tiny, type-stable dispatch helpers to strip 1D SVectors into raw floats
-@inline _unwrap(v::SVector{1, Float64}) = v[1]
-@inline _unwrap(v) = v # Fallback for D>1 or M>1 (passes them through unchanged)
 
 @noinline function _execute_analytic_sim(IC, eq, grid_analytic, tmax, snapshots, run_params)
     ts = tmax > 0 ? collect(0.0:(tmax/snapshots):tmax) : [0.0]
     
-    # Original raw positions (Space{D})
-    raw_xs = grid_analytic.core.positions
+    # Native SVector positions
+    xs = grid_analytic.core.positions
     
-    # Unwrap positions for saving (Space{1} -> Float64)
-    xs_saved = [_unwrap(p) for p in raw_xs]
-    
-    # Evaluate ICs using raw positions, but unwrap the resulting State{M} for saving
-    us = [[_unwrap(IC(p, t, eq, grid_analytic)) for p in raw_xs] for t in ts]
+    # Native SVector states
+    us = [[IC(p, t, eq, grid_analytic) for p in xs] for t in ts]
 
-    # Duplicate the positions array for each timestep to match the structure
-    sim_data = createSimData([xs_saved for _ in ts], us, ts, run_params)
-    sim_data.stats["time"] = 0.0
+    # copy(xs) ensures we don't link memory across timesteps!
+    sim_data = createSimData([copy(xs) for _ in ts], us, ts, run_params)
+    sim_data.scalars["time"] = 0.0
     
     return sim_data
 end
@@ -53,53 +45,21 @@ end
     
     @info "Explicit Simulation (D=$dimension) finished in $(round(elapsed_time, digits=2)) seconds."
 
-    # --- FIX: Filter out unassigned snapshots (happens due to floating-point truncation near tmax) ---
+    # Filter out unassigned snapshots 
     valid_indices = findall(i -> isassigned(us_svector, i), 1:length(us_svector))
-    m = length(valid_indices)
     
-    # Slice the valid timestamps
+    # Slice the valid timestamps and SVector arrays natively!
     ts = ts_full[valid_indices]
-    
-    # Pre-allocate standard arrays for plotting/saving
-    us_final = Vector{Matrix{Float64}}(undef, m)
-    local xs_final
-    if dimension == 1
-        xs_final = Vector{Vector{Float64}}(undef, m)
-    else
-        xs_final = Vector{Vector{NTuple{dimension, Float64}}}(undef, m)
-    end
-    
-    # Extract only the valid frames
-    for (new_idx, orig_idx) in enumerate(valid_indices)
-        u_snap = us_svector[orig_idx]
-        x_snap = xs_svector[orig_idx]
-        N_particles = length(u_snap)
-        
-        # --- Convert States to Matrix ---
-        mat = Matrix{Float64}(undef, N_particles, M_components)
-        for c in 1:M_components
-            for i in 1:N_particles
-                mat[i, c] = u_snap[i][c]
-            end
-        end
-        us_final[new_idx] = mat
-        
-        # --- Convert Positions to Floats/Tuples ---
-        if dimension == 1
-            xs_final[new_idx] = [x_snap[i][1] for i in 1:N_particles]
-        else
-            xs_final[new_idx] = [Tuple(x_snap[i]) for i in 1:N_particles]
-        end
-    end
+    us_final = us_svector[valid_indices]
+    xs_final = xs_svector[valid_indices]
 
-    # Pass the perfectly formatted arrays into your external data struct
+    # Pass the native SVectors directly into your data struct
     sim_data_result = createSimData(xs_final, us_final, ts, run_params)
-    sim_data_result.stats["time"] = elapsed_time
-    sim_data_result.stats["k_step"] = k_step
-    #calculateAllStats!(sim_data_result, (x,t) -> IC(x,t,eq,pg); discontinuity_points_func = t -> get_discontinuity_points(IC, eq, t, pg), quad_tol = 10e-9, dierckx_k = 4)
+    sim_data_result.scalars["time"] = elapsed_time
+    sim_data_result.scalars["k_step"] = Float64(k_step)
+    
     return sim_data_result
 end
-
 @noinline function _execute_kinetic_sim!(system_method, kinetic_eqs, pg, settings, run_params, dimension, snapshots, remove_ghosts, save_relax, N_macro_vars, kinetic_to_macro_map)
     elapsed_time, xs_data, sys_us_kinetic, ts = mainTimeIntegrator!(system_method, kinetic_eqs, pg, settings; snapshots = snapshots, remove_ghosts = remove_ghosts)
     @info "Kinetic Relaxation Simulation (D=$dimension) finished in $(round(elapsed_time, digits=2)) seconds."
@@ -141,7 +101,7 @@ end
 
 Unified function to run 1D/2D Scalar and System conservation laws.
 """
-function runSimulation(params::ParamDictType)::Union{AbstractSimData, Nothing}
+function runSimulation(params::ParamDict)::Union{AbstractSimData, Nothing}
     @info "\n--- Running General Simulation ---"
     run_params = copy(params)
 

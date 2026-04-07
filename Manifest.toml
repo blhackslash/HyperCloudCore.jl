@@ -1,6 +1,6 @@
 # This file is machine-generated - editing it directly is not advised
 
-julia_version = "1.12.4"
+julia_version = "1.12.5"
 manifest_format = "2.0"
 project_hash = "de2b7a2aebc7c5c163b1fa4427751bfda5096c52"
 
@@ -615,7 +615,7 @@ uuid = "34004b35-14d8-5ef3-9330-4cdb6864b03a"
 version = "0.3.28"
 
 [[deps.IPlotPDESols]]
-deps = ["CSV", "CairoMakie", "DataFrames", "Dates", "Dierckx", "FileIO", "GLMakie", "JLD2", "LibGit2", "LinearAlgebra", "Printf", "ProgressMeter", "QuadGK", "Random", "SHA", "Statistics", "StatsBase"]
+deps = ["CSV", "CairoMakie", "DataFrames", "Dates", "Dierckx", "FileIO", "GLMakie", "JLD2", "LibGit2", "LinearAlgebra", "Observables", "Pkg", "Printf", "ProgressMeter", "QuadGK", "Random", "SHA", "StaticArrays", "Statistics", "StatsBase"]
 path = "../IPlotPDESols"
 uuid = "9dcd72ad-f481-4c48-9703-3c94083dcfc3"
 version = "0.1.0"

@@ -4,7 +4,7 @@ using InteractiveUtils
 
 # 2D simulation using your `runScalar2DSim` function.
 function main()
-    params = ParamDict(
+    params = createParamDict(
         # --- Shared Parameters ---
         "tmax" => 5.0,
         "Nx" => 250,
@@ -90,14 +90,14 @@ function main()
     # 1. Configure the profiler to sample ALL threads
     #    We also give it a larger buffer (n) and a reasonable delay
     sim_data = nothing
-    sim_data = runSimulation(params);
-    @profview runSimulation(params)
+    #sim_data = runSimulation(params);
+    #@profview runSimulation(params)
     # 3. `sim_data` will now hold the results (a SimData2D object), which you can inspect.
     #
     test_config = SimulationConfig(
-        runSimulation,
+        "runSimulation",
         params,
-        MethodDict(
+        createMethodDict(
             "Test(MOOD)" => ParamDict("MOOD" => "U2", "delta_relax" => 0., "fallback_gradient" => "Upwind", "fallback_flux" => "Rusanov",),
             "Test" => ParamDict(),
             "TestMUSCL(SmSw)" => ParamDict("timestepper" => "RalstonRK2SmoothSwitch","MOOD" => "U2", "delta_relax" => 0., "fallback_gradient" => "Upwind", "fallback_flux" => "Rusanov", "switch_tol" => 5.),
@@ -115,4 +115,4 @@ sim_data, test_config = main()
 #show1DSolutionFig(test_config)
 #scene_options = Dict{String, Any}("line_vector" => (1.,0.), "deviation" => 2)
 #show2DCutFig(test_config;scene_options = scene_options)
-show2DSolutionFig(test_config)
+show_unified_fig(test_config)

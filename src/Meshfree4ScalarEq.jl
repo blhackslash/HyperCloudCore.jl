@@ -21,8 +21,31 @@ include("TimeStepping/TimeIntegration.jl")
 
 include("InitialConditions.jl")
 
-using IPlotPDESols
+# ==============================================================================
+# --- PUBLIC API EXPORTS ---
+# ==============================================================================
 
-include("../SimulationFunctions/runSimulation.jl")
+# 1. Geometries & State (from CoreTypes.jl)
+export Space, State, Flux, Kinetic
+export DifferentialOrder, Order0, Order1, DO0, DO1
 
-end  # module 
+# 2. Physics Equations (from CoreTypes.jl)
+export HyperbolicPDE, ScalarHyperbolicPDE, HyperbolicPDESystem, NCHyperbolicPDESystem, DiagonalHyperbolicSystem
+export LinearAdvection, BurgersEquation, TestU3Equation, Euler1D, BurgersEquation2D
+
+# 3. Initial Conditions (from CoreTypes.jl)
+export InitialCondition, SmoothInitialCondition
+export Gauss, Box, Sine, Riemann, SRiemann, QuadrantRiemann
+
+# 4. Numerics & Integration (from TimeIntegration.jl)
+export TimeStepper, MeshfreeTimeStepper
+export initTS!, initTSBuffer!, saveData!, time_integration_loop!
+
+# 5. Core Simulation Structs (Assuming these exist in your other files)
+export ParticleGrid, SimSetting, setInitialConditions!
+
+# 6. Specific Time Steppers (Export the ones you actually use)
+export SimpleSplitting, ARS233, PRSSP3, ARS222, ARS232
+# export EulerUpwind, MainGrad, FallbackGrad, LinearizedRelaxationImplicitSolver ...
+
+end # module
