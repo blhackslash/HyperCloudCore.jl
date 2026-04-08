@@ -42,19 +42,26 @@ export param2uvec, param2xvec, param2svec, param2fvec
 export HyperbolicPDE, ScalarHyperbolicPDE, HyperbolicPDESystem, NCHyperbolicPDESystem, DiagonalHyperbolicSystem
 export LinearAdvection, BurgersEquation, TestU3Equation, Euler1D, BurgersEquation2D
 
-# 3. Initial Conditions (from CoreTypes.jl)
-export InitialCondition, SmoothInitialCondition
-export Gauss, Box, Sine, Riemann, SRiemann, QuadrantRiemann
-
 # 4. Numerics & Integration (from TimeIntegration.jl)
 export TimeStepper, MeshfreeTimeStepper
-export initTS!, initTSBuffer!, saveData!, time_integration_loop!
+export initTS!, initTSBuffer!, saveData!, mainTimeIntegrator!
 
 # 5. Core Simulation Structs (Assuming these exist in your other files)
-export ParticleGrid, SimSetting
+export ParticleGrid, SimSetting, CustomGridMover, NoGridMover, PhysicalGridMover, createParticleGrid, getTimeStep
+export exponentialWeightFunction, inverseWeightFunction
+# Interpolation
+export Interpolator, GradientInterpolator, MUSCL, UpwindGradient, WENO, CentralGradient, NoFallbackGrad
+export NumericalFluxFunction, UpwindFlux, RusanovFlux, RoeDiffusiveFlux
+export MOODCriterion, MOODu1, MOODu2, NoMOOD, OnlyMOOD
+export AbstractSlopeLimiter, BarthJespersenLimiter, VenkatakrishnanLimiter, SuperbeeLimiter, MinmodLimiter, NoLimiter
 
 # 6. Specific Time Steppers (Export the ones you actually use)
-export SimpleSplitting, ARS233, PRSSP3, ARS222, ARS232
-# export EulerUpwind, MainGrad, FallbackGrad, LinearizedRelaxationImplicitSolver ...
+export SimpleSplitting, ARS233, PRSSP3, ARS222, ARS232, RKButcherTableau, GeneralRKTimeStepper, IMEXButcherTableau
+export EulerUpwind, LinearizedRelaxationImplicitSolver, GeneralIMEXTimeStepper, Kin2Macro
+export EulerTableau, RalstonRK2Tableau, SSPRK3Tableau, RK4Tableau
+export PR_IMEX_SSP3_ButcherTableau, IMEXButcherTableau, IMEXARS233ButcherTableau, ARS222_ButcherTableau, SSP2332ButcherTableau
+
+export NoSourceTerm, AbstractSourceTerm, RelaxationSourceTerm, NonLocalRelaxationSourceTerm
+export LinearizedRelaxationImplicitSolver, PicardIterationSolver, AbstractImplicitSolver
 
 end # module
