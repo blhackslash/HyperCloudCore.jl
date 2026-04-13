@@ -40,7 +40,7 @@ export param2uvec, param2xvec, param2svec, param2fvec
 
 # 2. Physics Equations (from CoreTypes.jl)
 export HyperbolicPDE, ScalarHyperbolicPDE, HyperbolicPDESystem, NCHyperbolicPDESystem, DiagonalHyperbolicSystem
-export LinearAdvection, BurgersEquation, TestU3Equation, Euler1D, BurgersEquation2D
+export LinearAdvection, BurgersEquation, TestU3Equation, Euler1D, BurgersEquation2D, flux, flux_dot
 
 # 4. Numerics & Integration (from TimeIntegration.jl)
 export TimeStepper, MeshfreeTimeStepper

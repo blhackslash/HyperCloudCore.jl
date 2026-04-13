@@ -58,6 +58,26 @@ end
 # Output: SVector{2, SVector{2, Float64}}([ [1.0, 0.0], [0.0, 1.0] ])
 @inline param2fvec(v::NTuple{D, NTuple{M, <:Real}}) where {D, M} = 
     Flux{D,M}(ntuple(i -> State{M}(Float64.(v[i])), Val(D)))
+@inline param2fvec(v::Float64)=Flux{1,1}(((v,),))
+# Handles the (Vector{Float64},) or (Vector, Vector) format from runSimulation.jl
+function param2fvec(v::NTuple{D, Vector{T}}) where {D, T <: Real}
+    # NK is the number of kinetic components (length of the vector)
+    NK = length(v[1])
+    return SVector{D}(ntuple(d -> SVector{NK, Float64}(v[d]), Val(D)))
+end
+
+# Handles a raw Vector{Vector{Float64}} if passed directly
+function param2fvec(v::Vector{Vector{T}}) where {T <: Real}
+    D = length(v)
+    NK = length(v[1])
+    return SVector{D}(ntuple(d -> SVector{NK, Float64}(v[d]), Val(D)))
+end
+
+# Handles a single Vector (for 1D, NK-component systems)
+function param2fvec(v::Vector{T}) where {T <: Real}
+    NK = length(v)
+    return SVector{1}( (SVector{NK, Float64}(v),) )
+end
 
 # Case 4: Fallback if it is already correctly formatted
 @inline param2svec(v::Flux{D,M}) where {D, M} = v

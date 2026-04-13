@@ -810,53 +810,6 @@ function determineVolumes!(pg::ParticleGrid{1, M, WF, GM, BC}) where {M, WF, GM,
     return
 end
 
-function findLocalExtrema(rho_i::Float64, nb_slice::UnitRange{Int}, neighbor_fs::AbstractVector{Float64})::Tuple{Float64, Float64}
-    minU = maxU = rho_i
-    @inbounds for k in nb_slice 
-        rho_j = neighbor_fs[k]
-        minU = min(minU, rho_j)
-        maxU = max(maxU, rho_j)
-    end
-    return (minU, maxU)
-end
-
-function findLocalExtremaAbs(curve_i::Float64, nb_slice::UnitRange{Int}, neighbor_indices_full::Vector{Int}, curveVec::AbstractVector{Float64})::Tuple{Float64, Float64, Float64, Float64}
-    mini = maxi = curve_i
-    minAbs = maxAbs = abs(curve_i)
-    
-    @inbounds for k in nb_slice
-        j = neighbor_indices_full[k]
-        curve_j = curveVec[j]
-        abs_curve_j = abs(curve_j)
-        mini = min(mini, curve_j); maxi = max(maxi, curve_j)
-        minAbs = min(minAbs, abs_curve_j); maxAbs = max(maxAbs, abs_curve_j)
-    end
-    return (mini, maxi, minAbs, maxAbs)
-end
-
-function findLocalExtremaAbs(
-    curve_xx_i::Float64, curve_yy_i::Float64, nb_slice::UnitRange{Int}, neighbor_indices_full::Vector{Int}, 
-    curve_xx_Vec::AbstractVector{Float64}, curve_yy_Vec::AbstractVector{Float64}
-)::NTuple{8, Float64}
-    mini1 = maxi1 = curve_xx_i
-    mini2 = maxi2 = curve_yy_i
-    minAbs1 = maxAbs1 = abs(curve_xx_i)
-    minAbs2 = maxAbs2 = abs(curve_yy_i)
-    
-    @inbounds for k in nb_slice
-        j = neighbor_indices_full[k] 
-        curve_xx_j = curve_xx_Vec[j]; curve_yy_j = curve_yy_Vec[j]
-        abs_curve_xx_j = abs(curve_xx_j); abs_curve_yy_j = abs(curve_yy_j)
-
-        mini1 = min(mini1, curve_xx_j); maxi1 = max(maxi1, curve_xx_j)
-        minAbs1 = min(minAbs1, abs_curve_xx_j); maxAbs1 = max(maxAbs1, abs_curve_xx_j)
-        
-        mini2 = min(mini2, curve_yy_j); maxi2 = max(maxi2, curve_yy_j)
-        minAbs2 = min(minAbs2, abs_curve_yy_j); maxAbs2 = max(maxAbs2, abs_curve_yy_j)
-    end
-    return (mini1, maxi1, minAbs1, maxAbs1, mini2, maxi2, minAbs2, maxAbs2)
-end
-
 @inline function getTimeStep(pg::ParticleGrid{D}, eq) where {D}
     dtMax = Inf
     

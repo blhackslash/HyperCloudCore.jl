@@ -2,31 +2,6 @@
 # BUFFER INITIALIZATION
 # =========================================================================
 
-"""
-    initFs!(neighbor_fs, neighbor_dfs, nb_indices, i, f_i, nb_slice, fVec)
-
-Parallel "pre-gather" loop to fill the `neighbor_fs` and `neighbor_dfs` 
-buffers using data from `fVec`. Works natively with SVector states.
-"""
-@inline function initFs!(
-    neighbor_fs::AbstractVector{State{M}}, 
-    neighbor_dfs::AbstractVector{State{M}}, 
-    nb_indices::AbstractVector{Int}, 
-    f_i::State{M}, 
-    nb_slice::UnitRange{Int}, 
-    fVec::AbstractVector{State{M}}
-) where {M}
-    
-    # ivdep tells the compiler it is safe to ignore perceived memory dependencies
-    @inbounds for k in nb_slice
-        j = nb_indices[k]
-        f_j = fVec[j] 
-        
-        neighbor_fs[k]  = f_j
-        neighbor_dfs[k] = f_j - f_i 
-    end
-end
-
 function initTSBuffer!(rk::GeneralRKTimeStepper{M}, pg::ParticleGrid) where {M}
     N = pg.meta.N
     M_neighbors = length(pg.neighbor.indices)

@@ -44,33 +44,33 @@ abstract type AbstractSourceTerm end
 struct NoSourceTerm <: AbstractSourceTerm end
 abstract type KineticSourceTerm <: AbstractSourceTerm end
 
-struct Kin2Macro{M}
-    ranges::NTuple{M, UnitRange{Int}}
+struct Kin2Macro{NM, NK}
+    ranges::NTuple{NM, UnitRange{Int}}
+    k_to_m::NTuple{NK, Int} # O(1) inverse lookup!
 end
 
-struct RelaxationSourceTerm{D, M, K} <: KineticSourceTerm
-    kin2macro::Kin2Macro{M}
-    epsilon::Float64
+struct RelaxationSourceTerm{D, NM, NK}
+    km::Kin2Macro{NM, NK}
     inv_epsilon::Float64
-    coefficients::State{M} # Sized to Macro variables
-    inv_relax_speeds::SVector{K, Space{D}} # Sized to Kinetic, customized dot product!
-    interior_factors::State{K}
+    coefficients::State{NM}
+    scaled_inv_speeds::SVector{NK, Space{D}}
 end
 
-mutable struct NonLocalRelaxationSourceTerm{D, M, K} <: KineticSourceTerm
-    kin2macro::Kin2Macro{M}
-    epsilon::Float64
+struct NonLocalRelaxationSourceTerm{D, NM, NK}
+    km::Kin2Macro{NM, NK}
     inv_epsilon::Float64
-    coefficients::State{M}
-    inv_relax_speeds::SVector{K, Space{D}}
-    interior_factor::Float64
+    coefficients::State{NM}
+    scaled_inv_speeds::SVector{NK, Space{D}}
     T_potential::Matrix{Float64}
 end
 
 abstract type AbstractImplicitSolver end
-struct PicardIterationSolver <: AbstractImplicitSolver
+struct PicardIterationSolver
     max_iters::Int
     tol::Float64
+    # Pre-allocated thread-local buffers to guarantee zero allocations
+    S_buffers::Vector{Vector{Float64}}
+    Y_buffers::Vector{Vector{Float64}}
 end
 struct LinearizedRelaxationImplicitSolver <: AbstractImplicitSolver end
 
@@ -97,62 +97,28 @@ function IMEXButcherTableau(A::M, At::M, c::V, ct::V, b::V, bt::V) where {M <: A
 end
 end
 
-struct GeneralIMEXTimeStepper{M, G1, G2, MOOD, IS, ST_OBJ, BT} <: MeshfreeSystemTimeStepper
-    gradientInterpolators::NTuple{M, G1}
-    fallbackInterpolators::NTuple{M, G2}
+
+struct GeneralIMEXTimeStepper{M, G1, G2, MOOD, IS, ST_OBJ, BT, GM, EQ_MACRO} <: TimeStepper
+    gradientInterpolator::G1
+    fallbackInterpolator::G2
     mood::MOOD
     implicit_solver::IS
     source_term_object::ST_OBJ
     butcher_tableau::BT
+    grid_mover::GM
+    eq_macro::EQ_MACRO # NEW: Stores the macroscopic physics for the implicit solve
     
-    # --- Buffers for local time stepping (Fully Converted to Vector{State{M}}) ---
+    # Strictly typed SVector Buffers
     U_n::Vector{State{M}}
     Y_stages::Vector{Vector{State{M}}}
     K_E_stages::Vector{Vector{State{M}}}
     K_I_stages::Vector{Vector{State{M}}}
     
-    mood_triggered::Matrix{Bool}
+    mood_triggered::Vector{Bool}
     
-    # --- Buffers for parallel evaluation ---
-    U_n_sys::Vector{State{M}}
-    Y_stages_sys::Vector{Vector{State{M}}}
-    K_E_stages_sys::Vector{Vector{State{M}}}
-    K_I_stages_sys::Vector{Vector{State{M}}}
-    
-    mood_triggered_sys::Array{Bool, 3}
-    
-    # Buffers for explicit fused loop 
-    all_neighbor_fs::Vector{State{M}}
-    all_neighbor_dfs::Vector{State{M}}
-    
+    neighbor_fs::Vector{State{M}}
+    neighbor_dfs::Vector{State{M}}
     num_stages::Int
-
-    function GeneralIMEXTimeStepper( eq::HyperbolicPDE{D, M},
-        gradientInterpolator::G1, fallbackInterpolator::G2, mood::MOOD,
-        implicit_solver::IS, source_term_object::ST_OBJ, butcher_tableau::BT,
-    ) where {G1, G2, MOOD, IS, ST_OBJ, BT, D, M}
-        
-        s = size(butcher_tableau.A, 1) # Number of stages
-        
-        new{M, G1, G2, MOOD, IS, ST_OBJ, BT}(
-            ntuple(_ -> deepcopy(gradientInterpolator), M_comp), 
-            ntuple(_ -> deepcopy(fallbackInterpolator), M_comp), 
-            mood, implicit_solver, source_term_object, butcher_tableau,
-            State{M}[], 
-            [State{M}[] for _ in 1:s],
-            [State{M}[] for _ in 1:s], 
-            [State{M}[] for _ in 1:s], 
-            falses(0, M_comp),
-            State{M}[], 
-            [State{M}[] for _ in 1:s],
-            [State{M}[] for _ in 1:s], 
-            [State{M}[] for _ in 1:s], 
-            falses(0, M_comp, s),
-            State{M}[], 
-            State{M}[],
-            s
-        )
-    end
 end
 
 ## ------------------------------- Fixed Grid Direct Stepper -------------------------------

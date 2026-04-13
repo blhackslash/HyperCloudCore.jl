@@ -1,138 +1,137 @@
-function initMOOD!(mood::MOODCriterion, d)
-    return
+# =========================================================================
+# BRANCHLESS MATH HELPERS
+# =========================================================================
+@inline math_max(a::Float64, b::Float64) = 0.5 * (a + b + abs(a - b))
+@inline math_min(a::Float64, b::Float64) = 0.5 * (a + b - abs(a - b))
+
+# =========================================================================
+# STATE{M} EXTREMA FINDERS
+# =========================================================================
+
+@inline function findLocalExtrema(rho_i::State{M}, nb_slice::UnitRange{Int}, neighbor_fs::AbstractVector{State{M}}) where M
+    minU = rho_i
+    maxU = rho_i
+    @inbounds for k in nb_slice 
+        rho_j = neighbor_fs[k]
+        minU = State{M}(ntuple(m -> math_min(minU[m], rho_j[m]), Val(M)))
+        maxU = State{M}(ntuple(m -> math_max(maxU[m], rho_j[m]), Val(M)))
+    end
+    return minU, maxU
+end
+
+@inline function findLocalExtremaAbs(
+    c_i::State{M}, curve_idx::Int, nb_slice::UnitRange{Int}, 
+    neighbor_indices::AbstractVector{Int}, grad_vec::AbstractVector
+) where M
+    mini = c_i
+    maxi = c_i
+    minAbs = State{M}(ntuple(m -> abs(c_i[m]), Val(M)))
+    maxAbs = minAbs
+    
+    @inbounds for k in nb_slice
+        j = neighbor_indices[k]
+        c_j = grad_vec[j][curve_idx]
+        abs_cj = State{M}(ntuple(m -> abs(c_j[m]), Val(M)))
+        
+        mini = State{M}(ntuple(m -> math_min(mini[m], c_j[m]), Val(M)))
+        maxi = State{M}(ntuple(m -> math_max(maxi[m], c_j[m]), Val(M)))
+        minAbs = State{M}(ntuple(m -> math_min(minAbs[m], abs_cj[m]), Val(M)))
+        maxAbs = State{M}(ntuple(m -> math_max(maxAbs[m], abs_cj[m]), Val(M)))
+    end
+    return mini, maxi, minAbs, maxAbs
 end
 
 
+# =========================================================================
+# MOOD CRITERIA FUNCTORS
+# =========================================================================
 
-# MOODu1 functor signature now includes pg
+(mood::NoMOOD)(args...) = false
+(mood::OnlyMOOD)(args...) = true
+
+# --- MOODu1 (Standard DMP) ---
 function (mood::MOODu1)(
-    g,        # The primary gradient interpolator
-    i::Int,                         # Current particle index
-    rho_i::Float64,                 # Value of rho at particle i
-    nb_slice::UnitRange{Int},
-    newRho::Float64,                # Proposed new value
-    pg::ParticleGrid,     # Grid to access neighbor info
-    neighbor_fs::AbstractVector{Float64} # Full neighbor rho vector
-)::Bool
+    g::Any, p_idx::Int, rho_i::State{M}, nb_slice::UnitRange{Int}, 
+    newRho::State{M}, pg::ParticleGrid{D}, neighbor_fs::AbstractVector{State{M}}
+) where {D, M}
     
-    # Calculate local extrema using the helper with direct indexing
-    minU, maxU = findLocalExtrema(rho_i, nb_slice, neighbor_fs)
-    
-    δ = mood.d # Relaxation parameter
-
-    # Basic DMP check with relaxation delta
-    moodEvent = (newRho < minU - δ) || (newRho > maxU + δ)
-    
-    # Flatness check
-    if abs(maxU - minU) < δ^3 
-        moodEvent = false
-    end
-    
-    return moodEvent
-end
-
-# Helper to check for curvature remains the same
-function _has_curvature(g)
-    if hasproperty(g, :workspace)
-        return hasproperty(g.workspace, :curves_xx) && hasproperty(g.workspace, :curves_yy)
-    else 
-        return false
-    end 
-end
-
-# --- MOODu2 Functor (1D) ---
-function (mood::MOODu2)(
-    g,     # The primary gradient interpolator (1D)
-    i::Int,                         # Current particle index
-    rho_i::Float64,                 # Value of rho at particle i
-    nb_slice::UnitRange{Int},
-    newRho::Float64,                # Proposed new value
-    pg::ParticleGrid1D,  # Grid to access neighbor info (1D)
-    neighbor_fs::AbstractVector{Float64} # Full neighbor rho vector
-)::Bool
-
     minU, maxU = findLocalExtrema(rho_i, nb_slice, neighbor_fs)
     δ = mood.d
-
-    # Basic DMP check
-    DMPFail = (newRho < minU - δ) || (newRho > maxU + δ)
-    if abs(maxU - minU) < δ^3 # Flatness check
-        DMPFail = false
+    
+    # Check DMP component-by-component
+    for m in 1:M
+        if abs(maxU[m] - minU[m]) >= δ^3 # Flatness check
+            if newRho[m] < minU[m] - δ || newRho[m] > maxU[m] + δ
+                return true # MOOD event triggered
+            end
+        end
     end
-    
-    # --- Conditional u2 check for 1D ---
-    u2_satisfied = false 
-    if _has_curvature(g)
-        curve_vec = g.workspace.curves_xx # Assumes 1D curve stored here
-        curve_i   = curve_vec[i]
-        
-        mini, maxi, minAbs, maxAbs = findLocalExtremaAbs( # Dispatches to 1D version
-            curve_i, nb_slice, pg.neighbor.indices, curve_vec
-        )
-        
-        ratio = (maxAbs < 1e-12) ? 1.0 : minAbs / maxAbs 
-        u2_satisfied = (mini * maxi > -δ) && ((ratio >= 0.5) || (maxAbs < δ))
-    end
-    # --- End Conditional u2 check ---
-    
-    moodEvent = DMPFail ? !u2_satisfied : false
-    return moodEvent
-end
-
-# --- MOODu2 Functor (2D) ---
-function (mood::MOODu2)(
-    g,     # The primary gradient interpolator (2D)
-    i::Int,                         # Current particle index
-    rho_i::Float64,                 # Value of rho at particle i
-    nb_slice::UnitRange{Int},
-    newRho::Float64,                # Proposed new value
-    pg::ParticleGrid2D,  # Grid to access neighbor info (2D)
-    neighbor_fs::AbstractVector{Float64} # Full neighbor rho vector
-)::Bool
-    
-    num_nb = pg.neighbor.amount[i]
-    if num_nb == 0; return false; end
-
-    minU, maxU = findLocalExtrema(rho_i, nb_slice, neighbor_fs)
-    δ = mood.d
-
-    # Basic DMP check
-    DMPFail = (newRho < minU - δ) || (newRho > maxU + δ)
-    if abs(maxU - minU) < δ^3 # Flatness check
-        DMPFail = false
-    end
-    
-    # --- Conditional u2 check for 2D ---
-    u2_satisfied = false 
-    if _has_curvature(g)
-        curve_xx_vec = g.workspace.curves_xx
-        curve_yy_vec = g.workspace.curves_yy
-        curve_xx_i   = curve_xx_vec[i]
-        curve_yy_i   = curve_yy_vec[i]
-        
-        extrema_vals = findLocalExtremaAbs( # Dispatches to 2D version
-            curve_xx_i, curve_yy_i, nb_slice, pg.neighbor.indices, 
-            curve_xx_vec, curve_yy_vec
-        )
-        mini1, maxi1, minAbs1, maxAbs1 = extrema_vals[1:4]
-        mini2, maxi2, minAbs2, maxAbs2 = extrema_vals[5:8]
-        
-        ratio1 = (maxAbs1 < 1e-12) ? 1.0 : minAbs1 / maxAbs1 
-        ratio2 = (maxAbs2 < 1e-12) ? 1.0 : minAbs2 / maxAbs2 
-        
-        u2x = (mini1 * maxi1 > -δ) && ((ratio1 >= 0.5) || (maxAbs1 < δ))
-        u2y = (mini2 * maxi2 > -δ) && ((ratio2 >= 0.5) || (maxAbs2 < δ))
-        u2_satisfied = u2x && u2y
-    end
-    # --- End Conditional u2 check ---
-    
-    moodEvent = DMPFail ? !u2_satisfied : false
-    return moodEvent
-end
-
-function (mood::NoMOOD)(kwargs...)::Bool
     return false
 end
-function (mood::OnlyMOOD)(kwargs...)::Bool
-    return true
+
+# --- MOODu2 (Generic Fallback for Non-MUSCL gradients like Upwind) ---
+function (mood::MOODu2)(
+    g::Any, p_idx::Int, rho_i::State{M}, nb_slice::UnitRange{Int}, 
+    newRho::State{M}, pg::ParticleGrid{D}, neighbor_fs::AbstractVector{State{M}}
+) where {D, M}
+    # No curvature available, so just evaluate u1 (DMP)
+    return MOODu1(mood.d)(g, p_idx, rho_i, nb_slice, newRho, pg, neighbor_fs)
+end
+
+
+# --- MOODu2 (N-Dimensional MUSCL Optimization) ---
+function (mood::MOODu2)(
+    g::MUSCL{D, M, B_LEN, ORDER}, p_idx::Int, rho_i::State{M}, nb_slice::UnitRange{Int}, 
+    newRho::State{M}, pg::ParticleGrid{D}, neighbor_fs::AbstractVector{State{M}}
+) where {D, M, B_LEN, ORDER}
+    
+    # 1. Base Extrema Check (DMP)
+    minU, maxU = findLocalExtrema(rho_i, nb_slice, neighbor_fs)
+    δ = mood.d
+    
+    dmp_fail = false
+    for m in 1:M
+        if abs(maxU[m] - minU[m]) >= δ^3
+            if newRho[m] < minU[m] - δ || newRho[m] > maxU[m] + δ
+                dmp_fail = true
+                break
+            end
+        end
+    end
+    
+    if !dmp_fail; return false; end
+    
+    # 2. Curvature (u2) Check
+    if ORDER < 2
+        return true # DMP failed, and no curvature info exists to rescue it
+    end
+    
+    # Access thread-local workspace natively
+    ws = g.workspaces[mod1(Threads.threadid(), Threads.nthreads())]
+    grad_vec = ws.gradients
+    neighbors = pg.neighbor.indices
+    
+    u2_satisfied = true
+    
+    # Check curvature in every dimension (xx, yy, zz...)
+    for d in 1:D
+        # Because of how we built the basis, spatial curves are perfectly aligned!
+        curve_idx = D + d 
+        c_i = grad_vec[p_idx][curve_idx]
+        
+        mini, maxi, minAbs, maxAbs = findLocalExtremaAbs(c_i, curve_idx, nb_slice, neighbors, grad_vec)
+        
+        for m in 1:M
+            ratio = maxAbs[m] < 1e-12 ? 1.0 : minAbs[m] / maxAbs[m]
+            valid = (mini[m] * maxi[m] > -δ) && (ratio >= 0.5 || maxAbs[m] < δ)
+            
+            if !valid
+                u2_satisfied = false
+                break
+            end
+        end
+        if !u2_satisfied; break; end
+    end
+    
+    return !u2_satisfied # Return true (Drop Order) if u2 was not satisfied
 end

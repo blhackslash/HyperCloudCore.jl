@@ -2,7 +2,7 @@
 # 1. NoGridMover
 # =========================================================================
 
-function (gm::NoGridMover)(pg::ParticleGrid, dt::Real, eq::HyperbolicPDE, st::AbstractSourceTerm)
+function (gm::NoGridMover)(kwargs...)
     return nothing
 end
 

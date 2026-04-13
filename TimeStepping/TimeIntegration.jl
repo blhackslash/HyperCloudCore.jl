@@ -2,6 +2,31 @@ function (method::TimeStepper)(eq, pg, settings, time, dt)
     error("Each `TimeStepper' must override the ()-operator.")
 end
 
+"""
+    initFs!(neighbor_fs, neighbor_dfs, nb_indices, i, f_i, nb_slice, fVec)
+
+Parallel "pre-gather" loop to fill the `neighbor_fs` and `neighbor_dfs` 
+buffers using data from `fVec`. Works natively with SVector states.
+"""
+@inline function initFs!(
+    neighbor_fs::AbstractVector{State{M}}, 
+    neighbor_dfs::AbstractVector{State{M}}, 
+    nb_indices::AbstractVector{Int}, 
+    f_i::State{M}, 
+    nb_slice::UnitRange{Int}, 
+    fVec::AbstractVector{State{M}}
+) where {M}
+    
+    # ivdep tells the compiler it is safe to ignore perceived memory dependencies
+    @inbounds for k in nb_slice
+        j = nb_indices[k]
+        f_j = fVec[j] 
+        
+        neighbor_fs[k]  = f_j
+        neighbor_dfs[k] = f_j - f_i 
+    end
+end
+
 function initTS!(ts::MeshfreeTimeStepper, pg::ParticleGrid)
     updateNeighbors!(pg)
 end
@@ -18,12 +43,12 @@ function initTSBuffer!(ts::MeshfreeTimeStepper, pg::ParticleGrid)
     return nothing
 end
 
-include("MeshfreeTimeSteppers.jl")
+include("MeshfreeRKTimeSteppers.jl")
 include("FixedGridTimeSteppers.jl")
 include("ButcherTableaus.jl")
 include("SourceTerms.jl")
 include("ImplicitSolvers.jl")
-include("MeshfreeSystemTimeSteppers.jl")
+include("MeshfreeIMEXTimeSteppers.jl")
 
 
 """
