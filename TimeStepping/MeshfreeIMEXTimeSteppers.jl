@@ -178,15 +178,25 @@ function (imex_ts::GeneralIMEXTimeStepper{M})(
     end # End of stages loop
     
     # ==================================================================
-    # PHASE 5: Final Step Update
+    # PHASE 5: Final Step Update (With True IMEX Euler MOOD Fallback)
     # ==================================================================
     @batch for p_idx in 1:N_particles
         if pg.core.is_boundary[p_idx]; continue; end
         
         if imex_ts.mood_triggered[p_idx]
-            # Safe IMEX Euler step if MOOD triggered
-            pg.rhos[p_idx] = U_n[p_idx] + dt * imex_ts.K_E_stages[1][p_idx] + dt * imex_ts.K_I_stages[1][p_idx]
+            # PERFECT IMEX EULER FALLBACK:
+            # 1. TVD Explicit Predictor (K_E_stages[1] was evaluated with the fallback gradient!)
+            Y_mut = MVector{M, Float64}(U_n[p_idx] + dt * imex_ts.K_E_stages[1][p_idx])
+            
+            # 2. L-Stable Implicit Solve for the stiff source term (Backward Euler)
+            solve!(
+                imex_ts.implicit_solver, Y_mut, dt,
+                imex_ts.source_term_object, p_idx, imex_ts.eq_macro, imex_ts.source_term_object.km
+            )
+            
+            pg.rhos[p_idx] = State{M}(Y_mut)
         else
+            # High-Order IMEX Update
             rho_final = U_n[p_idx]
             for i in 1:s
                 if bt.bt[i] != 0.0
@@ -238,5 +248,13 @@ function SSP2332(
 )
     
     tableau = SSP2332ButcherTableau() 
+    return GeneralIMEXTimeStepper(gradientInterpolator, fallbackInterpolator, mood_criterion, implicit_solver, source_term_object, tableau, grid_mover, eq_macro)
+end
+
+function IMEXEuler(
+    gradientInterpolator, fallbackInterpolator, mood_criterion,
+    implicit_solver, source_term_object, grid_mover, eq_macro
+)
+    tableau = IMEXEuler_ButcherTableau() 
     return GeneralIMEXTimeStepper(gradientInterpolator, fallbackInterpolator, mood_criterion, implicit_solver, source_term_object, tableau, grid_mover, eq_macro)
 end

@@ -45,7 +45,22 @@ function IMEXButcherTableau(A::M, At::M, c::V, ct::V, b::V) where {M <: Abstract
     IMEXButcherTableau{M, V}(A, At, c, ct, b, b)
 end
 
-
+function IMEXEuler_ButcherTableau()
+    # 2-Stage formulation of IMEX Euler to match c_1=0, c_s=1 structure
+    At = [0.0 0.0; 
+          1.0 0.0]
+          
+    A  = [0.0 0.0; 
+          0.0 1.0]
+          
+    bt = [1.0, 0.0]
+    b  = [0.0, 1.0]
+    
+    ct = [0.0, 1.0]
+    c  = [0.0, 1.0]
+    
+    return IMEXButcherTableau(At, A, bt, b, ct, c)
+end
 
 function IMEXARS233ButcherTableau(gamma_val::Float64 = (3.0 + sqrt(3.0))/6.0)::IMEXButcherTableau
     # This is the ARS(2,3,3) scheme from Ascher, Ruuth, Spiteri (1997), Table 2.4, k=3 column.

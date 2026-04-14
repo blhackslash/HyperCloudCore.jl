@@ -1,10 +1,4 @@
-# =========================================================================
-# MATHEMATICAL BRANCHLESS SIMD HELPERS
-# =========================================================================
-@inline math_max(a::Float64, b::Float64) = 0.5 * (a + b + abs(a - b))
-@inline math_min(a::Float64, b::Float64) = 0.5 * (a + b - abs(a - b))
-@inline math_max(a::AbstractVector, b::AbstractVector) = 0.5 * (a + b + abs.(a - b))
-@inline math_min(a::AbstractVector, b::AbstractVector) = 0.5 * (a + b - abs.(a - b))
+
 # =========================================================================
 # BASE LIMITER FUNCTIONS (Dispatched on Strategy!)
 # =========================================================================

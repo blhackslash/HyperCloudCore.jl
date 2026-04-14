@@ -91,3 +91,11 @@ end
 @inline param2xvec(x::Real) = SVector{1, Float64}(Float64(x))
 @inline param2xvec(x::NTuple{D, <:Real}) where {D} = Space{D}(Float64.(x))
 @inline param2xvec(x::Space{D}) where {D} = x
+
+# =========================================================================
+# MATHEMATICAL BRANCHLESS SIMD HELPERS
+# =========================================================================
+@inline math_max(a::Float64, b::Float64) = 0.5 * (a + b + abs(a - b))
+@inline math_min(a::Float64, b::Float64) = 0.5 * (a + b - abs(a - b))
+@inline math_max(a::AbstractVector, b::AbstractVector) = 0.5 * (a + b + abs.(a - b))
+@inline math_min(a::AbstractVector, b::AbstractVector) = 0.5 * (a + b - abs.(a - b))

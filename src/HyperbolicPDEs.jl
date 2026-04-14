@@ -1,3 +1,25 @@
+struct LinearAdvection{D, M} <: HyperbolicPDE{D, M}
+    vel::Flux{D, M}
+end
+
+struct BurgersEquation{a} <: ScalarHyperbolicPDE{1} end
+struct TestU3Equation{a} <: ScalarHyperbolicPDE{1} end
+struct Euler1D <: HyperbolicPDESystem{1, 3} end
+struct Euler2D <: HyperbolicPDESystem{2, 4} end
+"""
+Lagrangian Euler implementation using primitive variables, i.e. 
+U = (ρ,u,p) and A(U) matrix: [[0,ρ,0],[0,0,1/ρ],[0,γp,0]]
+"""
+struct LEuler1D{P} <: HyperbolicPDESystem{1, 3}
+    path::P
+    function LEuler1D(;path::P = LinePath{3}()) where P <: AbstractPath{3}
+        new{P}(path)
+    end
+end
+# --- Burgers Equation 2D ---
+struct BurgersEquation2D <: ScalarHyperbolicPDE{2} end
+
+
 function LinearAdvection(velocities)
     svec_vel = param2fvec(velocities)
     D = length(svec_vel)
@@ -36,11 +58,11 @@ BurgersEquation(a::Float64) = BurgersEquation{a}()
 BurgersEquation() = BurgersEquation{0.0}()
 
 @inline function velocity(::BurgersEquation{a}, u::SVector{1, Float64}) where {a}
-    return SVector{1, Float64}((1.0 - a) * u[1])
+    return (1.0 - a) * u
 end
 
 @inline function flux(::BurgersEquation{a}, u::State{1}) where {a}
-    return Flux{1, 1}(0.5 * (1.0 - a) * u[1]^2)
+    return SVector{1,State{1}}((0.5 * (1.0 - a) * u.*u,))
 end
 
 @inline function flux(eq::BurgersEquation2D, u::State{1})
@@ -64,7 +86,6 @@ end
 #----------------------------------#
 # --- System Equation Examples --- #
 #----------------------------------#
-
 # --- 1D Euler Equations ---
 
 function pressure_from_euler_conserved(rho::Float64, m::Float64, E::Float64)::Float64
@@ -73,20 +94,24 @@ function pressure_from_euler_conserved(rho::Float64, m::Float64, E::Float64)::Fl
     return max(pressure, 1e-9)
 end
 
-function flux(eq::Euler1D, U::State{3})::Flux{1, 3}
+function flux(eq::Euler1D, U::State{3})
     rho, m, E = U[1], U[2], U[3]
+    
     if rho < 1e-9
-        return Flux{3, 1}(0.0, pressure_from_euler_conserved(1e-9, 0.0, 0.0), 0.0)
+        p_fall = pressure_from_euler_conserved(1e-9, 0.0, 0.0)
+        # 1 Spatial Dimension (Tuple of 1), 3 Components
+        return Flux{1, 3}(( State{3}(0.0, p_fall, 0.0), ))
     end
+    
     ux = m / rho
     p = pressure_from_euler_conserved(rho, m, E)
     
-    # 3 rows, 1 column
-    return Flux{3, 1}(m, m * ux + p, (E + p) * ux)
+    # 1 Spatial Dimension (Tuple of 1), 3 Components
+    return Flux{1, 3}(( State{3}(m, m * ux + p, (E + p) * ux), ))
 end
 
+
 # --- 2D Euler Equations ---
-struct Euler2D <: HyperbolicPDESystem{2, 4} end
 
 function pressure_from_euler_conserved(U::SVector{4, Float64})::Float64
     rho, mx, my, E = U[1], U[2], U[3], U[4]
@@ -95,15 +120,14 @@ function pressure_from_euler_conserved(U::SVector{4, Float64})::Float64
     return max(pressure, 1e-9)
 end
 
-function flux(eq::Euler2D, U::State{4})::Flux{4, 2}
+function flux(eq::Euler2D, U::State{4})
     rho, mx, my, E = U[1], U[2], U[3], U[4]
     
     if rho < 1e-9
-        p_fallback = pressure_from_euler_conserved(SVector{4, Float64}(1e-9, 0.0, 0.0, 0.0))
-        
-        return SMatrix{4, 2, Float64}(
-            0.0, p_fallback, 0.0, 0.0,  # Column 1
-            0.0, 0.0, p_fallback, 0.0   # Column 2
+        p_fall = pressure_from_euler_conserved(SVector{4, Float64}(1e-9, 0.0, 0.0, 0.0))
+        return Flux{2, 4}(
+            State{4}(0.0, p_fall, 0.0, 0.0), # X-Direction Flux
+            State{4}(0.0, 0.0, p_fall, 0.0)  # Y-Direction Flux
         )
     end
     
@@ -112,22 +136,11 @@ function flux(eq::Euler2D, U::State{4})::Flux{4, 2}
     uy = my / rho
     
     # Compute the spatial fluxes as standard SVectors
-    F = SVector{4, Float64}(rho * ux, rho * ux^2 + p, rho * ux * uy, (E + p) * ux)
-    G = SVector{4, Float64}(rho * uy, rho * ux * uy, rho * uy^2 + p, (E + p) * uy)
+    F = State{4}(rho * ux, rho * ux^2 + p, rho * ux * uy, (E + p) * ux)
+    G = State{4}(rho * uy, rho * ux * uy, rho * uy^2 + p, (E + p) * uy)
     
-    # Splat them into the Matrix! F becomes Column 1, G becomes Column 2.
-    return Flux{4, 2}(F..., G...)
-end
-
-"""
-Lagrangian Euler implementation using primitive variables, i.e. 
-U = (ρ,u,p) and A(U) matrix: [[0,ρ,0],[0,0,1/ρ],[0,γp,0]]
-"""
-struct LEuler1D{P} <: HyperbolicPDESystem{1, 3}
-    path::P
-    function LEuler1D(;path::P = LinePath{3}()) where P <: AbstractPath{3}
-        new{P}(path)
-    end
+    # Return exactly 2 columns of 4 components
+    return Flux{2, 4}(F, G)
 end
 
 # Abstract definition
@@ -143,13 +156,12 @@ end
 
 # Implementation for LEuler1D (Primitive Euler)
 # A(U) = [[0, rho, 0], [0, 0, 1/rho], [0, gamma*p, 0]]
-@inline function A_matrix_times_vector(::LEuler1D, U::Tuple, v::Tuple)
-    rho, u, p = U
-    v1, v2, v3 = v
+@inline function A_matrix_times_vector(::LEuler1D, U, v)
+    rho, u, p = U[1], U[2], U[3]
+    v1, v2, v3 = v[1], v[2], v[3]
     # Result = [rho*v2, (1/rho)*v3, (gamma*p)*v2]
     return (rho * v2, (1.0 / rho) * v3, GAS_GAMMA_EULER * p * v2)
 end
-# In HyperbolicPDEs.jl or your test script
 
 @inline function gauss_lobatto_5()
     # Standard 5-point Lobatto nodes on [-1, 1] are: -1, -sqrt(3/7), 0, sqrt(3/7), 1

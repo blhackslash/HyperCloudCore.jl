@@ -29,16 +29,6 @@ abstract type NCHyperbolicPDESystem{D, M} <: HyperbolicPDESystem{D, M} end
 
 const DiagonalHyperbolicSystem{M, D} = NTuple{M, <: ScalarHyperbolicPDE{D}}
 
-struct LinearAdvection{D, M} <: HyperbolicPDE{D, M}
-    vel::Flux{D, M}
-end
-
-struct BurgersEquation{a} <: ScalarHyperbolicPDE{1} end
-struct TestU3Equation{a} <: ScalarHyperbolicPDE{1} end
-struct Euler1D <: HyperbolicPDESystem{1, 3} end
-# --- Burgers Equation 2D ---
-struct BurgersEquation2D <: ScalarHyperbolicPDE{2} end
-
 struct SimSetting
     tmax::Float64
     dt::Float64

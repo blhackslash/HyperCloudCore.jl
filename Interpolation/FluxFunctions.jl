@@ -1,20 +1,17 @@
-# =========================================================================
-# WAVE SPEED CALCULATIONS
-# =========================================================================
-
-@inline function max_wave_speed(eq::HyperbolicPDE, uL::State{M}, uR::State{M}, d::Int) where {M}
-    lamL = max_eigenvalue(eq, uL, d)
-    lamR = max_eigenvalue(eq, uR, d)
-    return max(lamL, lamR)
+# --- Generalized Scalar PDEs ---
+# Uses the velocity(eq, u) functor instead of looking for eq.vel!
+@inline function max_eigenvalue(eq::ScalarHyperbolicPDE{D}, u::State{1}, d::Int) where {D}
+    return abs(velocity(eq, u)[d])
 end
 
-# --- Default Eigenvalue implementations ---
+# --- Linear Advection ---
+# Linear Advection has a static velocity matrix, so we can pull it directly
+@inline function max_eigenvalue(eq::LinearAdvection, U::State{M}, d::Int) where {M}
+    return maximum(abs.(eq.vel[d]))
+end
 
-# Scalars simply return the absolute velocity in dimension `d`
-@inline max_eigenvalue(eq::ScalarHyperbolicPDE, u::SVector{1, Float64}, d::Int) = maximum(abs.(eq.vel[d]))
-
-# System PDEs
-@inline function max_eigenvalue(eq::Euler1D, U::SVector{3, Float64}, d::Int)
+# --- Euler 1D ---
+@inline function max_eigenvalue(eq::Euler1D, U::State{3}, d::Int)
     rho, m, E = U[1], U[2], U[3]
     if rho < 1e-9; return 0.0; end
     u = m / rho
@@ -23,7 +20,8 @@ end
     return abs(u) + c
 end
 
-@inline function max_eigenvalue(eq::Euler2D, U::SVector{4, Float64}, d::Int)
+# --- Euler 2D ---
+@inline function max_eigenvalue(eq::Euler2D, U::State{4}, d::Int)
     rho, mx, my, E = U[1], U[2], U[3], U[4]
     if rho < 1e-9; return 0.0; end
     u_n = d == 1 ? mx / rho : my / rho
@@ -32,15 +30,13 @@ end
     return abs(u_n) + c
 end
 
-@inline function max_eigenvalue(eq::LinearAdvection, U::State{M}, d::Int) where {M}
-    return maximum(abs.(eq.vel[d]))
-end
+# --- The Interface Aggregator ---
 @inline function max_eigenvalues(eq::HyperbolicPDE{D, M}, f_L::Flux{D, M}, f_R::Flux{D, M}) where {D, M}
     return SVector{D, Float64}(ntuple(Val(D)) do d
-        # Extract the d-th column state
+        # Extract the d-th column state natively
         lamL = max_eigenvalue(eq, f_L[d], d)
         lamR = max_eigenvalue(eq, f_R[d], d)
-        max(lamL, lamR)
+        max(lamL, lamR) # Your intuition applied!
     end)
 end
 # =========================================================================
