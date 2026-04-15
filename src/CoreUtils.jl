@@ -82,15 +82,16 @@ end
 # Case 4: Fallback if it is already correctly formatted
 @inline param2svec(v::Flux{D,M}) where {D, M} = v
 
-# --- System State Conversion (M components) ---
-@inline param2uvec(v::Real) = SVector{1, Float64}(Float64(v))
-@inline param2uvec(v::NTuple{M, <:Real}) where {M} = State{M}(Float64.(v))
-@inline param2uvec(v::State{M}) where {M} = v
+@inline param2uvec(v::Real) = SVector{1, Float64}(v)
+@inline param2uvec(v::Tuple) = SVector{length(v), Float64}(v)
+@inline param2uvec(v::SVector) = v # Pass-through
+@inline param2uvec(v::AbstractVector) = SVector{length(v), Float64}(v)
 
-# --- Spatial Geometry Conversion (D dimensions) ---
-@inline param2xvec(x::Real) = SVector{1, Float64}(Float64(x))
-@inline param2xvec(x::NTuple{D, <:Real}) where {D} = Space{D}(Float64.(x))
-@inline param2xvec(x::Space{D}) where {D} = x
+# --- For Space{D} (Spatial Coordinates & Dimensions) ---
+@inline param2xvec(x::Real) = SVector{1, Float64}(x)
+@inline param2xvec(x::Tuple) = SVector{length(x), Float64}(x)
+@inline param2xvec(x::SVector) = x # Pass-through
+@inline param2xvec(x::AbstractVector) = SVector{length(x), Float64}(x)
 
 # =========================================================================
 # MATHEMATICAL BRANCHLESS SIMD HELPERS

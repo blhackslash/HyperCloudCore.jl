@@ -7,8 +7,8 @@ using Polyester
 
 function GeneralIMEXTimeStepper(
     gradientInterpolator::G1, fallbackInterpolator::G2, mood::MOOD,
-    implicit_solver::IS, source_term_object::ST_OBJ, butcher_tableau::BT, 
-    grid_mover::GM, eq_macro::EQ_MACRO
+    implicit_solver::IS, source_term_object::ST_OBJ, 
+    grid_mover::GM, eq_macro::EQ_MACRO, butcher_tableau::BT, 
 ) where {G1, G2, MOOD, IS, ST_OBJ, BT, GM, EQ_MACRO}
     
     s = size(butcher_tableau.A, 1)
@@ -52,7 +52,7 @@ end
 # =========================================================================
 
 function (imex_ts::GeneralIMEXTimeStepper{M})(
-    eq_kin::HyperbolicPDE{D, M}, pg::ParticleGrid{D, M}, settings::Any, time_n::Real, dt::Real
+    eq_kin::HyperbolicPDE{D, M}, pg::ParticleGrid{D, M}, time_n::Real, dt::Real
 ) where {M, D}
 
     s = imex_ts.num_stages
@@ -211,50 +211,4 @@ function (imex_ts::GeneralIMEXTimeStepper{M})(
     end
 
     apply_boundary_conditions!(pg, pg.rhos)
-end
-
-# --- IMEX Configurator Constructors (Now requiring eq_macro) ---
-
-function ARS233(
-    gradientInterpolator, fallbackInterpolator, mood_criterion,
-    implicit_solver, source_term_object, grid_mover, eq_macro,
-    gamma_coefficient::Float64 = (3.0 + sqrt(3.0))/6.0 
-)
-    tableau = IMEXARS233ButcherTableau(gamma_coefficient) 
-    return GeneralIMEXTimeStepper(gradientInterpolator, fallbackInterpolator, mood_criterion, implicit_solver, source_term_object, tableau, grid_mover, eq_macro)
-end
-
-function PareschiRussoIMEXSSP3(
-    gradientInterpolator, fallbackInterpolator, mood_criterion,
-    implicit_solver, source_term_object, grid_mover, eq_macro
-)
-    tableau = PR_IMEX_SSP3_ButcherTableau() 
-    return GeneralIMEXTimeStepper(gradientInterpolator, fallbackInterpolator, mood_criterion, implicit_solver, source_term_object, tableau, grid_mover, eq_macro)
-end
-
-function ARS222(
-    gradientInterpolator, fallbackInterpolator, mood_criterion,
-    implicit_solver, source_term_object, grid_mover, eq_macro,
-    gamma_coefficient::Union{Float64,Nothing}=nothing 
-)
-    
-    tableau = ARS222_ButcherTableau(gamma_coefficient) 
-    return GeneralIMEXTimeStepper(gradientInterpolator, fallbackInterpolator, mood_criterion, implicit_solver, source_term_object, tableau, grid_mover, eq_macro)
-end
-
-function SSP2332(
-    gradientInterpolator, fallbackInterpolator, mood_criterion,
-    implicit_solver, source_term_object, grid_mover, eq_macro
-)
-    
-    tableau = SSP2332ButcherTableau() 
-    return GeneralIMEXTimeStepper(gradientInterpolator, fallbackInterpolator, mood_criterion, implicit_solver, source_term_object, tableau, grid_mover, eq_macro)
-end
-
-function IMEXEuler(
-    gradientInterpolator, fallbackInterpolator, mood_criterion,
-    implicit_solver, source_term_object, grid_mover, eq_macro
-)
-    tableau = IMEXEuler_ButcherTableau() 
-    return GeneralIMEXTimeStepper(gradientInterpolator, fallbackInterpolator, mood_criterion, implicit_solver, source_term_object, tableau, grid_mover, eq_macro)
 end

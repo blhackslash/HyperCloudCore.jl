@@ -78,7 +78,7 @@ end
 # =========================================================================
 
 function (rk::GeneralRKTimeStepper{M})(
-    eq::HyperbolicPDE, pg::ParticleGrid, settings::SimSetting, time::Real, dt::Real, 
+    eq::HyperbolicPDE, pg::ParticleGrid, time::Real, dt::Real, 
     source_term::AbstractSourceTerm = NoSourceTerm()
 ) where {M}
     N = pg.meta.N

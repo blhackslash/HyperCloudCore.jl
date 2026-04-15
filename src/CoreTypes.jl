@@ -29,11 +29,3 @@ abstract type NCHyperbolicPDESystem{D, M} <: HyperbolicPDESystem{D, M} end
 
 const DiagonalHyperbolicSystem{M, D} = NTuple{M, <: ScalarHyperbolicPDE{D}}
 
-struct SimSetting
-    tmax::Float64
-    dt::Float64
-    interpRange::Float64
-    interpAlpha::Float64
-    saveFreq::Int64
-end
-

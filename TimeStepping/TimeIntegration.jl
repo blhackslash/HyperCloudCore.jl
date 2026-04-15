@@ -1,4 +1,4 @@
-function (method::TimeStepper)(eq, pg, settings, time, dt)
+function (method::TimeStepper)(kwargs...)
     error("Each `TimeStepper' must override the ()-operator.")
 end
 
@@ -44,7 +44,6 @@ function initTSBuffer!(ts::MeshfreeTimeStepper, pg::ParticleGrid)
 end
 
 include("MeshfreeRKTimeSteppers.jl")
-include("FixedGridTimeSteppers.jl")
 include("ButcherTableaus.jl")
 include("SourceTerms.jl")
 include("ImplicitSolvers.jl")
@@ -107,9 +106,11 @@ Unified time integration loop for both scalar and system equations.
 """
 function mainTimeIntegrator!(
     timestepper::TimeStepper, 
-    eqs, # Can be ScalarHyperbolicPDE or DiagonalHyperbolicSystem
-    pg::ParticleGrid{D, M}, 
-    settings::SimSetting;
+    eq, # Can be ScalarHyperbolicPDE or DiagonalHyperbolicSystem
+    pg::ParticleGrid{D, M},
+    tmax::Real,
+    dt::Real;
+    is_cfl::Bool = false,
     snapshots::Integer = 10,
     remove_ghosts::Bool = false
 ) where {D, M}
@@ -119,7 +120,9 @@ function mainTimeIntegrator!(
     us = Vector{Vector{State{M}}}(undef, snapshots + 1)
     ts = Vector{Float64}(undef, snapshots + 1)
 
-    t_snap = range(0.0, settings.tmax, length=snapshots+1)
+    tmax = Float64(tmax)
+    dt_inp = Float64(dt)
+    t_snap = range(0.0, tmax, length=snapshots+1)
     snap_counter = 1
     t = 0.0
     k_step = 0
@@ -128,24 +131,29 @@ function mainTimeIntegrator!(
     saveData!(xs, us, ts, snap_counter, pg, t, remove_ghosts)
     snap_counter += 1 
 
-    p = Progress(convert(Int, ceil(settings.tmax / settings.dt)), desc="Running Simulation...")
+    p = Progress(10000, desc="Running Simulation...")
 
-    elapsed_time = @elapsed while t < settings.tmax
-        dt = min(settings.dt, settings.tmax - t)
+    elapsed_time = @elapsed while t < tmax
+        
+        dt = is_cfl ? dt_inp * getTimeStep(pg,eq) : dt_inp
+        dt = min(dt, tmax - t)
         if dt <= 1e-12; break; end
 
-        timestepper(eqs, pg, settings, t, dt)
+        timestepper(eq, pg, t, dt)
         
         t += dt
         k_step += 1
-
         # 2. Save intermediate snapshots (stop before the final slot)
         while snap_counter <= snapshots && t >= t_snap[snap_counter]
             saveData!(xs, us, ts, snap_counter, pg, t, remove_ghosts)
             snap_counter += 1
         end
 
-        next!(p)
+# Calculate the actual fraction of time completed (t / tmax)
+        current_progress = ceil(Int, (t / tmax) * 10000)
+        
+        # Safely cap it at 10000 to prevent bounds warnings near the end
+        update!(p, min(current_progress, 10000))
     end
     finish!(p)
 

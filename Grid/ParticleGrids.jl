@@ -353,6 +353,7 @@ end
 # =========================================================================
 
 function (rd::ReorderData{D})(pg::ParticleGrid{D, M, WF}) where {D, M, WF}
+    return
     N = pg.meta.N
     if N <= 1; return nothing; end
     
@@ -809,13 +810,8 @@ function determineVolumes!(pg::ParticleGrid{1, M, WF, GM, BC}) where {M, WF, GM,
     end
     return
 end
-
-@inline function getTimeStep(pg::ParticleGrid{D}, eq) where {D}
+@inline function getTimeStep(pg::ParticleGrid{D, M}, eq::HyperbolicPDE) where {D, M}
     dtMax = Inf
-    
-    # Extract base wave speeds safely into an SVector. 
-    # runSimulation.jl guarantees eq_for_dt is a LinearAdvection object.
-    vel = Space{D}(ntuple(d -> eq.vel[d][1], Val(D)))
 
     w_vec = get_weights(pg)
     dist_vec = get_distances(pg)
@@ -830,7 +826,14 @@ end
             continue
         end
 
-        # 1. Build the MLS Matrix N_s (Exactly like your Interpolator!)
+        # 1. Get the local macroscopic/kinetic state
+        U_i = pg.rhos[i]
+
+        # 2. Extract maximum absolute wave speeds dynamically for this particle!
+        # Automatically dispatches to Euler, Burgers, or LinearAdvection methods.
+        Lambda = Space{D}(ntuple(d -> max_eigenvalue(eq, U_i, d), Val(D)))
+
+        # 3. Build the MLS Matrix N_s
         N_s = @SMatrix zeros(Float64, D, D)
         @inbounds for k in nb_slice
             w  = w_vec[k]
@@ -842,10 +845,10 @@ end
             continue
         end
 
-        # 2. Compile-time analytic inversion using StaticArrays
+        # 4. Compile-time analytic inversion using StaticArrays
         inv_N_s = inv(N_s)
 
-        # 3. Accumulate the stability condition
+        # 5. Accumulate the stability condition dynamically
         sum_c = 0.0
         @inbounds for k in nb_slice
             w  = w_vec[k]
@@ -854,11 +857,8 @@ end
             # C_k is the effective MLS shape function vector
             C_k = inv_N_s * (w * dx)
             
-            # Evaluate the upwind contribution: dot(velocity, shape_gradient)
-            c_k = dot(vel, C_k)
-            if c_k < 0.0
-                sum_c -= c_k
-            end
+            # Worst-case upwind contribution using absolute maximum wave speeds
+            sum_c += sum(ntuple(d -> Lambda[d] * abs(C_k[d]), Val(D)))
         end
 
         if sum_c > 1e-14

@@ -53,6 +53,20 @@ end
     return f_L, f_R, F_L, F_R
 end
 
+# --- Generalized N-Dimensional Burgers Equation ---
+struct BurgersEquationMD{D} <: ScalarHyperbolicPDE{D} end
+
+@inline function flux(eq::BurgersEquationMD{D}, u::State{1}) where {D}
+    # F(u) = 1/2 u^2 in all D spatial directions
+    # Builds an SVector of length D, where each element is a State{1}
+    return Flux{D, 1}(ntuple(_ -> 0.5 * u.^2, Val(D)))
+end
+
+@inline function velocity(eq::BurgersEquationMD{D}, u::State{1}) where {D}
+    # f'(u) = u in all D spatial directions
+    return Space{D}(ntuple(_ -> u[1], Val(D)))
+end
+
 # --- Burgers Equation 1D ---
 BurgersEquation(a::Float64) = BurgersEquation{a}()
 BurgersEquation() = BurgersEquation{0.0}()
