@@ -34,7 +34,7 @@ function (central::CentralGradient{1})(
     i::Int,                         # Current particle index
     f_i::Real,                      # Value of f at particle i
     nb_slice::UnitRange{Int},       # Slice into GLOBAL neighbor arrays
-    pg::ParticleGrid1D,             # Grid object
+    pg::ParticleGrid{D},             # Grid object
     f_neighbors::AbstractVector,    # (Not used)
     df_neighbors::AbstractVector    # Pre-gathered diffs
 )::Real where {PDE <: ScalarHyperbolicPDE} # Use ScalarHyperbolicPDE for velocity
@@ -70,7 +70,7 @@ function (central::CentralGradient{2})(
     i::Int,                         # Current particle index
     f_i::Real,                      # Value of f at particle i
     nb_slice::UnitRange{Int},       # Slice into GLOBAL neighbor arrays
-    pg::ParticleGrid2D,             # Grid object
+    pg::ParticleGrid{2},             # Grid object
     f_neighbors::AbstractVector,    # (Not used)
     df_neighbors::AbstractVector    # Pre-gathered diffs
 )::Real where {PDE <: ScalarHyperbolicPDE}

@@ -1,17 +1,5 @@
-mutable struct LocalVoxels
-    num_bins::Int
-    half_bins::Int
-    voxel_size::Float64
-    occupation::Vector{Bool}
-    function LocalVoxels(min_nb::Int, R::Float64)
-        num_bins = 2 * min_nb + 1
-        voxel_size = (2.0 * R) / num_bins
-        occupation = zeros(Bool, num_bins)
-        new(num_bins, min_nb, voxel_size, occupation)
-    end
-end
 
-## ------------------------------- Weight Functions -------------------------------
+## ------------------------------- Weight Functions ------------------------------
 abstract type MLSWeightFunction end
 
 """
@@ -75,6 +63,8 @@ mutable struct GridMetadata{D}
     maxs::Space{D}
     inner_mins::Space{D}
     inner_maxs::Space{D}
+    L::Space{D}
+    L_inv::Space{D}
     R::Float64
     r::Float64
     a::Float64
@@ -131,8 +121,11 @@ mutable struct ParticleGridCore{D}
     volumes::Vector{Float64}
 end
 
-# Add BC parameter to GlobalBins
-struct GlobalBins{D, BC}
+@inline get_n_offsets(::Val{1}) = 3
+@inline get_n_offsets(::Val{2}) = 9
+@inline get_n_offsets(::Val{3}) = 27
+
+struct GlobalBins{D, BC, N_OFF}
     mins::Space{D}
     maxs::Space{D}
     coarse_size::Float64
@@ -143,16 +136,19 @@ struct GlobalBins{D, BC}
     fine_dims::NTuple{D, Int}
     fine_occupation::Vector{Bool}
     fine_type::Vector{UInt8}
+    
+    # Strictly typed Vector of SVectors!
+    bin_neighbors::Vector{SVector{N_OFF, Int}} 
 end
 
 # Add BC parameter to ParticleGrid and pass it to GlobalBins
-mutable struct ParticleGrid{D, M, WF, GM, BC}
+mutable struct ParticleGrid{D, M, WF, GM, BC, N_OFF}
     meta::GridMetadata{D}
     core::ParticleGridCore{D}
     shared::SharedBuffers{D, M}
     neighbor::NeighborData{D, WF}
     reorder::ReorderData{D}
-    bins::GlobalBins{D, BC}    # <-- Now type-linked
+    bins::GlobalBins{D, BC, N_OFF}    # <-- Now type-linked
     mover::GM
 
     rhos::Vector{State{M}}
@@ -161,7 +157,7 @@ mutable struct ParticleGrid{D, M, WF, GM, BC}
 end
 
 # Update the Aliases
-const ParticleGrid1D{M, WF, GM, BC} = ParticleGrid{1, M, WF, GM, BC}
-const ParticleGrid2D{M, WF, GM, BC} = ParticleGrid{2, M, WF, GM, BC}
+#const ParticleGrid1D{M, WF, GM, BC} = ParticleGrid{1, M, WF, GM, BC}
+#const ParticleGrid2D{M, WF, GM, BC} = ParticleGrid{2, M, WF, GM, BC}
 
 

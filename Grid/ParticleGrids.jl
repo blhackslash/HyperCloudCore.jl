@@ -1,6 +1,6 @@
 include("MLSWeightFunctions.jl")
 include("GridMovement.jl")
-include("ParticleManagement.jl")
+#include("ParticleManagement.jl")
 
 # --- 1. Unified Position Accessors (No more reinterpret hacks!) ---
 @inline get_positions(pg::ParticleGrid) = pg.core.positions
@@ -21,14 +21,28 @@ include("ParticleManagement.jl")
     end
 end
 
-# Periodic version: Pass the raw array AND the pre-calculated domain size (L)
-@inline function getPeriodicDistance(pos::AbstractVector, i::Int, j::Int, L)
+# Calculate this ONCE at the start of your timestep / derivative loop
+# invL = Space{D}(1.0 ./ L)
+
+@inline function getPeriodicDistance(pos::AbstractVector{Space{D}}, i::Int, j::Int, L::Space{D}, invL::Space{D}) where {D}
     @inbounds begin
-        dist = pos[j] - pos[i]
-        # Perfectly type-stable, unrolled periodic wrapping for any dimension
-        return map((d, l) -> d > 0.5 * l ? d - l : (d < -0.5 * l ? d + l : d), dist, L)
+        p_i = pos[i]
+        p_j = pos[j]
+        
+        return Space{D}(ntuple(Val(D)) do d
+            dx = p_j[d] - p_i[d]
+            
+            # Replaced division with multiplication! (FMA friendly)
+            dx - L[d] * round(dx * invL[d]) 
+        end)
     end
 end
+
+# =========================================================================
+# UNIFIED DISTANCE DISPATCHER
+# =========================================================================
+@inline _get_dist(pos, i, j, L, L_inv, ::Val{:periodic}) = getPeriodicDistance(pos, i, j, L, L_inv)
+@inline _get_dist(pos, i, j, L, L_inv, ::Val) = getEuclideanDistance(pos, i, j)
 
 # =========================================================================
 # FAST SPATIAL HASHING (Coordinates -> 1D Bin Index)
@@ -100,8 +114,8 @@ end
 function GlobalBins(
     mins_tot::NTuple{D, Real}, maxs_tot::NTuple{D, Real}, 
     mins_interior::NTuple{D, Real}, maxs_interior::NTuple{D, Real},
-    R::Real, r::Real, max_particles::Int, ::Val{BC}
-) where {D, BC}
+    R::Real, r::Real, max_particles::Int, buffer::Vector{SVector{N_OFF, Int}}, ::Val{BC}
+) where {D, BC, N_OFF}
     
     mins_t = Space{D}(mins_tot...)
     maxs_t = Space{D}(maxs_tot...)
@@ -143,10 +157,10 @@ function GlobalBins(
         end
     end
 
-    return GlobalBins{D, BC}(
+    return GlobalBins{D, BC, N_OFF}(
         mins_t, maxs_t, 
         Float64(R), coarse_dims, head, next,
-        Float64(r), fine_dims, fine_occ, fine_type
+        Float64(r), fine_dims, fine_occ, fine_type, buffer
     )
 end
 
@@ -228,8 +242,9 @@ function createParticleGrid(
     # ---------------------------------------------------------
     # Struct Instantiation
     # ---------------------------------------------------------
+    L = maxs_f - mins_f
     meta = GridMetadata{D}(
-        N, N_interior_total, N_ghost_total, mins_tot, maxs_tot, mins_f, maxs_f, 
+        N, N_interior_total, N_ghost_total, mins_tot, maxs_tot, mins_f, maxs_f, L, 1. ./ L,
         R, r, a, dxs_f, regular, bc, Float64(interp_range_factor), 0
     )
 
@@ -237,10 +252,12 @@ function createParticleGrid(
     shared = SharedBuffers{D, M}(zeros(State{M}, N), similar(positions), zeros(Bool,N), zeros(Int, N))
 
     reorder = ReorderData{D}(collect(1:N), collect(1:N), zeros(Int, N), zeros(Bool,N))
+
+    N_OFF = get_n_offsets(Val(D))
     bins = GlobalBins(
         Tuple(mins_tot), Tuple(maxs_tot), 
         Tuple(mins_f), Tuple(maxs_f), 
-        R, r, N, Val(bc)
+        R, r, N, Vector{SVector{N_OFF, Int}}(undef, 0), Val(bc), 
     )
 
     neighbors = NeighborData{D, typeof(weight_func)}(
@@ -249,7 +266,7 @@ function createParticleGrid(
         zeros(Int, N), zeros(Int, N)
     )
 
-    pg = ParticleGrid{D, M, typeof(weight_func), typeof(mover), bc}(
+    pg = ParticleGrid{D, M, typeof(weight_func), typeof(mover), bc, N_OFF}(
         meta, core, shared, neighbors, reorder, bins, mover,
         zeros(State{M}, N), zeros(SVector{M, Bool}, N), zeros(State{M}, N)
     )
@@ -261,36 +278,6 @@ function createParticleGrid(
     return pg
 end
 
-# =========================================================================
-# BACKWARDS COMPATIBILITY WRAPPERS
-# =========================================================================
-
-# 1D Wrapper
-function createParticleGrid(
-    ::Val{1}, xmin::Real, xmax::Real, N_interior::Integer, bc::Symbol,
-    interp_range_factor::Real;
-    randomness::Real = 0.0, kwargs...
-)
-    return createParticleGrid(
-        Space{1}(Float64(xmin)), Space{1}(Float64(xmax)), (Int(N_interior),), 
-        bc, Float64(interp_range_factor);
-        randomness=Space{1}(Float64(randomness)), kwargs...
-    )
-end
-
-# 2D Wrapper
-function createParticleGrid(
-    ::Val{2}, xmin::Real, xmax::Real, ymin::Real, ymax::Real, 
-    Nx_interior::Int, Ny_interior::Int, bc::Symbol, interp_range_factor::Real;
-    randomness::NTuple{2, Float64} = (0.0, 0.0), kwargs...
-)
-    return createParticleGrid(
-        Space{2}(Float64(xmin), Float64(ymin)), Space{2}(Float64(xmax), Float64(ymax)), 
-        (Int(Nx_interior), Int(Ny_interior)), 
-        bc, Float64(interp_range_factor);
-        randomness=Space{2}(Float64.(randomness)), kwargs...
-    )
-end
 
 # Extractor simply returns the cached UnitRange
 @inline function getNBSlice(pg::ParticleGrid, p_idx::Int)
@@ -424,6 +411,9 @@ function _build_global_bins!(pg::ParticleGrid{D}, ::Val{:periodic}) where {D}
     pos = get_positions(pg)
     bins = pg.bins
     
+    # --- ADD THIS LINE HERE TOO! ---
+    update_bin_neighbors!(bins)
+    
     fill!(bins.head, 0)
     fill!(bins.fine_occupation, false)
     
@@ -448,7 +438,8 @@ function _build_global_bins!(pg::ParticleGrid{D}, ::Val{BC}) where {D, BC}
     N = pg.meta.N
     pos = get_positions(pg)
     bins = pg.bins
-    
+    # --- ADD THIS LINE! ---
+    update_bin_neighbors!(bins)
     fill!(bins.head, 0)
     fill!(bins.fine_occupation, false)
     
@@ -473,134 +464,92 @@ function _build_global_bins!(pg::ParticleGrid{D}, ::Val{BC}) where {D, BC}
     end
     return nothing
 end
-# =========================================================================
-# PERIODIC NEIGHBOR SEARCH (Branchless & Type-Stable)
-# =========================================================================
-function (nd::NeighborData{D, WF})(pg::ParticleGrid{D, M, WF, GM, :periodic}) where {D, M, WF, GM}
-    build_global_bins!(pg)
 
-    N = pg.meta.N
-    pos = get_positions(pg)
-    R_sq = pg.meta.R^2
-    weightFunc = nd.weight_func
-    bins = pg.bins
-    
-    # Pre-compute domain size for periodic distance
-    L = pg.meta.maxs .- pg.meta.mins
-
+# =========================================================================
+# PERIODIC BIN NEIGHBOR UPDATE
+# =========================================================================
+function update_bin_neighbors!(bins::GlobalBins{D, :periodic, N_OFF}) where {D, N_OFF}
     coarse_dims = bins.coarse_dims
     ci = CartesianIndices(coarse_dims)
     li = LinearIndices(coarse_dims)
     window = CartesianIndices(ntuple(_ -> -1:1, Val(D)))
-
-    # --- PASS 1: COUNTING ---
-    counts = nd.counts
-    fill!(counts, 0)
     
-    @batch for i in 1:N
-        bin_idx = get_flat_bin_index(pos[i], bins.mins, bins.coarse_size, coarse_dims)
-        cart_idx = ci[bin_idx]
-        
-        c = 0
-        for offset in window
-            nb_cart = cart_idx + offset
-            
-            # Pure Tuple mapping: perfectly type-stable, branchless periodic wrapping
-            wrapped_cart = map((nc, cd) -> mod1(nc, cd), Tuple(nb_cart), coarse_dims)
-            nb_bin_idx = li[CartesianIndex(wrapped_cart)]
-            
-            j = bins.head[nb_bin_idx]
-            while j > 0
-                if i != j
-                    dist = getPeriodicDistance(pos, i, j, L)
-                    d2 = sum(abs2, dist)
-                    if d2 <= R_sq
-                        c += 1
-                    end
-                end
-                j = bins.next[j]
-            end
-        end
-        counts[i] = c
+    num_bins = prod(coarse_dims)
+
+    # Resize the outer vector if necessary
+    if length(bins.bin_neighbors) != num_bins
+        resize!(bins.bin_neighbors, num_bins)
     end
 
-    # --- SEQUENTIAL PREFIX SUM ---
-    starts = pg.shared.int_buffer 
-    max_so_far = 0 
-    current_ptr = 1
-    
-    @inbounds for i in 1:N
-        c = counts[i]
-        pg.neighbor.ranges[i] = current_ptr:(current_ptr + c - 1)
-        starts[i] = current_ptr
-        current_ptr += c
-        if c > max_so_far; max_so_far = c; end
-    end
-    
-    pg.meta.max_nb = max_so_far
-    pg.neighbor.ranges[N + 1] = current_ptr:(current_ptr - 1)
-
-    total_neighbors = current_ptr - 1
-    ensure_capacity!(nd, total_neighbors) 
-
-    # --- PASS 2: WRITING ---
-    indices = pg.neighbor.indices
-    weights = pg.neighbor.weights
-    distances = pg.neighbor.distances
-    
-    offsets = nd.offsets
-    fill!(offsets, 0)
-
-    @batch for i in 1:N
-        bin_idx = get_flat_bin_index(pos[i], bins.mins, bins.coarse_size, coarse_dims)
-        cart_idx = ci[bin_idx]
+    for b in 1:num_bins
+        cart_idx = ci[b]
         
-        for offset in window
+        bins.bin_neighbors[b] = SVector{N_OFF, Int}(ntuple(Val(N_OFF)) do idx
+            offset = window[idx]
             nb_cart = cart_idx + offset
             
             wrapped_cart = map((nc, cd) -> mod1(nc, cd), Tuple(nb_cart), coarse_dims)
-            nb_bin_idx = li[CartesianIndex(wrapped_cart)]
-            
-            j = bins.head[nb_bin_idx]
-            while j > 0
-                if i != j
-                    dist = getPeriodicDistance(pos, i, j, L)
-                    d2 = sum(abs2, dist)
-                    
-                    if d2 <= R_sq
-                        @inbounds begin
-                            write_idx = starts[i] + offsets[i]
-                            offsets[i] += 1
-                            
-                            indices[write_idx]   = j
-                            weights[write_idx]   = weightFunc(d2) 
-                            distances[write_idx] = dist
-                        end
-                    end
-                end
-                j = bins.next[j]
-            end
-        end
+            return li[CartesianIndex(wrapped_cart)]
+        end)
     end
+    
     return nothing
 end
+# =========================================================================
+# NON-PERIODIC BIN NEIGHBOR UPDATE (With Dummy Sink Bin)
+# =========================================================================
+function update_bin_neighbors!(bins::GlobalBins{D, BC, N_OFF}) where {D, BC, N_OFF}
+    coarse_dims = bins.coarse_dims
+    ci = CartesianIndices(coarse_dims)
+    li = LinearIndices(coarse_dims)
+    window = CartesianIndices(ntuple(_ -> -1:1, Val(D)))
+    
+    num_bins = prod(coarse_dims)
+    dummy_bin = num_bins + 1 # The safe sink bin for out-of-bounds offsets
 
+    # Resize vectors to include the dummy bin
+    if length(bins.bin_neighbors) != num_bins
+        resize!(bins.bin_neighbors, num_bins)
+        if length(bins.head) < dummy_bin
+            resize!(bins.head, dummy_bin)
+        end
+    end
+
+    for b in 1:num_bins
+        cart_idx = ci[b]
+        
+        bins.bin_neighbors[b] = SVector{N_OFF, Int}(ntuple(Val(N_OFF)) do idx
+            offset = window[idx]
+            nb_cart = cart_idx + offset
+            
+            if checkbounds(Bool, li, nb_cart)
+                return li[nb_cart]
+            else
+                return dummy_bin # Out-of-bounds points to the empty sink!
+            end
+        end)
+    end
+    
+    return nothing
+end
 # =========================================================================
-# NON-PERIODIC NEIGHBOR SEARCH (Branchless Bounds Checking)
+# UNIFIED NEIGHBOR SEARCH (Branchless & Type-Stable)
 # =========================================================================
-function (nd::NeighborData{D, WF})(pg::ParticleGrid{D, M, WF, GM, BC}) where {D, M, WF, GM, BC}
-    build_global_bins!(pg)
+function (nd::NeighborData{D, WF})(pg::ParticleGrid{D, M, WF, GM, BC, N_OFF}) where {D, M, WF, GM, BC, N_OFF}
+    build_global_bins!(pg) # (Ensures update_bin_neighbors! and dummy bin are configured)
 
     N = pg.meta.N
     pos = get_positions(pg)
     R_sq = pg.meta.R^2
     weightFunc = nd.weight_func
-    bins = pg.bins
     
+    bins = pg.bins
+    L = pg.meta.L
+    L_inv = pg.meta.L_inv
     coarse_dims = bins.coarse_dims
-    ci = CartesianIndices(coarse_dims)
-    li = LinearIndices(coarse_dims)
-    window = CartesianIndices(ntuple(_ -> -1:1, Val(D)))
+    
+    bin_neighbors = bins.bin_neighbors
+    bc_val = Val(BC) # Extracted for distance dispatch
 
     # --- PASS 1: COUNTING ---
     counts = nd.counts
@@ -608,22 +557,14 @@ function (nd::NeighborData{D, WF})(pg::ParticleGrid{D, M, WF, GM, BC}) where {D,
     
     @batch for i in 1:N
         bin_idx = get_flat_bin_index(pos[i], bins.mins, bins.coarse_size, coarse_dims)
-        cart_idx = ci[bin_idx]
         
         c = 0
-        for offset in window
-            nb_cart = cart_idx + offset
-            
-            # Fast, native boundary check
-            if !checkbounds(Bool, li, nb_cart)
-                continue
-            end
-            nb_bin_idx = li[nb_cart]
-            
+        @inbounds for nb_bin_idx in bin_neighbors[bin_idx]
             j = bins.head[nb_bin_idx]
             while j > 0
                 if i != j
-                    dist = getEuclideanDistance(pos, i, j)
+                    # Dispatch dynamically routes to periodic or euclidean natively
+                    dist = _get_dist(pos, i, j, L, L_inv, bc_val)
                     d2 = sum(abs2, dist)
                     if d2 <= R_sq
                         c += 1
@@ -664,31 +605,21 @@ function (nd::NeighborData{D, WF})(pg::ParticleGrid{D, M, WF, GM, BC}) where {D,
 
     @batch for i in 1:N
         bin_idx = get_flat_bin_index(pos[i], bins.mins, bins.coarse_size, coarse_dims)
-        cart_idx = ci[bin_idx]
         
-        for offset in window
-            nb_cart = cart_idx + offset
-            
-            if !checkbounds(Bool, li, nb_cart)
-                continue
-            end
-            nb_bin_idx = li[nb_cart]
-            
+        @inbounds for nb_bin_idx in bin_neighbors[bin_idx]
             j = bins.head[nb_bin_idx]
             while j > 0
                 if i != j
-                    dist = getEuclideanDistance(pos, i, j) 
+                    dist = _get_dist(pos, i, j, L, L_inv, bc_val)
                     d2 = sum(abs2, dist)
                     
                     if d2 <= R_sq
-                        @inbounds begin
-                            write_idx = starts[i] + offsets[i]
-                            offsets[i] += 1
-                            
-                            indices[write_idx]   = j
-                            weights[write_idx]   = weightFunc(d2) 
-                            distances[write_idx] = dist
-                        end
+                        write_idx = starts[i] + offsets[i]
+                        offsets[i] += 1
+                        
+                        indices[write_idx]   = j
+                        weights[write_idx]   = weightFunc(d2) 
+                        distances[write_idx] = dist
                     end
                 end
                 j = bins.next[j]
@@ -793,13 +724,14 @@ function determineVolumes!(pg::ParticleGrid{1, M, WF, GM, BC}) where {M, WF, GM,
     volumes = pg.core.volumes
     
     if BC == :periodic
-        L = pg.meta.maxs .- pg.meta.mins
+        L = pg.meta.L
+        L_inv = pg.meta.L_inv
         for i in 1:N
             prev_idx = mod1(i - 1, N)
             next_idx = mod1(i + 1, N)
             # Use the generalized periodic distance function
-            deltaPosL = abs(getPeriodicDistance(positions, prev_idx, i, L)[1])
-            deltaPosR = abs(getPeriodicDistance(positions, i, next_idx, L)[1])
+            deltaPosL = abs(getPeriodicDistance(positions, prev_idx, i, L, L_inv)[1])
+            deltaPosR = abs(getPeriodicDistance(positions, i, next_idx, L, L_inv)[1])
             volumes[i] = (deltaPosL + deltaPosR) / 2.0
         end
     else
