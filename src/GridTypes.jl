@@ -80,7 +80,8 @@ end
 # ---------------------------------------------------------
 mutable struct SharedBuffers{D, M}
     rho_buffer::Vector{State{M}}      
-    pos_buffer::Vector{Space{D}} 
+    pos_buffer::Vector{Space{D}}
+    float_buffer::Vector{Float64}
     bit_buffer::Vector{Bool}
     int_buffer::Vector{Int}
 end

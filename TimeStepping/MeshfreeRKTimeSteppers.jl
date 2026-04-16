@@ -176,7 +176,7 @@ function (rk::GeneralRKTimeStepper{M})(
         end
         
         # --- 4. Divergence & Dynamic MOOD Check ---
-        @batch for p_idx in 1:N
+        @batch minbatch=50 for p_idx in 1:N
             if is_boundary[p_idx]; continue; end
             
             fi = rho_stage[p_idx]

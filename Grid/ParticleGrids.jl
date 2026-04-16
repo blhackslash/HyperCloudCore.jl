@@ -249,7 +249,7 @@ function createParticleGrid(
     )
 
     core = ParticleGridCore{D}(positions, is_boundary, zeros(Float64, N))
-    shared = SharedBuffers{D, M}(zeros(State{M}, N), similar(positions), zeros(Bool,N), zeros(Int, N))
+    shared = SharedBuffers{D, M}(zeros(State{M}, N), similar(positions), zeros(Float64,N), zeros(Bool,N), zeros(Int, N))
 
     reorder = ReorderData{D}(collect(1:N), collect(1:N), zeros(Int, N), zeros(Bool,N))
 
@@ -742,13 +742,24 @@ function determineVolumes!(pg::ParticleGrid{1, M, WF, GM, BC}) where {M, WF, GM,
     end
     return
 end
+# 1. Define this helper OUTSIDE the getTimeStep function
+# This hides the anonymous function (d -> ...) from Polyester's macro parser!
+@inline _get_Lambda(eq, U_i, ::Val{D}) where {D} = Space{D}(ntuple(d -> max_eigenvalue(eq, U_i, d), Val(D)))
+
 @inline function getTimeStep(pg::ParticleGrid{D, M}, eq::HyperbolicPDE) where {D, M}
-    dtMax = Inf
+    # Zero-allocation cast of the existing int_buffer to Float64
+    dt_buffer = reinterpret(Float64, pg.shared.int_buffer)
+    fill!(dt_buffer, Inf)
 
     w_vec = get_weights(pg)
     dist_vec = get_distances(pg)
 
-    for i in 1:pg.meta.N
+    # 1. Hoist static parameters OUTSIDE the @batch loop.
+    # This shields them from being mangled by Polyester's closure!
+    valD = Val(D)
+    dim = D 
+
+    @batch for i in 1:pg.meta.N
         if pg.core.is_boundary[i]
             continue
         end
@@ -758,18 +769,26 @@ end
             continue
         end
 
-        # 1. Get the local macroscopic/kinetic state
         U_i = pg.rhos[i]
+        
+        # Use the hoisted Val(D)
+        Lambda = _get_Lambda(eq, U_i, valD)
 
-        # 2. Extract maximum absolute wave speeds dynamically for this particle!
-        # Automatically dispatches to Euler, Burgers, or LinearAdvection methods.
-        Lambda = Space{D}(ntuple(d -> max_eigenvalue(eq, U_i, d), Val(D)))
-
-        # 3. Build the MLS Matrix N_s
-        N_s = @SMatrix zeros(Float64, D, D)
-        @inbounds for k in nb_slice
+        # =====================================================================
+        # 2. THE FIRST-ELEMENT TRICK
+        # We initialize N_s with the first neighbor. The compiler knows 
+        # exactly what type `dx * dx'` is natively, so we never have to 
+        # explicitly pass `D` to an SMatrix constructor!
+        # =====================================================================
+        k_first = nb_slice[1]
+        dx_first = dist_vec[k_first]
+        N_s = w_vec[k_first] * (dx_first * dx_first')
+        
+        # Loop over the REST of the neighbors to accumulate
+        @inbounds for idx in 2:length(nb_slice)
+            k = nb_slice[idx]
             w  = w_vec[k]
-            dx = dist_vec[k] # This is already Space{D}
+            dx = dist_vec[k] 
             N_s += w * (dx * dx')
         end
 
@@ -777,29 +796,25 @@ end
             continue
         end
 
-        # 4. Compile-time analytic inversion using StaticArrays
         inv_N_s = inv(N_s)
-
-        # 5. Accumulate the stability condition dynamically
         sum_c = 0.0
+        
         @inbounds for k in nb_slice
             w  = w_vec[k]
             dx = dist_vec[k]
             
-            # C_k is the effective MLS shape function vector
             C_k = inv_N_s * (w * dx)
-            
-            # Worst-case upwind contribution using absolute maximum wave speeds
-            sum_c += sum(ntuple(d -> Lambda[d] * abs(C_k[d]), Val(D)))
+            sum_c += dot(Lambda, abs.(C_k))
         end
 
         if sum_c > 1e-14
-            # The factor D automatically scales CFL for 1D (D=1) and 2D (D=2)!
-            dt_i = 1.0 / (D * sum_c)
-            dtMax = min(dt_i, dtMax)
+            # Use the hoisted `dim` integer
+            dt_buffer[i] = 1.0 / (dim * sum_c)
         end
     end
-    return dtMax
+    
+    # SIMD-optimized sequential reduction
+    return minimum(view(dt_buffer, 1:pg.meta.N))
 end
 
 # =========================================================================
@@ -869,6 +884,7 @@ end
         
         resize!(sb.pos_buffer, new_cap)
         resize!(sb.bit_buffer, new_cap)
+        resize!(sb.float_buffer, new_cap)
         resize!(sb.int_buffer, new_cap)
         resize!(sb.rho_buffer, new_cap)
     end
