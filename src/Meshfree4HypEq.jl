@@ -1,4 +1,4 @@
-module Meshfree4ScalarEq
+module Meshfree4HypEq
 
 export runSimulation, GAS_GAMMA_EULER, DEBUG_TARGET_PARTICLE, DEBUG_TARGET_STEP
 
