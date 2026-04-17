@@ -1,48 +1,69 @@
-# --- Generalized Scalar PDEs ---
-# Uses the velocity(eq, u) functor instead of looking for eq.vel!
-@inline function max_eigenvalue(eq::ScalarHyperbolicPDE{D}, u::State{1}, d::Int) where {D}
+# =========================================================================
+# MAXIMUM EIGENVALUES (Wave Speeds)
+# =========================================================================
+
+# --- Generalized Scalar PDEs (Fallback for any M=1 equation) ---
+@inline function max_eigenvalue(eq::HyperbolicPDE{D, 1, R}, u::State{1}, d::Int) where {D, R}
     return abs(velocity(eq, u)[d])
 end
 
 # --- Linear Advection ---
-# Linear Advection has a static velocity matrix, so we can pull it directly
-@inline function max_eigenvalue(eq::LinearAdvection, U::State{M}, d::Int) where {M}
+# 1. Disambiguation for M = 1 (Fixes the MethodError)
+@inline function max_eigenvalue(eq::LinearAdvection{D, 1, R}, U::State{1}, d::Int) where {D, R}
+    return abs(eq.vel[d][1])
+end
+
+# 2. General case for Systems (M > 1)
+@inline function max_eigenvalue(eq::LinearAdvection{D, M, R}, U::State{M}, d::Int) where {D, M, R}
     return maximum(abs.(eq.vel[d]))
 end
 
-# --- Euler 1D ---
-@inline function max_eigenvalue(eq::Euler1D, U::State{3}, d::Int)
-    rho, m, E = U[1], U[2], U[3]
-    if rho < 1e-9; return 0.0; end
-    u = m / rho
-    p = max((GAS_GAMMA_EULER - 1.0) * (E - 0.5 * m^2 / rho), 1e-9)
+# --- Euler Equation (D-Dimensional Unified) ---
+
+# 1. Conservative Variables (ρ, m, E)
+@inline function max_eigenvalue(eq::EulerEquation{D, M, <:Conservative}, U::State{M}, d::Int) where {D, M}
+    rho = max(U[1], 1e-9)
+    m_d = U[1+d]
+    E = U[M]
+    
+    # Calculate full kinetic energy for pressure natively in D-dimensions
+    m_sq = sum(abs2, ntuple(i -> U[1+i], Val(D)))
+    
+    p = max((GAS_GAMMA_EULER - 1.0) * (E - 0.5 * m_sq / rho), 1e-9)
     c = sqrt(GAS_GAMMA_EULER * p / rho)
-    return abs(u) + c
+    
+    return abs(m_d / rho) + c
 end
 
-# --- Euler 2D ---
-@inline function max_eigenvalue(eq::Euler2D, U::State{4}, d::Int)
-    rho, mx, my, E = U[1], U[2], U[3], U[4]
-    if rho < 1e-9; return 0.0; end
-    u_n = d == 1 ? mx / rho : my / rho
-    p = max((GAS_GAMMA_EULER - 1.0) * (E - 0.5 * (mx^2 + my^2) / rho), 1e-9)
+# 2. Primitive/Lagrangian Variables (ρ, u, p)
+@inline function max_eigenvalue(eq::EulerEquation{D, M, <:NCRepresentation}, V::State{M}, d::Int) where {D, M}
+    rho = max(V[1], 1e-9)
+    u_d = V[1+d]
+    p = max(V[M], 1e-9)
+    
     c = sqrt(GAS_GAMMA_EULER * p / rho)
-    return abs(u_n) + c
+    
+    return abs(u_d) + c
 end
 
 # --- The Interface Aggregator ---
-@inline function max_eigenvalues(eq::HyperbolicPDE{D, M}, f_L::Flux{D, M}, f_R::Flux{D, M}) where {D, M}
+@inline function max_eigenvalues(eq::HyperbolicPDE{D, M, R}, f_L::Flux{D, M}, f_R::Flux{D, M}) where {D, M, R}
     return SVector{D, Float64}(ntuple(Val(D)) do d
         # Extract the d-th column state natively
         lamL = max_eigenvalue(eq, f_L[d], d)
         lamR = max_eigenvalue(eq, f_R[d], d)
-        max(lamL, lamR) # Your intuition applied!
+        max(lamL, lamR)
     end)
 end
+
 # =========================================================================
 # NUMERICAL FLUXES (Fully Unified)
 # =========================================================================
-@inline function (rusanov::RusanovFlux)(f_L::Flux{D, M}, f_R::Flux{D, M}, F_L::Flux{D, M}, F_R::Flux{D, M}, eq::HyperbolicPDE{D, M}) where {D, M}
+
+@inline function (rusanov::RusanovFlux)(
+    f_L::Flux{D, M}, f_R::Flux{D, M}, F_L::Flux{D, M}, F_R::Flux{D, M}, eq::HyperbolicPDE{D, M, R}
+) where {D, M, R}
+    
     s_vec = max_eigenvalues(eq, f_L, f_R)
     
     # Loop over dimensions and construct the Flux
@@ -52,7 +73,18 @@ end
     end)
 end
 
-@inline function (upwind::UpwindFlux)(f_L::Flux{D, 1}, f_R::Flux{D, 1}, F_L::Flux{D, 1}, F_R::Flux{D, 1}, eq::ScalarHyperbolicPDE{D}) where {D}
+# System Fallback (If Upwind is called on a system, drop to Rusanov)
+@inline function (upwind::UpwindFlux)(
+    f_L::Flux{D, M}, f_R::Flux{D, M}, F_L::Flux{D, M}, F_R::Flux{D, M}, eq::HyperbolicPDE{D, M, R}
+) where {D, M, R}
+    
+    return RusanovFlux()(f_L, f_R, F_L, F_R, eq)
+end
+
+@inline function (upwind::UpwindFlux)(
+    f_L::Flux{D, 1}, f_R::Flux{D, 1}, F_L::Flux{D, 1}, F_R::Flux{D, 1}, eq::HyperbolicPDE{D, 1, R}
+) where {D, R}
+    
     return Flux{D, 1}(ntuple(Val(D)) do d
         du = f_R[d][1] - f_L[d][1]
         
@@ -66,7 +98,3 @@ end
     end)
 end
 
-# System Fallback
-@inline function (upwind::UpwindFlux)(f_L::Flux{D, M}, f_R::Flux{D, M}, F_L::Flux{D, M}, F_R::Flux{D, M}, eq::HyperbolicPDESystem{D, M}) where {D, M}
-    return RusanovFlux()(f_L, f_R, F_L, F_R, eq)
-end

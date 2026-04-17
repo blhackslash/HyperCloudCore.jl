@@ -1,16 +1,4 @@
-abstract type AbstractPath end
-abstract type DifferentialOrder end
-struct Order0 <: DifferentialOrder end
-struct Order1 <: DifferentialOrder end
 
-const DO0 = Order0() 
-const DO1 = Order1()
-# ---------------------------------------------------------
-# 1. Standard Straight Line Path
-# ---------------------------------------------------------
-struct LinePath <: AbstractPath end
-
-struct NaiveAveragePath <: AbstractPath end
 
 # DO0 (The State): Returns a constant average regardless of 's'
 @inline function (::NaiveAveragePath)(eq::HyperbolicPDE, s, uL::State{M}, uR::State{M}, ::Order0) where {M}
@@ -27,15 +15,7 @@ end
 @inline (::LinePath)(eq::HyperbolicPDE, s, uL::State{M}, uR::State{M}, ::Order1) where {M} = uR - uL
 
 
-# ---------------------------------------------------------
-# 2. The Mapped Path Decorator
-# ---------------------------------------------------------
-struct MappedPath{P <: AbstractPath} <: AbstractPath
-    base_path::P
-end
 
-# Default constructor wraps a standard LinePath
-MappedPath() = MappedPath(LinePath())
 
 # 0th Derivative: Map to Cons -> Evaluate Base Path -> Map to Prim
 @inline function (mp::MappedPath)(eq::HyperbolicPDE, s, vL::State{M}, vR::State{M}, ::Order0) where {M}

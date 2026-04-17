@@ -17,14 +17,15 @@ const State{M} = SVector{M, Float64}
 const Flux{D, M} = SVector{D, State{M}}
 const Kinetic{K} = SVector{K, Float64}
 
-include("HyperbolicPDEs.jl")
+
 
 # Order important!
+include("PDETypes.jl")
 include("GridTypes.jl")
 include("InterpolationTypes.jl")
 include("TimestepperTypes.jl")
 
-
+include("PDEUtils.jl")
 include("CoreUtils.jl")
 include("PathIntegrals.jl")
 
@@ -47,8 +48,8 @@ export DifferentialOrder, Order0, Order1, DO0, DO1
 export param2uvec, param2xvec, param2svec, param2fvec
 
 # 2. Physics Equations (from CoreTypes.jl)
-export HyperbolicPDE, ScalarHyperbolicPDE, HyperbolicPDESystem, NCHyperbolicPDESystem, DiagonalHyperbolicSystem
-export LinearAdvection, BurgersEquation, TestU3Equation, Euler1D, BurgersEquation2D, flux, flux_dot, BurgersEquationMD
+export HyperbolicPDE, EquationRepresentation, Primitive, Conservative, Lagrangian
+export LinearAdvection, BurgersEquation, TestU3Equation, EulerEquation, flux, flux_dot
 
 # 4. Numerics & Integration (from TimeIntegration.jl)
 export TimeStepper, MeshfreeTimeStepper
