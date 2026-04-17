@@ -100,3 +100,12 @@ end
 @inline math_min(a::Float64, b::Float64) = 0.5 * (a + b - abs(a - b))
 @inline math_max(a::AbstractVector, b::AbstractVector) = 0.5 * (a + b + abs.(a - b))
 @inline math_min(a::AbstractVector, b::AbstractVector) = 0.5 * (a + b - abs.(a - b))
+
+# Defaults
+@inline function prim2cons(eq, U)
+    return U
+end
+
+@inline function cons2prim(eq, U)
+    return U
+end

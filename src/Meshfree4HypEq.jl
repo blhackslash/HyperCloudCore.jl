@@ -11,21 +11,29 @@ using StaticArrays
 using Base.Threads
 using Polyester: @batch
 
+## ------------------------------- SVector Types -------------------------------
+const Space{D} = SVector{D, Float64}
+const State{M} = SVector{M, Float64}
+const Flux{D, M} = SVector{D, State{M}}
+const Kinetic{K} = SVector{K, Float64}
 
-include("CoreTypes.jl")
+include("HyperbolicPDEs.jl")
 
 # Order important!
 include("GridTypes.jl")
 include("InterpolationTypes.jl")
 include("TimestepperTypes.jl")
 
-include("HyperbolicPDEs.jl")
+
 include("CoreUtils.jl")
+include("PathIntegrals.jl")
 
 
 include("../Grid/ParticleGrids.jl")
 include("../Interpolation/Interpolations.jl")
 include("../TimeStepping/TimeIntegration.jl")
+
+
 
 # ==============================================================================
 # --- PUBLIC API EXPORTS ---
