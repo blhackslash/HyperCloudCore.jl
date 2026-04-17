@@ -120,7 +120,7 @@ function (rk::GeneralRKTimeStepper{M})(
         if delta_t > 0
             pg.mover(pg, delta_t, eq, source_term)
             
-            pg.neighbor(pg)
+            #pg.neighbor(pg)
             
             # CRITICAL: Refresh neighbor arrays as pg.neighbor(pg) might have resized them!
             #nb_slices  = pg.neighbor.ranges

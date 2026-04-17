@@ -51,56 +51,52 @@ function solve!(
     return converged
 end
 # Solve for LOCAL Relaxation Source Term
-function solve!(
+@inline function solve(
     ::LinearizedRelaxationImplicitSolver,
-    Y_out::AbstractVector{Float64},         
+    Y_in::State{NK},                
     dt_coeff::Float64,              
     rs::RelaxationSourceTerm{D, NM, NK},     
     p_idx::Int,
     eq::HyperbolicPDE{D},
     km::Kin2Macro{NM, NK}      
-)::Bool where {D, NM, NK}
+) where {D, NM, NK}
     
-    # Algebraically optimized to use inv_epsilon directly
     dt_over_eps = dt_coeff * rs.inv_epsilon
     denom = 1.0 / (1.0 + dt_over_eps)
 
-    u_macro = km(Y_out)
+    u_macro = km(Y_in)
     flux_vals = flux(eq, u_macro)
 
-    @inbounds for k in 1:NK
-        v_k_base = Y_out[k]
+    # Generate the SVector entirely in the CPU registers
+    return State{NK}(ntuple(Val(NK)) do k
+        v_k_base = Y_in[k]
         m_idx = km(k)
         
-        # Native scaled_inv_speeds ALREADY contains (interior_factor / v)
         f_dot_inv_lambda = flux_dot(flux_vals, m_idx, rs.scaled_inv_speeds[k])
-        
         Mk_val = rs.coefficients[m_idx] * (u_macro[m_idx] + f_dot_inv_lambda)
         
-        Y_out[k] = (v_k_base + dt_over_eps * Mk_val) * denom
-    end
-    
-    return true 
+        (v_k_base + dt_over_eps * Mk_val) * denom
+    end)
 end
 
 # Solve for NON-LOCAL Relaxation Source Term
-function solve!(
+@inline function solve(
     ::LinearizedRelaxationImplicitSolver,
-    V_out::AbstractVector{Float64},       
+    V_in::State{NK},       
     dt_coeff::Float64,              
     st::NonLocalRelaxationSourceTerm{D, NM, NK},     
     p_idx::Int, 
     eq::HyperbolicPDE{D},
     km::Kin2Macro{NM, NK}
-)::Bool where {D, NM, NK}
+) where {D, NM, NK}
     
     dt_over_eps = dt_coeff * st.inv_epsilon
     denom = 1.0 / (1.0 + dt_over_eps)
     
-    u_macro = km(V_out)
+    u_macro = km(V_in)
     
-    @inbounds for k in 1:NK
-        v_star = V_out[k]
+    return State{NK}(ntuple(Val(NK)) do k
+        v_star = V_in[k]
         m_idx = km(k)
         
         T_val = st.T_potential[p_idx, m_idx]
@@ -108,8 +104,6 @@ function solve!(
 
         Mk_val = st.coefficients[m_idx] * (u_macro[m_idx] + T_dot_inv_lambda)
         
-        V_out[k] = (v_star + dt_over_eps * Mk_val) * denom
-    end
-    
-    return true 
+        (v_star + dt_over_eps * Mk_val) * denom
+    end)
 end

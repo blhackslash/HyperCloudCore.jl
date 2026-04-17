@@ -2,36 +2,46 @@
 # STATE{M} EXTREMA FINDERS
 # =========================================================================
 
-@inline function findLocalExtrema(rho_i::State{M}, nb_slice::UnitRange{Int}, neighbor_fs::AbstractVector{State{M}}) where M
+@inline function findLocalExtrema(rho_i::State{M}, nb_slice::UnitRange{Int}, neighbor_fs::AbstractVector{State{M}}) where {M}
     minU = rho_i
     maxU = rho_i
+    
     @inbounds for k in nb_slice 
         rho_j = neighbor_fs[k]
-        minU = State{M}(ntuple(m -> math_min(minU[m], rho_j[m]), Val(M)))
-        maxU = State{M}(ntuple(m -> math_max(maxU[m], rho_j[m]), Val(M)))
+        
+        # Use native SVector broadcasting! 
+        # This completely eliminates the closure and unrolls automatically.
+        minU = math_min.(minU, rho_j)
+        maxU = math_max.(maxU, rho_j)
     end
+    
     return minU, maxU
 end
 
 @inline function findLocalExtremaAbs(
     c_i::State{M}, curve_idx::Int, nb_slice::UnitRange{Int}, 
     neighbor_indices::AbstractVector{Int}, grad_vec::AbstractVector
-) where M
+) where {M}
     mini = c_i
     maxi = c_i
-    minAbs = State{M}(ntuple(m -> abs(c_i[m]), Val(M)))
+    
+    # Native SVector broadcasting for absolute value
+    minAbs = abs.(c_i)
     maxAbs = minAbs
     
     @inbounds for k in nb_slice
         j = neighbor_indices[k]
         c_j = grad_vec[j][curve_idx]
-        abs_cj = State{M}(ntuple(m -> abs(c_j[m]), Val(M)))
         
-        mini = State{M}(ntuple(m -> math_min(mini[m], c_j[m]), Val(M)))
-        maxi = State{M}(ntuple(m -> math_max(maxi[m], c_j[m]), Val(M)))
-        minAbs = State{M}(ntuple(m -> math_min(minAbs[m], abs_cj[m]), Val(M)))
-        maxAbs = State{M}(ntuple(m -> math_max(maxAbs[m], abs_cj[m]), Val(M)))
+        abs_cj = abs.(c_j)
+        
+        # Native broadcasting eliminates all closures
+        mini = math_min.(mini, c_j)
+        maxi = math_max.(maxi, c_j)
+        minAbs = math_min.(minAbs, abs_cj)
+        maxAbs = math_max.(maxAbs, abs_cj)
     end
+    
     return mini, maxi, minAbs, maxAbs
 end
 

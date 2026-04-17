@@ -104,7 +104,7 @@ function (imex_ts::GeneralIMEXTimeStepper{M})(
         if imex_ts.source_term_object isa NonLocalRelaxationSourceTerm
             update_nonlocal_potential!(imex_ts.source_term_object, current_Y_i, pg, imex_ts.eq_macro)  
         end
-
+        
         # ==================================================================
         # PHASE 3: Implicit Solve & K_I Evaluation
         # ==================================================================
@@ -114,23 +114,21 @@ function (imex_ts::GeneralIMEXTimeStepper{M})(
             @batch for p_idx in 1:N_particles
                 if pg.core.is_boundary[p_idx]; continue; end
                 
-                # Stack-allocated MVector allows in-place mutation safely
-                Y_mut = MVector{M, Float64}(current_Y_i[p_idx])
-                
-                solve!(
-                    imex_ts.implicit_solver, Y_mut, dt * bt.A[i,i],
+                # Zero allocations: purely functional solve returning an SVector!
+                current_Y_i[p_idx] = solve(
+                    imex_ts.implicit_solver, current_Y_i[p_idx], dt * bt.A[i,i],
                     imex_ts.source_term_object, p_idx, imex_ts.eq_macro, imex_ts.source_term_object.km
                 )
-                current_Y_i[p_idx] = State{M}(Y_mut)
             end
         end
         
         @batch for p_idx in 1:N_particles
             if pg.core.is_boundary[p_idx]; imex_ts.K_I_stages[i][p_idx] = zero(State{M}); continue; end
             
-            S_mut = MVector{M, Float64}(undef)
-            imex_ts.source_term_object(S_mut, current_Y_i[p_idx], p_idx, imex_ts.eq_macro, imex_ts.source_term_object.km)
-            imex_ts.K_I_stages[i][p_idx] = State{M}(S_mut)
+            # Zero allocations: purely functional source term evaluation!
+            imex_ts.K_I_stages[i][p_idx] = imex_ts.source_term_object(
+                current_Y_i[p_idx], p_idx, imex_ts.eq_macro, imex_ts.source_term_object.km
+            )
         end
 
         # ==================================================================
@@ -186,15 +184,14 @@ function (imex_ts::GeneralIMEXTimeStepper{M})(
         if imex_ts.mood_triggered[p_idx]
             # PERFECT IMEX EULER FALLBACK:
             # 1. TVD Explicit Predictor (K_E_stages[1] was evaluated with the fallback gradient!)
-            Y_mut = MVector{M, Float64}(U_n[p_idx] + dt * imex_ts.K_E_stages[1][p_idx])
+            Y_pred = U_n[p_idx] + dt * imex_ts.K_E_stages[1][p_idx]
             
             # 2. L-Stable Implicit Solve for the stiff source term (Backward Euler)
-            solve!(
-                imex_ts.implicit_solver, Y_mut, dt,
+            pg.rhos[p_idx] = solve(
+                imex_ts.implicit_solver, Y_pred, dt,
                 imex_ts.source_term_object, p_idx, imex_ts.eq_macro, imex_ts.source_term_object.km
             )
             
-            pg.rhos[p_idx] = State{M}(Y_mut)
         else
             # High-Order IMEX Update
             rho_final = U_n[p_idx]

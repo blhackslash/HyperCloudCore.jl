@@ -56,30 +56,25 @@ function RelaxationSourceTerm(
     return RelaxationSourceTerm{D, NM, NK}(km, 1.0 / eps, coeffs, SVector{NK, Space{D}}(scaled_inv_speeds))
 end
 
-function (rs::RelaxationSourceTerm{D, NM, NK})(
-    S_out_particle::AbstractVector{Float64},
-    U_kinetic_particle::AbstractVector{Float64},
+# LOCAL Source Term Functor
+@inline function (rs::RelaxationSourceTerm{D, NM, NK})(
+    U_kinetic::State{NK},
     p_idx::Int,
     eq_macro::HyperbolicPDE{D},
     km::Kin2Macro{NM, NK}
 ) where {D, NM, NK}
     
-    u_macro = km(U_kinetic_particle)
-    flux_vals = flux(eq_macro, u_macro) # Native Flux{D, NM}
+    u_macro = km(U_kinetic)
+    flux_vals = flux(eq_macro, u_macro)
     
-    @inbounds for k in 1:NK
+    return State{NK}(ntuple(Val(NK)) do k
         m_idx = km(k)
-        
-        # Native dot product of the m-th macro flux with the k-th scaled inverse speed
         f_dot_inv_lambda = flux_dot(flux_vals, m_idx, rs.scaled_inv_speeds[k])
         
-        # Note: coefficients[k] is used instead of coefficients[m_idx] 
-        # to ensure correct BGK weighting if multiple kinetic variables map to one macro variable!
         Mk = rs.coefficients[m_idx] * (u_macro[m_idx] + f_dot_inv_lambda)
-        S_out_particle[k] = (Mk - U_kinetic_particle[k]) * rs.inv_epsilon
-    end
+        (Mk - U_kinetic[k]) * rs.inv_epsilon
+    end)
 end
-
 
 # =========================================================================
 # NON-LOCAL RELAXATION SOURCE TERM
@@ -146,24 +141,23 @@ function update_nonlocal_potential!(
     end
 end
 
-function (st::NonLocalRelaxationSourceTerm{D, NM, NK})(
-    S_out::AbstractVector{Float64}, 
-    V_kin::AbstractVector{Float64}, 
+# NON-LOCAL Source Term Functor
+@inline function (st::NonLocalRelaxationSourceTerm{D, NM, NK})(
+    V_kin::State{NK}, 
     p_idx::Int, 
     eq::HyperbolicPDE{D},
     km::Kin2Macro{NM, NK}
 ) where {D, NM, NK}
     
     u_macro = km(V_kin)
-    @inbounds for k in 1:NK
+    
+    return State{NK}(ntuple(Val(NK)) do k
         m_idx = km(k)
         T_val = st.T_potential[p_idx, m_idx]
         
-        # Non-local uses the path integral jump (T_val).
-        # We dot it with the primary direction (usually X, d=1).
         T_dot_inv_lambda = T_val * st.scaled_inv_speeds[k][1]
-        
         Mk_val = st.coefficients[m_idx] * (u_macro[m_idx] + T_dot_inv_lambda)
-        S_out[k] = (Mk_val - V_kin[k]) * st.inv_epsilon
-    end
+        
+        (Mk_val - V_kin[k]) * st.inv_epsilon
+    end)
 end
