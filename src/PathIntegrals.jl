@@ -62,7 +62,7 @@ end
 
 # 1. LAGRANGIAN (Material Derivative Frame)
 # A(V) = [0, ρ, 0; 0, 0, 1/ρ; 0, γp, 0]
-@inline function A_matrix_times_vector(::EulerEquation{1, 3, Lagrangian}, V::State{3}, dV::State{3})
+@inline function A_matrix_times_vector(::EulerEquation{1, 3, LR}, V::State{3}, dV::State{3}) where {LR <: Lagrangian}
     rho, u, p = V[1], V[2], V[3]
     drho, du, dp = dV[1], dV[2], dV[3]
     
@@ -71,7 +71,7 @@ end
 
 # 2. PRIMITIVE (Eulerian Frame)
 # A(V) = [u, ρ, 0; 0, u, 1/ρ; 0, γp, u]
-@inline function A_matrix_times_vector(::EulerEquation{1, 3, Primitive}, V::State{3}, dV::State{3})
+@inline function A_matrix_times_vector(::EulerEquation{1, 3, PR}, V::State{3}, dV::State{3}) where {PR <: Primitive}
     rho, u, p = V[1], V[2], V[3]
     drho, du, dp = dV[1], dV[2], dV[3]
     
@@ -138,26 +138,23 @@ end
 
 # 1. Conservative Fallback: Returns exactly 0 at compile time!
 @inline function evaluate_nc_jump(
-    eq::HyperbolicPDE{D, M, Conservative}, f_L::State{M}, f_R::State{M}, dist_k::Space{D}
+    eq::HyperbolicPDE{D, M, Conservative}, f_L::Flux{D, M}, f_R::Flux{D, M}, dist_k::Space{D}
 ) where {D, M}
     return zero(Flux{D, M})
 end
 
-# 2. Non-Conservative Evaluation: Triggers the Path Integral!
+# 2. Non-Conservative Evaluation: Triggers the Path Integral per dimension!
 @inline function evaluate_nc_jump(
-    eq::HyperbolicPDE{D, M, <:NCRepresentation}, f_L::State{M}, f_R::State{M}, dist_k::Space{D}
-) where {D, M}
-    
-    # We now access the path via the representation!
-    jump = path_integral(eq, eq.rep.path, f_L, f_R)
-    
-    # Project the jump into the D-dimensional Flux tensor
-    if D == 1
-        return Flux{1, M}(( 0.5 * jump, ))
-    else
-        dist_mag = sqrt(sum(abs2, dist_k))
-        n = dist_k ./ dist_mag
-        return Flux{D, M}(ntuple(d -> 0.5 * jump * n[d], Val(D)))
-    end
+    eq::HyperbolicPDE{D, M, <:NCRepresentation}, f_L::Flux{D, M}, f_R::Flux{D, M}, dist_k::Space{D}
+) where {D, M}    
+    # Evaluate the path integral natively for each spatial dimension's interface state
+    return Flux{D, M}(ntuple(Val(D)) do d
+        # f_L[d] and f_R[d] securely extract the State{M} for the d-th axis
+        jump_d = path_integral(eq, eq.rep.path, f_L[d], f_R[d])
+        sign_i = dist_k[d] >= 0 ? 1.0 : -1.0
+        
+        0.5 * jump_d * sign_i
+        # Multiply by 0.5 (for averaging) and project via the normal vector component
+    end)
 end
 

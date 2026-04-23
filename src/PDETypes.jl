@@ -60,11 +60,11 @@ struct LinearAdvection{D, M, R} <: HyperbolicPDE{D, M, R}
     rep::R
 end
 
-function LinearAdvection(velocities)
+function LinearAdvection(velocities; rep::R = Conservative()) where {R <: EquationRepresentation}
     svec_vel = param2fvec(velocities)
     D = length(svec_vel)
     M = length(svec_vel[1])
-    return LinearAdvection{D, M, Conservative}(Flux{D, M}(svec_vel), Conservative())
+    return LinearAdvection{D, M, R}(Flux{D, M}(svec_vel), rep)
 end
 
 # --- Burgers Equation (Multi-Dimensional) ---

@@ -136,10 +136,11 @@ function (upwind::UpwindGradient{D, <:UpwindWorkspaceCA{D, M}, <:Any, ClassicAlg
         
         f_L, f_R, F_L, F_R = sort_flux(f_i, f_j, F_i, F_j, dist_k)
         F_num = upwind.numericalFlux(f_L, f_R, F_L, F_R, eq)
+        nc_jump = evaluate_nc_jump(eq, f_L, f_R, dist_k)
         
         ws.distVec[local_idx]  = dist_k
         ws.wVec[local_idx]     = w_all_full[global_idx]
-        ws.dfFluxVec[local_idx] = F_num - F_i
+        ws.dfFluxVec[local_idx] = F_num - F_i + nc_jump
     end
     
     # 3. Dispatched Matrix Interpolation (Passing dfVec as the workspace)

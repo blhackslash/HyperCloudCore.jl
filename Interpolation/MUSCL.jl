@@ -141,11 +141,12 @@ function (muscl::MUSCL{D, M, B_LEN, ORDER})(
         # 4. Sort and apply Numerical Flux (Identical to Upwind!)
         f_L, f_R, F_L, F_R = sort_flux(fij, fji, F_ij, F_ji, dist_k)
         F_num = muscl.numericalFlux(f_L, f_R, F_L, F_R, eq)
+        nc_jump = evaluate_nc_jump(eq, f_L, f_R, dist_k)
         
         # 5. Populate workspace for final divergence integration
         ws.distVec[local_idx]   = dist_k
         ws.wVec[local_idx]      = w_all[global_idx]
-        ws.dfFluxVec[local_idx] = F_num - F_i
+        ws.dfFluxVec[local_idx] = F_num - F_i + nc_jump
     end
     
     # 6. Integrate the numerical fluxes using the standard interpolator

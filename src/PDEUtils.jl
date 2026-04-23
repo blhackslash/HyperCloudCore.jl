@@ -20,6 +20,10 @@ end
 @inline prim2cons(::BurgersEquation, u::State{1}) = u
 @inline cons2prim(::BurgersEquation, w::State{1}) = w
 
+# --- Linear Advection ---
+@inline prim2cons(::LinearAdvection, U::State{M}) where {M} = U
+@inline cons2prim(::LinearAdvection, W::State{M}) where {M} = W
+
 # --- Euler Equation ---
 @inline function prim2cons(eq::EulerEquation{D, M}, V::State{M}) where {D, M}
     rho = V[1]
@@ -43,20 +47,25 @@ end
     return State{M}(rho, u..., max(p, 1e-7))
 end
 
+@inline function flux(eq::HyperbolicPDE{D,M,NCR}, u) where {D, M, NCR <: NCRepresentation}
+    return zero(Flux{D, M})
+end
+
 # =========================================================================
 # CONSERVATIVE FLUXES
 # =========================================================================
 
-# --- Linear Advection ---
-@inline function flux(eq::LinearAdvection{D, M}, U::State{M}) where {M, D}
-    return Flux{D, M}(ntuple(d -> eq.vel[d] .* U, Val(D)))
-end
-
 # --- Burgers Equation MD ---
-@inline function flux(eq::BurgersEquation{D}, u::State{1}) where {D}
+@inline function flux(eq::BurgersEquation{D, <:Conservative}, u::State{1}) where {D}
     return Flux{D, 1}(ntuple(_ -> 0.5 * u.^2, Val(D)))
 end
-@inline flux(::BurgersEquation{D, <:Primitive}, u::State{1}) where {D} = zero(Flux{D, 1})
+#@inline flux(::BurgersEquation{D, <:NCRepresentation}, u::State{1}) where {D} = zero(Flux{D, 1})
+
+# --- Linear Advection ---
+@inline function flux(eq::LinearAdvection{D, M, <:Conservative}, U::State{M}) where {M, D}
+    return Flux{D, M}(ntuple(d -> eq.vel[d] .* U, Val(D)))
+end
+#@inline flux(::LinearAdvection{D, M, <:NCRepresentation}, U::State{M}) where {D, M} = zero(Flux{D, M})
 
 @inline function flux(::TestU3Equation{a}, u::SVector{1, Float64}) where {a}
     return SVector{1, Float64}(0.33333 * (1.0 - a) * u[1]^3)
@@ -95,6 +104,15 @@ end
 # NON-CONSERVATIVE MATVECS
 # =========================================================================
 
-@inline function A_matrix_times_vector(::BurgersEquation{D, <:Primitive}, u::State{1}, du::State{1}) where {D}
+# --- Burgers Equation ---
+# A(u) = u
+@inline function A_matrix_times_vector(::BurgersEquation{D, <:NCRepresentation}, u::State{1}, du::State{1}) where {D}
     return State{1}(u[1] * du[1])
+end
+
+# --- Linear Advection (1D) ---
+# A(U) = v
+@inline function A_matrix_times_vector(eq::LinearAdvection{1, M, <:NCRepresentation}, U::State{M}, dU::State{M}) where {M}
+    # eq.vel[1] safely extracts the State{M} vector from the 1D Flux tensor
+    return eq.vel[1] .* dU
 end

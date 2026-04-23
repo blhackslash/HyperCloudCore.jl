@@ -45,10 +45,11 @@ export Space, State, Flux, Kinetic
 export DifferentialOrder, Order0, Order1, DO0, DO1
 
 # Conversions
-export param2uvec, param2xvec, param2svec, param2fvec
+export param2uvec, param2xvec, param2svec, param2fvec, prim2cons, cons2prim
 
 # 2. Physics Equations (from CoreTypes.jl)
 export HyperbolicPDE, EquationRepresentation, Primitive, Conservative, Lagrangian
+export LinePath, NaiveAveragePath, MappedPath
 export LinearAdvection, BurgersEquation, TestU3Equation, EulerEquation, flux, flux_dot
 
 # 4. Numerics & Integration (from TimeIntegration.jl)
