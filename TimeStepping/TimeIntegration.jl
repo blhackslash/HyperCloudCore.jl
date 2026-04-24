@@ -2,44 +2,61 @@ function (method::TimeStepper)(kwargs...)
     error("Each `TimeStepper' must override the ()-operator.")
 end
 
-"""
-    initFs!(neighbor_fs, neighbor_dfs, nb_indices, i, f_i, nb_slice, fVec)
+function update_size!(ib::InteractionBuffer, num_interactions::Int)
+    ensure_capacity!(ib.f, num_interactions)
+    ensure_capacity!(ib.df, num_interactions)
+    ensure_capacity!(ib.dfFlux, num_interactions)
+    ensure_capacity!(ib.df_scratch, num_interactions)
+    return nothing
+end
+function update_size!(ts::GeneralIMEXTimeStepper, N_particles::Int, M_neighbors::Int)
+    ensure_capacity!(ts.U_n, N_particles)
+    ensure_capacity!(ts.mood_triggered, N_particles)
+    
+    for i in 1:ts.num_stages
+        ensure_capacity!(ts.Y_stages[i], N_particles)
+        ensure_capacity!(ts.K_E_stages[i], N_particles)
+        ensure_capacity!(ts.K_I_stages[i], N_particles)
+    end
+    
+    # Cascade down to the interaction buffer!
+    update_size!(ts.int_buffer, M_neighbors)
+    return nothing
+end
 
-Parallel "pre-gather" loop to fill the `neighbor_fs` and `neighbor_dfs` 
-buffers using data from `fVec`. Works natively with SVector states.
+function update_size!(ts::GeneralRKTimeStepper, N_particles::Int, M_neighbors::Int)
+    ensure_capacity!(ts.rho_n, N_particles)
+    ensure_capacity!(ts.rho_stage, N_particles)
+    ensure_capacity!(ts.mood_triggered, N_particles)
+    
+    for i in 1:length(ts.K_stages)
+        ensure_capacity!(ts.K_stages[i], N_particles)
+    end
+    
+    # Cascade down to the interaction buffer!
+    update_size!(ts.int_buffer, M_neighbors)
+    return nothing
+end
+
 """
-@inline function initFs!(
-    neighbor_fs::AbstractVector{State{M}}, 
-    neighbor_dfs::AbstractVector{State{M}}, 
+Parallel "pre-gather" loop to fill the interaction buffer.
+"""
+@inline function update_content!(
+    ib::InteractionBuffer{D, M},
     nb_indices::AbstractVector{Int}, 
     f_i::State{M}, 
     nb_slice::UnitRange{Int}, 
     fVec::AbstractVector{State{M}}
-) where {M}
+) where {D, M}
     
     # ivdep tells the compiler it is safe to ignore perceived memory dependencies
     @inbounds for k in nb_slice
         j = nb_indices[k]
         f_j = fVec[j] 
         
-        neighbor_fs[k]  = f_j
-        neighbor_dfs[k] = f_j - f_i 
+        ib.f[k]  = f_j
+        ib.df[k] = f_j - f_i 
     end
-end
-
-function initTS!(ts::MeshfreeTimeStepper, pg::ParticleGrid)
-    updateNeighbors!(pg)
-end
-
-function initTSBuffer!(ts::MeshfreeTimeStepper, pg::ParticleGrid)
-    # `num_interactions` is the total length of the flat neighbor lists (M)
-    num_interactions = length(pg.neighbor.indices) 
-    
-    # --- 3. Resize Per-Interaction Buffers (Size M) ---
-    _ensure_capacity!(ts.neighbor_fs, num_interactions)
-    _ensure_capacity!(ts.neighbor_dfs, num_interactions)
-    initAddTSBuffer!(ts, pg)
-    
     return nothing
 end
 

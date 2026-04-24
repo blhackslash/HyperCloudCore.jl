@@ -1,52 +1,12 @@
-using LinearAlgebra
-using StaticArrays
 
-# =========================================================================
-# WORKSPACE CONSTRUCTORS & CAPACITY MANAGERS
-# =========================================================================
-
-function UpwindWorkspaceTA{D, M}(max_neighbors::Int=100) where {D, M}
-    UpwindWorkspaceTA{D, M}(
-        Vector{Space{D}}(undef, max_neighbors),
-        Vector{State{M}}(undef, max_neighbors),
-        Vector{Float64}(undef, max_neighbors),
-        falses(max_neighbors),
-        falses(max_neighbors)
-    )
-end
-
-function UpwindWorkspaceCA{D, M}(max_neighbors::Int=100) where {D, M}
-    UpwindWorkspaceCA{D, M}(
-        Vector{Space{D}}(undef, max_neighbors),
-        Vector{State{M}}(undef, max_neighbors),
-        Vector{Float64}(undef, max_neighbors),
-        Vector{Flux{D, M}}(undef, max_neighbors) # <-- Init
-    )
-end
-
-function ensure_capacity!(ws::UpwindWorkspaceCA, n::Int)
-    if length(ws.distVec) < n
-        N = n + n ÷ 4
-        resize!.((ws.distVec, ws.dfVec, ws.wVec, ws.dfFluxVec), N) # <-- Resize
-    end
-end
-
-function ensure_capacity!(ws::UpwindWorkspaceTA, n::Int)
-    if length(ws.distVec) < n
-        N = n + n ÷ 4
-        resize!.((ws.distVec, ws.dfVec, ws.wVec, ws.xWindow, ws.yWindow), N)
-    end
-end
-
-function ensure_capacity!(ws::UpwindWorkspacePA, n::Int)
-    return
-end
+@inline update_size!(::UpwindGradient, ::Int) = nothing
+@inline update_content!(::UpwindGradient, args...) = nothing
 
 # =========================================================================
 # UPWIND GRADIENT SETUP
 # =========================================================================
 
-function UpwindGradient(order, dimension, M; numericalFlux::NumericalFluxFunction=UpwindFlux(), algType::String="Classic")
+function UpwindGradient(dimension, M, order; numericalFlux::NumericalFluxFunction=UpwindFlux(), algType::String="Classic")
     @assert order >= 1 "Order must be larger or equal to one."
     
     local alg_type
@@ -54,48 +14,21 @@ function UpwindGradient(order, dimension, M; numericalFlux::NumericalFluxFunctio
     
     if algType == "Classic"
         alg_type = ClassicAlgorithm
-        WS_eltype = UpwindWorkspaceCA 
     elseif algType == "Tiwari"
         alg_type = TiwariAlgorithm
-        WS_eltype = UpwindWorkspaceTA 
         @assert M == 1 "Tiwari Algorithm only supports Scalar Equations."
     elseif algType == "Praveen"
         alg_type = PraveenAlgorithm 
-        WS_eltype = UpwindWorkspacePA 
         @assert order == 1 "Praveen only supports 1st order."
         @assert M == 1 "Praveen Algorithm only supports Scalar Equations."
     else
         error("Algorithm type $algType not fully configured for workspace selection.")
     end
-    n_threads = Threads.nthreads()
-    workspaces = [WS_eltype{dimension, M}() for _ in 1:n_threads] 
 
     interpolator = Interpolator{dimension, order, 1}()
     I = typeof(interpolator)
 
-    UpwindGradient{dimension, WS_eltype{dimension, M}, I, alg_type}(order, numericalFlux, workspaces, interpolator)
-end
-
-function _init_buffers_internal!(workspaces::Vector{WS}, max_neighbors::Int) where WS <: UpwindWorkspace 
-    n_threads = Threads.nthreads()
-    if length(workspaces) != n_threads
-        empty!(workspaces)
-        for _ in 1:n_threads
-            push!(workspaces, WS(max_neighbors)) 
-        end
-    end
-    for ws in workspaces
-        ensure_capacity!(ws, max_neighbors) 
-    end
-end
-
-function initGIBuffers!(g::UpwindGradient, pg::ParticleGrid)
-    max_nb = pg.meta.max_nb
-    _init_buffers_internal!(g.workspaces, max_nb)
-end
-
-function initGI!(g::UpwindGradient, kwargs...)
-    return
+    UpwindGradient{dimension, I, alg_type}(order, numericalFlux, interpolator)
 end
 
 #==============================================================================
@@ -106,47 +39,34 @@ end
 Functor for UpwindGradient (ClassicAlgorithm).
 Works for 1D, 2D, 3D, and natively supports both Scalars and Systems via `State{M}`.
 """
-function (upwind::UpwindGradient{D, <:UpwindWorkspaceCA{D, M}, <:Any, ClassicAlgorithm})(
-    eq::PDE, i::Int, f_i::State{M}, nb_slice::UnitRange{Int},       
-    pg::ParticleGrid{D}, f_neighbors::AbstractVector{State{M}},    
-    df_neighbors::AbstractVector{State{M}}    
- ) where {D, M, PDE <: HyperbolicPDE}
+function (upwind::UpwindGradient{D, <:Any, ClassicAlgorithm})(
+    eq::HyperbolicPDE, i::Int, f_i::State{M}, nb_slice::UnitRange{Int},       
+    pg::ParticleGrid{D}, ib::InteractionBuffer{D, M}    
+) where {D, M}
     
-    num_nb = length(nb_slice)
-    
-    # We can extract the IO (Interpolation Order) parameter directly from the interpolator type
-    if num_nb < upwind.order
-        return State{M}(ntuple(_->0.0, Val(M)))
+    if length(nb_slice) < upwind.order
+        return zero(State{M})
     end
 
-    thread_idx = mod1(Threads.threadid(), Threads.nthreads())
-    ws = upwind.workspaces[thread_idx]
-    ensure_capacity!(ws, num_nb)
-
-    # 1. Base Physical Flux
     F_i = flux(eq, f_i) 
-    dist_all_full = get_distances(pg)
-    w_all_full = get_weights(pg) 
+    dist_all = get_distances(pg)
     
-    # 2. Extract, Sort, and compute Numerical Flux Matrices
-    @inbounds for (local_idx, global_idx) in enumerate(nb_slice)
-        dist_k = dist_all_full[global_idx]
-        f_j    = f_neighbors[global_idx]
+    @inbounds for global_idx in nb_slice
+        dist_k = dist_all[global_idx]
+        f_j    = ib.f[global_idx]
         F_j    = flux(eq, f_j)
         
         f_L, f_R, F_L, F_R = sort_flux(f_i, f_j, F_i, F_j, dist_k)
         F_num = upwind.numericalFlux(f_L, f_R, F_L, F_R, eq)
         nc_jump = evaluate_nc_jump(eq, f_L, f_R, dist_k)
         
-        ws.distVec[local_idx]  = dist_k
-        ws.wVec[local_idx]     = w_all_full[global_idx]
-        ws.dfFluxVec[local_idx] = F_num - F_i + nc_jump
+        # Write directly to the global, mutually-exclusive slot
+        ib.dfFlux[global_idx] = F_num - F_i + nc_jump
     end
     
-    # 3. Dispatched Matrix Interpolation (Passing dfVec as the workspace)
+    # Zero-copy interpolation
     div = upwind.interpolator(
-        num_nb, ws.distVec, ws.wVec, ws.dfFluxVec, ws.dfVec; 
-        scale = pg.meta.dx
+        nb_slice, dist_all, get_weights(pg), ib.dfFlux, ib.df_scratch; scale = pg.meta.dx
     )
     
     return 2.0 * div
@@ -154,7 +74,7 @@ end
 """
 Functor for TiwariAlgorithm. (Restricted to Scalar PDEs)
 """
-function (upwind::UpwindGradient{D, <:UpwindWorkspaceTA{D, 1}, <:Any, TiwariAlgorithm})(
+function (upwind::UpwindGradient{D, <:Any, TiwariAlgorithm})(
     eq,
     i::Int,                         
     f_i::State{1},             
@@ -222,7 +142,7 @@ end
 """
 Functor for PraveenAlgorithm. (Restricted to Scalar PDEs in 2D)
 """
-function (upwind::UpwindGradient{2, <:UpwindWorkspacePA{2}, <:Any, PraveenAlgorithm})(
+function (upwind::UpwindGradient{2, <:Any, PraveenAlgorithm})(
     eq,
     i::Int,                         
     f_i::State{1},                  

@@ -35,12 +35,10 @@ end
 Ensures a vector `v` has at least capacity `n`.
 Resizes if `length(v) < n`.
 """
-function _ensure_capacity!(v::AbstractVector, n::Int)
-    if length(v) < n
-        n = n + n ÷ 4
-        resize!(v, n)
+@inline function ensure_capacity!(vec::AbstractVector, req_capacity::Int)
+    if length(vec) < req_capacity
+        resize!(vec, ceil(Int, req_capacity * 1.25))
     end
-    return nothing
 end
 # Case 1: Single Float/Int -> 1D Space, 1 Component (Scalar PDE in 1D)
 # Example input: 2.5

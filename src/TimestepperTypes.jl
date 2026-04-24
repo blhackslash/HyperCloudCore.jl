@@ -3,6 +3,23 @@ abstract type MeshfreeTimeStepper <: TimeStepper end
 abstract type FixedGridTimeStepper <: TimeStepper end
 abstract type MeshfreeSystemTimeStepper <: MeshfreeTimeStepper end
 
+struct InteractionBuffer{D, M}
+    # Standard states
+    f::Vector{State{M}}
+    df::Vector{State{M}}
+    
+    # MUSCL / Upwind specific
+    dfFlux::Vector{Flux{D, M}}
+    
+    # The 1D scratchpad needed by your Universal Interpolator
+    df_scratch::Vector{State{M}} 
+    
+    # Zero-allocation empty initializer
+    InteractionBuffer{D, M}() where {D, M} = new{D, M}(
+        State{M}[], State{M}[], Flux{D, M}[], State{M}[]
+    )
+end
+
 ## ------------------------------- Meshfree Direct Steppers -------------------------------
 
 struct RKButcherTableau
@@ -10,7 +27,7 @@ struct RKButcherTableau
     b::Vector{Float64}
     c::Vector{Float64}
 end
-struct GeneralRKTimeStepper{M, PDE <: HyperbolicPDE, G1 <: GradientInterpolator, G2, MOOD} <: MeshfreeTimeStepper
+struct GeneralRKTimeStepper{D, M, PDE <: HyperbolicPDE, G1 <: GradientInterpolator, G2, MOOD} <: MeshfreeTimeStepper
     pde::PDE
     gradientInterpolator::G1
     fallbackInterpolator::G2
@@ -22,17 +39,19 @@ struct GeneralRKTimeStepper{M, PDE <: HyperbolicPDE, G1 <: GradientInterpolator,
     K_stages::Vector{Vector{State{M}}} 
     mood_triggered::Vector{Bool} # Tracks if a particle dropped to Euler
 
-    neighbor_fs::Vector{State{M}}
-    neighbor_dfs::Vector{State{M}}
+    # Unified memory for interactions
+    int_buffer::InteractionBuffer{D, M}
 
     function GeneralRKTimeStepper(pde::HyperbolicPDE{D, M}, grad::G1, fallback::G2, mood::MOOD, tableau::RKButcherTableau) where {G1, G2, MOOD, D, M}
         s = size(tableau.A, 1)
-        new{M, typeof(pde), G1, G2, MOOD}(
+        
+        # Notice D is now part of the new{} call
+        new{D, M, typeof(pde), G1, G2, MOOD}(
             pde, grad, fallback, mood, tableau, 
             State{M}[], State{M}[], 
             [State{M}[] for _ in 1:s],
             Bool[], 
-            State{M}[], State{M}[]
+            InteractionBuffer{D, M}()
         )
     end
 end
@@ -98,7 +117,7 @@ end
 end
 
 
-struct GeneralIMEXTimeStepper{M, G1, G2, MOOD, IS, ST_OBJ, BT, GM, EQ_MACRO} <: TimeStepper
+struct GeneralIMEXTimeStepper{D, M, G1, G2, MOOD, IS, ST_OBJ, BT, GM, EQ_MACRO} <: MeshfreeSystemTimeStepper
     gradientInterpolator::G1
     fallbackInterpolator::G2
     mood::MOOD
@@ -106,7 +125,7 @@ struct GeneralIMEXTimeStepper{M, G1, G2, MOOD, IS, ST_OBJ, BT, GM, EQ_MACRO} <: 
     source_term_object::ST_OBJ
     butcher_tableau::BT
     grid_mover::GM
-    eq_macro::EQ_MACRO # NEW: Stores the macroscopic physics for the implicit solve
+    eq_macro::EQ_MACRO 
     
     # Strictly typed SVector Buffers
     U_n::Vector{State{M}}
@@ -116,9 +135,34 @@ struct GeneralIMEXTimeStepper{M, G1, G2, MOOD, IS, ST_OBJ, BT, GM, EQ_MACRO} <: 
     
     mood_triggered::Vector{Bool}
     
-    neighbor_fs::Vector{State{M}}
-    neighbor_dfs::Vector{State{M}}
+    # Unified memory for interactions
+    int_buffer::InteractionBuffer{D, M}
     num_stages::Int
+end
+
+function GeneralIMEXTimeStepper(
+    gradientInterpolator::G1, fallbackInterpolator::G2, mood::MOOD,
+    implicit_solver::IS, source_term_object::ST_OBJ, 
+    grid_mover::GM, eq_macro::EQ_MACRO, butcher_tableau::BT, 
+) where {G1, G2, MOOD, IS, ST_OBJ, BT, GM, EQ_MACRO}
+    
+    s = size(butcher_tableau.A, 1)
+    
+    # Extract M (Number of kinetic velocities) and D (Spatial Dimension) natively
+    M = length(source_term_object.scaled_inv_speeds) 
+    D = length(source_term_object.scaled_inv_speeds[1])
+    
+    return GeneralIMEXTimeStepper{D, M, G1, G2, MOOD, IS, ST_OBJ, BT, GM, EQ_MACRO}(
+        gradientInterpolator, fallbackInterpolator, mood, 
+        implicit_solver, source_term_object, butcher_tableau, grid_mover, eq_macro,
+        State{M}[], 
+        [State{M}[] for _ in 1:s], 
+        [State{M}[] for _ in 1:s], 
+        [State{M}[] for _ in 1:s], 
+        Bool[], 
+        InteractionBuffer{D, M}(), 
+        s
+    )
 end
 
 ## ------------------------------- Fixed Grid Direct Stepper -------------------------------

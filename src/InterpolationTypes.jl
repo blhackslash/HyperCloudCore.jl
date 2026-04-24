@@ -52,24 +52,28 @@ struct SuperbeeLimiter <: RealSlopeLimiter end
 struct MinmodLimiter <: RealSlopeLimiter end
 struct NoLimiter <: AbstractSlopeLimiter end
 
-struct MUSCLWorkspace{D, M, B_LEN}
-    distVec::Vector{Space{D}}
-    wVec::Vector{Float64}
-    dfVec::Vector{State{M}}
-    dfFluxVec::Vector{Flux{D, M}}
-    
-    # The ultimate unified storage: 
-    # Holds ALL derivatives (slopes, curves, etc.) in a single, strictly-typed SVector per particle!
-    gradients::Vector{SVector{B_LEN, State{M}}} 
-end
-
-
 struct MUSCL{D, M, B_LEN, ORDER, I <: Interpolator, L <: AbstractSlopeLimiter, NF, MOOD} <: GradientInterpolator
     interpolator::I
     limiter::L
     numericalFlux::NF
     mood::MOOD
-    workspaces::Vector{MUSCLWorkspace{D, M, B_LEN}}
+    gradients::Vector{SVector{B_LEN, State{M}}} 
+end
+
+function MUSCL(
+    dimension::Int, M::Int, order::Int; 
+    limiter=NoLimiter(), numericalFlux=RusanovFlux(), mood=NoMOOD()
+)
+    # Statically determine the basis length
+    B_LEN_VAL = basis_length(Val(dimension), Val(order))
+    B_LEN = typeof(B_LEN_VAL).parameters[1] 
+    
+    interp = Interpolator{dimension, order, 1}()
+    
+    # Pass `order` directly into the type signature!
+    return MUSCL{dimension, M, B_LEN, order, typeof(interp), typeof(limiter), typeof(numericalFlux), typeof(mood)}(
+        interp, limiter, numericalFlux, mood, SVector{B_LEN,State{M}}[]
+    )
 end
 
 ## ------------------------------- Upwind -------------------------------
@@ -79,29 +83,9 @@ abstract type PraveenAlgorithm <: UpwindAlgorithm end
 abstract type NonLinearPraveenAlgorithm <: UpwindAlgorithm end  
 abstract type ClassicAlgorithm <: UpwindAlgorithm end 
 
-abstract type UpwindWorkspace end
-
-struct UpwindWorkspaceTA{D, M} <: UpwindWorkspace
-    distVec::Vector{Space{D}}
-    dfVec::Vector{State{M}} 
-    wVec::Vector{Float64}
-    xWindow::BitVector
-    yWindow::BitVector
-end
-# Inside Upwind.jl (Around line 15)
-struct UpwindWorkspaceCA{D, M} <: UpwindWorkspace
-    distVec::Vector{Space{D}}
-    dfVec::Vector{State{M}}
-    wVec::Vector{Float64}
-    dfFluxVec::Vector{Flux{D, M}} # <-- NEW MATRIX BUFFER
-end
-
-struct UpwindWorkspacePA{D,M} <: UpwindWorkspace end
-
-struct UpwindGradient{D, WS <: UpwindWorkspace, I <: Interpolator, Algorithm <: UpwindAlgorithm} <: GradientInterpolator
+struct UpwindGradient{D, I <: Interpolator, Algorithm <: UpwindAlgorithm} <: GradientInterpolator
     order::Int
     numericalFlux::NumericalFluxFunction
-    workspaces::Vector{WS}
     interpolator::I
 end
 

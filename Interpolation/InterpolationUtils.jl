@@ -2,10 +2,6 @@
 # BASIS BUILDERS & MLS METADATA
 # =========================================================================
 
-# =========================================================================
-# BASIS BUILDERS & MLS METADATA
-# =========================================================================
-
 # B_LEN Resolver (Dimension D, Order IO) -> Length of basis
 @inline basis_length(::Val{1}, ::Val{1}) = Val(1)
 @inline basis_length(::Val{2}, ::Val{1}) = Val(2)
@@ -93,20 +89,20 @@
 # =========================================================================
 
 function (interp::Interpolator{D, IO, DO})(
-    num_nb::Int, dists::AbstractVector{Space{D}}, weights::AbstractVector{Float64},
+    nb_slice::UnitRange{Int}, dists::AbstractVector{Space{D}}, weights::AbstractVector{Float64},
     dfFluxVec::AbstractVector{Flux{D, M}}, dfVec_workspace::AbstractVector{State{M}};
     scale::Space{D}
 ) where {D, IO, DO, M}
     
     div_tuple = ntuple(Val(D)) do d
         
-        # Pull the exact directional flux column natively
-        @inbounds for local_idx in 1:num_nb
-            dfVec_workspace[local_idx] = dfFluxVec[local_idx][d] 
+        # Pull the exact directional flux column natively from the global array
+        @inbounds for global_idx in nb_slice
+            dfVec_workspace[global_idx] = dfFluxVec[global_idx][d] 
         end
         
-        # Call the Universal Interpolator
-        res = interp(1:num_nb, dists, weights, dfVec_workspace; scale = scale[d])
+        # Call the Universal Interpolator with the global slice
+        res = interp(nb_slice, dists, weights, dfVec_workspace; scale = scale[d])
         
         # The first `D` elements of the basis are always the linear spatial slopes!
         # E.g., for d=1 (X-direction), res[1] is exactly dFx/dx. 

@@ -1,52 +1,3 @@
-using StaticArrays
-using Polyester
-
-# =========================================================================
-# IMEX TIME STEPPER STRUCT
-# ===================================================================
-
-function GeneralIMEXTimeStepper(
-    gradientInterpolator::G1, fallbackInterpolator::G2, mood::MOOD,
-    implicit_solver::IS, source_term_object::ST_OBJ, 
-    grid_mover::GM, eq_macro::EQ_MACRO, butcher_tableau::BT, 
-) where {G1, G2, MOOD, IS, ST_OBJ, BT, GM, EQ_MACRO}
-    
-    s = size(butcher_tableau.A, 1)
-    M = length(source_term_object.scaled_inv_speeds) # NK
-    
-    return GeneralIMEXTimeStepper{M, G1, G2, MOOD, IS, ST_OBJ, BT, GM, EQ_MACRO}(
-        gradientInterpolator, fallbackInterpolator, mood, 
-        implicit_solver, source_term_object, butcher_tableau, grid_mover, eq_macro,
-        State{M}[], 
-        [State{M}[] for _ in 1:s], 
-        [State{M}[] for _ in 1:s], 
-        [State{M}[] for _ in 1:s], 
-        Bool[], State{M}[], State{M}[], s
-    )
-end
-
-function initAddTSBuffer!(ts::GeneralIMEXTimeStepper{M}, pg::ParticleGrid) where {M}
-    N = pg.meta.N
-    M_neighbors = length(pg.neighbor.indices)
-
-    if length(ts.U_n) < N
-        new_cap = ceil(Int, N * 1.25)
-        resize!(ts.U_n, new_cap)
-        resize!(ts.mood_triggered, new_cap)
-        for i in 1:ts.num_stages
-            resize!(ts.Y_stages[i], new_cap)
-            resize!(ts.K_E_stages[i], new_cap)
-            resize!(ts.K_I_stages[i], new_cap)
-        end
-    end
-    
-    if length(ts.neighbor_fs) < M_neighbors
-        new_cap = ceil(Int, M_neighbors * 1.25)
-        resize!(ts.neighbor_fs, new_cap)
-        resize!(ts.neighbor_dfs, new_cap)
-    end
-end
-
 # =========================================================================
 # MAIN IMEX FUNCTOR
 # =========================================================================
@@ -54,12 +5,13 @@ end
 function (imex_ts::GeneralIMEXTimeStepper{M})(
     eq_kin::HyperbolicPDE{D, M}, pg::ParticleGrid{D, M}, time_n::Real, dt::Real
 ) where {M, D}
-
+    
     s = imex_ts.num_stages
     bt = imex_ts.butcher_tableau
-    N_particles = pg.meta.N 
-    
-    initAddTSBuffer!(imex_ts, pg)
+    N_particles = pg.meta.N
+    M_neighbors = length(pg.neighbor.indices)
+
+    update_size!(imex_ts, N_particles, M_neighbors)
     
     # 1. Unpack fields and reset step state
     U_n = imex_ts.U_n
@@ -140,8 +92,8 @@ function (imex_ts::GeneralIMEXTimeStepper{M})(
         fallback = imex_ts.fallbackInterpolator
         has_fallback = !(fallback isa NoFallbackGrad)
         
-        initGIBuffers!(grad, pg)
-        if has_fallback; initGIBuffers!(fallback, pg); end
+        update_size!(grad, N_particles)
+        if has_fallback; update_size(fallback, N_particles); end
         
         @batch for p_idx in 1:N_particles
             if pg.core.is_boundary[p_idx]; imex_ts.K_E_stages[i][p_idx] = zero(State{M}); continue; end
@@ -149,23 +101,23 @@ function (imex_ts::GeneralIMEXTimeStepper{M})(
             fi = current_Y_i[p_idx]
             nb_slice = nb_slices[p_idx]
 
-            initFs!(imex_ts.neighbor_fs, imex_ts.neighbor_dfs, nb_indices, fi, nb_slice, current_Y_i)
+            update_content!(imex_ts.int_buffer, nb_indices, fi, nb_slice, current_Y_i)
             
             if imex_ts.mood_triggered[p_idx]
-                initGI!(fallback, p_idx, fi, nb_slice, pg, imex_ts.neighbor_fs, imex_ts.neighbor_dfs)
-                div_val = fallback(eq_kin, p_idx, fi, nb_slice, pg, imex_ts.neighbor_fs, imex_ts.neighbor_dfs)
+                update_content!(fallback, p_idx, fi, nb_slice, pg, imex_ts.int_buffer)
+                div_val = fallback(eq_kin, p_idx, fi, nb_slice, pg, imex_ts.int_buffer)
                 imex_ts.K_E_stages[i][p_idx] = -div_val
             else
-                initGI!(grad, p_idx, fi, nb_slice, pg, imex_ts.neighbor_fs, imex_ts.neighbor_dfs)
-                if has_fallback; initGI!(fallback, p_idx, fi, nb_slice, pg, imex_ts.neighbor_fs, imex_ts.neighbor_dfs); end
+                update_content!(grad, p_idx, fi, nb_slice, pg, imex_ts.int_buffer)
+                if has_fallback; update_content!(fallback, p_idx, fi, nb_slice, pg, imex_ts.int_buffer); end
                 
-                div_high = grad(eq_kin, p_idx, fi, nb_slice, pg, imex_ts.neighbor_fs, imex_ts.neighbor_dfs) 
+                div_high = grad(eq_kin, p_idx, fi, nb_slice, pg, imex_ts.int_buffer) 
                 
                 rho_candidate = fi - dt * div_high
                 
                 # Check MOOD on the full State{M} vector at once
                 if has_fallback && imex_ts.mood(grad, p_idx, fi, nb_slice, rho_candidate, pg, imex_ts.neighbor_fs)
-                    div_fallback = fallback(eq_kin, p_idx, fi, nb_slice, pg, imex_ts.neighbor_fs, imex_ts.neighbor_dfs)
+                    div_fallback = fallback(eq_kin, p_idx, fi, nb_slice, pg, imex_ts.int_buffer)
                     imex_ts.K_E_stages[i][p_idx] = -div_fallback
                     imex_ts.mood_triggered[p_idx] = true
                 else

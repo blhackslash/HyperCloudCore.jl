@@ -1,44 +1,19 @@
 # =========================================================================
-# BUFFER INITIALIZATION
-# =========================================================================
-
-function initTSBuffer!(rk::GeneralRKTimeStepper{M}, pg::ParticleGrid) where {M}
-    N = pg.meta.N
-    M_neighbors = length(pg.neighbor.indices)
-    s = length(rk.K_stages)
-
-    if length(rk.rho_n) < N
-        new_cap = ceil(Int, N * 1.25)
-        resize!(rk.rho_n, new_cap)
-        resize!(rk.rho_stage, new_cap)
-        resize!(rk.mood_triggered, new_cap)
-        for i in 1:s
-            resize!(rk.K_stages[i], new_cap)
-        end
-    end
-    if length(rk.neighbor_fs) < M_neighbors
-        new_cap = ceil(Int, M_neighbors * 1.25)
-        resize!(rk.neighbor_fs, new_cap)
-        resize!(rk.neighbor_dfs, new_cap)
-    end
-end
-
-# =========================================================================
 # DYNAMIC DIVERGENCE & MOOD DISPATCH
 # =========================================================================
 
 # Base cases: NO MOOD or NO FALLBACK -> Skip candidate construction entirely!
-@inline _get_divergence(grad, fallback::NoFallbackGrad, mood, eq, p_idx, fi, nb_slice, pg, n_fs, n_dfs, rk::GeneralRKTimeStepper, stage, dt) = grad(eq, p_idx, fi, nb_slice, pg, n_fs, n_dfs)
-@inline _get_divergence(grad, fallback, mood::NoMOOD, eq, p_idx, fi, nb_slice, pg, n_fs, n_dfs, rk::GeneralRKTimeStepper, stage, dt) = grad(eq, p_idx, fi, nb_slice, pg, n_fs, n_dfs)
-@inline _get_divergence(grad, fallback::NoFallbackGrad, mood::NoMOOD, eq, p_idx, fi, nb_slice, pg, n_fs, n_dfs, rk::GeneralRKTimeStepper, stage, dt) = grad(eq, p_idx, fi, nb_slice, pg, n_fs, n_dfs)
+@inline _get_divergence(grad, fallback::NoFallbackGrad, mood, eq, p_idx, fi, nb_slice, pg, rk::GeneralRKTimeStepper, stage, dt) = grad(eq, p_idx, fi, nb_slice, pg, rk.int_buffer)
+@inline _get_divergence(grad, fallback, mood::NoMOOD, eq, p_idx, fi, nb_slice, pg, rk::GeneralRKTimeStepper, stage, dt) = grad(eq, p_idx, fi, nb_slice, pg, rk.int_buffer)
+@inline _get_divergence(grad, fallback::NoFallbackGrad, mood::NoMOOD, eq, p_idx, fi, nb_slice, pg, rk::GeneralRKTimeStepper, stage, dt) = grad(eq, p_idx, fi, nb_slice, pg, rk.int_buffer)
 
 # Active MOOD case: Construct candidate and flag if unstable
 @inline function _get_divergence(
-    grad, fallback, mood, eq, p_idx, fi, nb_slice, pg, n_fs, n_dfs, rk::GeneralRKTimeStepper, stage, dt
+    grad, fallback, mood, eq, p_idx, fi, nb_slice, pg, rk::GeneralRKTimeStepper, stage, dt
 )
     # FAST PATH: If already dropped to Euler, just return 1st-order fallback flux instantly
     if rk.mood_triggered[p_idx]
-        return fallback(eq, p_idx, fi, nb_slice, pg, n_fs, n_dfs)
+        return fallback(eq, p_idx, fi, nb_slice, pg, rk.int_buffer)
     end
     
     div_val = grad(eq, p_idx, fi, nb_slice, pg, n_fs, n_dfs)
@@ -65,8 +40,8 @@ end
     rho_candidate = base_rho - dt * A_coef * div_val
     
     # If MOOD triggers, we flag this particle for the rest of the timestep
-    if mood(grad, p_idx, fi, nb_slice, rho_candidate, pg, n_fs)
-        div_val = fallback(eq, p_idx, fi, nb_slice, pg, n_fs, n_dfs)
+    if mood(grad, p_idx, fi, nb_slice, rho_candidate, pg, rk.int_buffer.f)
+        div_val = fallback(eq, p_idx, fi, nb_slice, pg, rk.int_buffer)
         rk.mood_triggered[p_idx] = true 
     end
     
@@ -82,12 +57,13 @@ function (rk::GeneralRKTimeStepper{M})(
     source_term::AbstractSourceTerm = NoSourceTerm()
 ) where {M}
     N = pg.meta.N
+    M_neighbors = length(pg.neighbor.indices)
     s = length(rk.K_stages)
     A = rk.tableau.A
     b = rk.tableau.b
     c = rk.tableau.c
     
-    initTSBuffer!(rk, pg)
+    update_size!(rk, N, M_neighbors)
     
     # ==========================================================
     # 1. UNPACK STRUCT FIELDS TO PREVENT CLOSURE INSTABILITY
@@ -96,12 +72,12 @@ function (rk::GeneralRKTimeStepper{M})(
     rho_stage      = rk.rho_stage
     K_stages       = rk.K_stages
     mood_triggered = rk.mood_triggered
-    neighbor_fs    = rk.neighbor_fs
-    neighbor_dfs   = rk.neighbor_dfs
+    int_buffer = rk.int_buffer
     
     main_grad      = rk.gradientInterpolator
     fallback_grad  = rk.fallbackInterpolator
     mood_fun       = rk.mood
+    has_fallback = !(fallback_grad isa NoFallbackGrad)
     
     rhos           = pg.rhos
     is_boundary    = pg.core.is_boundary
@@ -152,31 +128,29 @@ function (rk::GeneralRKTimeStepper{M})(
         end
         
         # --- 3. Pre-Gather (Optimized) ---
-        initGIBuffers!(main_grad, pg)
-        if !(fallback_grad isa NoFallbackGrad) && !(mood_fun isa NoMOOD)
-            initGIBuffers!(fallback_grad, pg)
-        end
+        update_size!(main_grad, N)
+        if has_fallback; update_size!(fallback_grad, N); end
         
         @batch for p_idx in 1:N
             fi = rho_stage[p_idx]
             nb_slice = nb_slices[p_idx]
             
             # Pass unpacked arrays cleanly
-            initFs!(neighbor_fs, neighbor_dfs, nb_indices, fi, nb_slice, rho_stage)
+            update_content!(int_buffer, nb_indices, fi, nb_slice, rho_stage)
             
             # Massive Speedup: If already dropped to Euler, skip allocating high-order matrices!
             if mood_triggered[p_idx]
-                initGI!(fallback_grad, p_idx, fi, nb_slice, pg, neighbor_fs, neighbor_dfs)
+                update_content!(fallback_grad, p_idx, fi, nb_slice, pg, int_buffer)
             else
-                initGI!(main_grad, p_idx, fi, nb_slice, pg, neighbor_fs, neighbor_dfs)
+                update_content!(main_grad, p_idx, fi, nb_slice, pg, int_buffer)
                 if !(fallback_grad isa NoFallbackGrad) && !(mood_fun isa NoMOOD)
-                    initGI!(fallback_grad, p_idx, fi, nb_slice, pg, neighbor_fs, neighbor_dfs)
+                    update_content!(fallback_grad, p_idx, fi, nb_slice, pg, int_buffer)
                 end
             end
         end
         
         # --- 4. Divergence & Dynamic MOOD Check ---
-        @batch minbatch=50 for p_idx in 1:N
+        @batch for p_idx in 1:N
             if is_boundary[p_idx]; continue; end
             
             fi = rho_stage[p_idx]
@@ -184,7 +158,7 @@ function (rk::GeneralRKTimeStepper{M})(
             
             K_stages[stage][p_idx] = _get_divergence(
                 main_grad, fallback_grad, mood_fun,
-                eq, p_idx, fi, nb_slice, pg, neighbor_fs, neighbor_dfs, 
+                eq, p_idx, fi, nb_slice, pg,
                 rk, stage, dt
             )
         end
