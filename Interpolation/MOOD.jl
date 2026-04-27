@@ -56,10 +56,10 @@ end
 # --- MOODu1 (Standard DMP) ---
 function (mood::MOODu1)(
     g::Any, p_idx::Int, rho_i::State{M}, nb_slice::UnitRange{Int}, 
-    newRho::State{M}, pg::ParticleGrid{D}, neighbor_fs::AbstractVector{State{M}}
+    newRho::State{M}, pg::ParticleGrid{D}, int_buffer_f::AbstractVector{State{M}}
 ) where {D, M}
     
-    minU, maxU = findLocalExtrema(rho_i, nb_slice, neighbor_fs)
+    minU, maxU = findLocalExtrema(rho_i, nb_slice, int_buffer_f)
     δ = mood.d
     
     # Check DMP component-by-component
@@ -76,21 +76,21 @@ end
 # --- MOODu2 (Generic Fallback for Non-MUSCL gradients like Upwind) ---
 function (mood::MOODu2)(
     g::Any, p_idx::Int, rho_i::State{M}, nb_slice::UnitRange{Int}, 
-    newRho::State{M}, pg::ParticleGrid{D}, neighbor_fs::AbstractVector{State{M}}
+    newRho::State{M}, pg::ParticleGrid{D}, int_buffer_f::AbstractVector{State{M}}
 ) where {D, M}
     # No curvature available, so just evaluate u1 (DMP)
-    return MOODu1(mood.d)(g, p_idx, rho_i, nb_slice, newRho, pg, neighbor_fs)
+    return MOODu1(mood.d)(g, p_idx, rho_i, nb_slice, newRho, pg, int_buffer_f)
 end
 
 
 # --- MOODu2 (N-Dimensional MUSCL Optimization) ---
 function (mood::MOODu2)(
     g::MUSCL{D, M, B_LEN, ORDER}, p_idx::Int, rho_i::State{M}, nb_slice::UnitRange{Int}, 
-    newRho::State{M}, pg::ParticleGrid{D}, neighbor_fs::AbstractVector{State{M}}
+    newRho::State{M}, pg::ParticleGrid{D}, int_buffer_f::AbstractVector{State{M}}
 ) where {D, M, B_LEN, ORDER}
     
     # 1. Base Extrema Check (DMP)
-    minU, maxU = findLocalExtrema(rho_i, nb_slice, neighbor_fs)
+    minU, maxU = findLocalExtrema(rho_i, nb_slice, int_buffer_f)
     δ = mood.d
     
     dmp_fail = false
@@ -110,9 +110,8 @@ function (mood::MOODu2)(
         return true # DMP failed, and no curvature info exists to rescue it
     end
     
-    # Access thread-local workspace natively
-    ws = g.workspaces[mod1(Threads.threadid(), Threads.nthreads())]
-    grad_vec = ws.gradients
+    # ✅ FIXED: Read directly from the global gradients array! No threadid() needed.
+    grad_vec = g.gradients
     neighbors = pg.neighbor.indices
     
     u2_satisfied = true

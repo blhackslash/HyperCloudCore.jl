@@ -2,9 +2,9 @@
 # MAIN IMEX FUNCTOR
 # =========================================================================
 
-function (imex_ts::GeneralIMEXTimeStepper{M})(
-    eq_kin::HyperbolicPDE{D, M}, pg::ParticleGrid{D, M}, time_n::Real, dt::Real
-) where {M, D}
+function (imex_ts::GeneralIMEXTimeStepper{D, M})(
+    eq_kin::HyperbolicPDE{D, M, R}, pg::ParticleGrid{D, M}, time_n::Real, dt::Real
+) where {M, D, R}
     
     s = imex_ts.num_stages
     bt = imex_ts.butcher_tableau
@@ -84,7 +84,7 @@ function (imex_ts::GeneralIMEXTimeStepper{M})(
         end
 
         # ==================================================================
-        # PHASE 4: Explicit Gradients K_E (Zero-Allocation Interpolators)
+        # PHASE 4a: Explicit Gradients Pre-Gather
         # ==================================================================
         apply_boundary_conditions!(pg, current_Y_i)
         
@@ -93,10 +93,10 @@ function (imex_ts::GeneralIMEXTimeStepper{M})(
         has_fallback = !(fallback isa NoFallbackGrad)
         
         update_size!(grad, N_particles)
-        if has_fallback; update_size(fallback, N_particles); end
+        if has_fallback; update_size!(fallback, N_particles); end
         
         @batch for p_idx in 1:N_particles
-            if pg.core.is_boundary[p_idx]; imex_ts.K_E_stages[i][p_idx] = zero(State{M}); continue; end
+            if pg.core.is_boundary[p_idx]; continue; end
             
             fi = current_Y_i[p_idx]
             nb_slice = nb_slices[p_idx]
@@ -105,18 +105,34 @@ function (imex_ts::GeneralIMEXTimeStepper{M})(
             
             if imex_ts.mood_triggered[p_idx]
                 update_content!(fallback, p_idx, fi, nb_slice, pg, imex_ts.int_buffer)
-                div_val = fallback(eq_kin, p_idx, fi, nb_slice, pg, imex_ts.int_buffer)
-                imex_ts.K_E_stages[i][p_idx] = -div_val
             else
                 update_content!(grad, p_idx, fi, nb_slice, pg, imex_ts.int_buffer)
                 if has_fallback; update_content!(fallback, p_idx, fi, nb_slice, pg, imex_ts.int_buffer); end
-                
+            end
+        end 
+
+        # ==================================================================
+        # PHASE 4b: Explicit Flux Evaluation (K_E)
+        # ==================================================================
+        @batch for p_idx in 1:N_particles
+            if pg.core.is_boundary[p_idx]
+                imex_ts.K_E_stages[i][p_idx] = zero(State{M})
+                continue
+            end
+            
+            fi = current_Y_i[p_idx]
+            nb_slice = nb_slices[p_idx]
+
+            if imex_ts.mood_triggered[p_idx]
+                div_val = fallback(eq_kin, p_idx, fi, nb_slice, pg, imex_ts.int_buffer)
+                imex_ts.K_E_stages[i][p_idx] = -div_val
+            else
                 div_high = grad(eq_kin, p_idx, fi, nb_slice, pg, imex_ts.int_buffer) 
                 
                 rho_candidate = fi - dt * div_high
                 
                 # Check MOOD on the full State{M} vector at once
-                if has_fallback && imex_ts.mood(grad, p_idx, fi, nb_slice, rho_candidate, pg, imex_ts.neighbor_fs)
+                if has_fallback && imex_ts.mood(grad, p_idx, fi, nb_slice, rho_candidate, pg, imex_ts.int_buffer.f)
                     div_fallback = fallback(eq_kin, p_idx, fi, nb_slice, pg, imex_ts.int_buffer)
                     imex_ts.K_E_stages[i][p_idx] = -div_fallback
                     imex_ts.mood_triggered[p_idx] = true

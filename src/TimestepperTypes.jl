@@ -10,13 +10,14 @@ struct InteractionBuffer{D, M}
     
     # MUSCL / Upwind specific
     dfFlux::Vector{Flux{D, M}}
-    
-    # The 1D scratchpad needed by your Universal Interpolator
     df_scratch::Vector{State{M}} 
+    
+    # For selective stencils (like Tiwari)
+    mask::Vector{Bool} 
     
     # Zero-allocation empty initializer
     InteractionBuffer{D, M}() where {D, M} = new{D, M}(
-        State{M}[], State{M}[], Flux{D, M}[], State{M}[]
+        State{M}[], State{M}[], Flux{D, M}[], State{M}[], Bool[]
     )
 end
 

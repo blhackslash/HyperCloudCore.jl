@@ -7,6 +7,7 @@ function update_size!(ib::InteractionBuffer, num_interactions::Int)
     ensure_capacity!(ib.df, num_interactions)
     ensure_capacity!(ib.dfFlux, num_interactions)
     ensure_capacity!(ib.df_scratch, num_interactions)
+    ensure_capacity!(ib.mask, num_interactions)
     return nothing
 end
 function update_size!(ts::GeneralIMEXTimeStepper, N_particles::Int, M_neighbors::Int)

@@ -27,7 +27,7 @@ function update_content!(
 
     # Zero-copy raw gradient! (Notice we pass nb_slice instead of 1:num_nb)
     raw_grad = muscl.interpolator(
-        nb_slice, dist_all, w_all, ib.f; scale = minimum(pg.meta.dx)
+        nb_slice, dist_all, w_all, ib.df; scale = minimum(pg.meta.dx)
     )
     
     # Limit and store globally

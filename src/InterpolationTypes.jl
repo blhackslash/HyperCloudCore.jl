@@ -69,7 +69,6 @@ function MUSCL(
     B_LEN = typeof(B_LEN_VAL).parameters[1] 
     
     interp = Interpolator{dimension, order, 1}()
-    
     # Pass `order` directly into the type signature!
     return MUSCL{dimension, M, B_LEN, order, typeof(interp), typeof(limiter), typeof(numericalFlux), typeof(mood)}(
         interp, limiter, numericalFlux, mood, SVector{B_LEN,State{M}}[]
@@ -91,53 +90,11 @@ end
 
 ## ------------------------------- WENO -------------------------------
 
-abstract type WENOWorkspace end
-abstract type WENOGI <:GradientInterpolator end
+## ------------------------------- WENO -------------------------------
 
-struct WENOWorkspace1D <: WENOWorkspace
-    # Scratch space for one-sided stencil calculations
-    dx_stencil::Vector{Float64}
-    df_stencil::Vector{Float64}
-    w_stencil::Vector{Float64}
-
-    function WENOWorkspace1D(max_neighbors::Int=30)
-        new(
-            Vector{Float64}(undef, max_neighbors),
-            Vector{Float64}(undef, max_neighbors),
-            Vector{Float64}(undef, max_neighbors)
-        )
-    end
-end
-
-"""
-A minimal, thread-local workspace for the 2D WENO algorithm.
-Holds a single set of "scratch" buffers to build stencils in.
-"""
-struct WENOWorkspace2D <: WENOWorkspace
-    # Scratch space for stencil calculations
-    dx_stencil::Vector{Float64}
-    dy_stencil::Vector{Float64}
-    df_stencil::Vector{Float64}
-    w_stencil::Vector{Float64}
-
-    function WENOWorkspace2D(max_neighbors::Int=30)
-        new(
-            Vector{Float64}(undef, max_neighbors),
-            Vector{Float64}(undef, max_neighbors),
-            Vector{Float64}(undef, max_neighbors),
-            Vector{Float64}(undef, max_neighbors)
-        )
-    end
-end
-
-"""
-Refactored WENO struct to hold thread-local workspaces.
-"""
-struct WENO{D,WS <: WENOWorkspace, I <: Interpolator, NFF <: NumericalFluxFunction} <: WENOGI
+struct WENO{D, I <: Interpolator} <: GradientInterpolator
     order::Int
-    workspaces::Vector{WS}
     interpolator::I
-    numericalFlux::NFF
 end
 
 ## ------------------------------- Central Gradient -------------------------------

@@ -46,10 +46,8 @@ include("InterpolationUtils.jl")
 
 #include("MUSCLCoeffs.jl")
 include("MUSCLLimiter.jl")
-#include("MUSCLWorkspace.jl")
-#include("MUSCLUtils.jl")
 include("MUSCL.jl")
 
 include("Upwind.jl")
 
-#include("WENO.jl")
+include("WENO.jl")

@@ -161,3 +161,44 @@ end
     # Returns SVector{B_LEN, State{M}}
     return SVector{B_LEN, State{M}}(ntuple(k -> State{M}(c_s[k, :] * scales[k]), Val(B_LEN)))
 end
+
+# Inside InterpolationUtils.jl (below the standard Universal MLS Interpolator)
+
+function (interp::Interpolator{D, IO, 1})(
+    nb_slice::UnitRange{Int}, distVec::AbstractVector{Space{D}}, 
+    wVec::AbstractVector{Float64}, dfVec::AbstractVector{State{M}},
+    mask::AbstractVector{Bool}; scale::Float64=1.0
+) where {D, IO, M}
+    
+    B_LEN_VAL = basis_length(Val(D), Val(IO))
+    return _mls_solve_masked(nb_slice, distVec, wVec, dfVec, mask, scale, B_LEN_VAL, Val(IO), Val(D))
+end
+
+@inline function _mls_solve_masked(
+    nb_slice::UnitRange{Int}, distVec::AbstractVector{Space{D}}, 
+    wVec::AbstractVector{Float64}, dfVec::AbstractVector{State{M}},
+    mask::AbstractVector{Bool}, scale::Float64,
+    ::Val{B_LEN}, ::Val{IO}, ::Val{D}
+) where {B_LEN, IO, D, M}
+    
+    invL = 1.0 / scale
+    N_s = zero(SMatrix{B_LEN, B_LEN, Float64, B_LEN * B_LEN})
+    b_s = zero(SMatrix{B_LEN, M, Float64, B_LEN * M})
+
+    @inbounds for i in nb_slice
+        if !mask[i]; continue; end # ✅ Zero-copy filtering!
+        
+        w = wVec[i]
+        p_s = build_basis(Val(IO), distVec[i] * invL) 
+        N_s += w * (p_s * p_s') 
+        b_s += w * (p_s * dfVec[i]') 
+    end
+    
+    if abs(det(N_s)) < 1e-14
+        return SVector{B_LEN, State{M}}(ntuple(_ -> zero(State{M}), Val(B_LEN)))
+    end
+    
+    c_s = N_s \ b_s 
+    scales = build_scale_factors(Val(D), Val(IO), invL)
+    return SVector{B_LEN, State{M}}(ntuple(k -> State{M}(c_s[k, :] * scales[k]), Val(B_LEN)))
+end

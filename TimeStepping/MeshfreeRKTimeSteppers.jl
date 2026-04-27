@@ -16,7 +16,7 @@
         return fallback(eq, p_idx, fi, nb_slice, pg, rk.int_buffer)
     end
     
-    div_val = grad(eq, p_idx, fi, nb_slice, pg, n_fs, n_dfs)
+    div_val = grad(eq, p_idx, fi, nb_slice, pg, rk.int_buffer)
     
     s = length(rk.K_stages)
     base_rho = rk.rho_n[p_idx]
@@ -52,10 +52,10 @@ end
 # GENERAL RUNGE-KUTTA (Explicit Space-Time MOOD)
 # =========================================================================
 
-function (rk::GeneralRKTimeStepper{M})(
-    eq::HyperbolicPDE, pg::ParticleGrid, time::Real, dt::Real, 
+function (rk::GeneralRKTimeStepper{D,M})(
+    eq::HyperbolicPDE{D,M,R}, pg::ParticleGrid, time::Real, dt::Real, 
     source_term::AbstractSourceTerm = NoSourceTerm()
-) where {M}
+) where {D,M,R}
     N = pg.meta.N
     M_neighbors = length(pg.neighbor.indices)
     s = length(rk.K_stages)

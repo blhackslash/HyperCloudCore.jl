@@ -75,116 +75,94 @@ end
 Functor for TiwariAlgorithm. (Restricted to Scalar PDEs)
 """
 function (upwind::UpwindGradient{D, <:Any, TiwariAlgorithm})(
-    eq,
-    i::Int,                         
-    f_i::State{1},             
-    nb_slice::UnitRange{Int},       
-    pg::ParticleGrid{D},             
-    f_neighbors::AbstractVector{State{1}},    
-    df_neighbors::AbstractVector{State{1}}   
+    eq::HyperbolicPDE, i::Int, f_i::State{1}, nb_slice::UnitRange{Int},       
+    pg::ParticleGrid{D}, ib::InteractionBuffer{D, 1}    
 ) where {D}
     
-    # Extract the velocity vector uniformly into Space{D}
     vel = velocity(eq, f_i)
-    
-    thread_idx = mod1(Threads.threadid(), Threads.nthreads())
-    ws = upwind.workspaces[thread_idx] 
     interp = upwind.interpolator
 
-    dist_all_full = get_distances(pg)
-    w_all_full = get_weights(pg) 
+    dist_all = get_distances(pg)
+    w_all = get_weights(pg) 
 
     num_nb = length(nb_slice)
-    if num_nb < upwind.order; return State{1}(0.0); end
+    if num_nb < upwind.order; return zero(State{1}); end
     
-    ensure_capacity!(ws, num_nb) 
+    scale = pg.meta.dx
     
-    distVec = ws.distVec
-    dfVec   = ws.dfVec
-    wVec    = ws.wVec 
-    scale   = pg.meta.dx
-    
-    # 1. Unroll over spatial dimensions natively
     div_tuple = ntuple(Val(D)) do d
         stencil_size = 0 
         
-        # 2. Build the upwind-only stencil for this dimension
+        # 1. Flag the valid neighbors directly into the InteractionBuffer mask
         @inbounds for global_idx in nb_slice
-            dist_k = dist_all_full[global_idx]
-            
+            dist_k = dist_all[global_idx]
             if (vel[d] * dist_k[d] <= 0.0) 
+                ib.mask[global_idx] = true
                 stencil_size += 1
-                distVec[stencil_size] = dist_k
-                dfVec[stencil_size]   = df_neighbors[global_idx] 
-                wVec[stencil_size]    = w_all_full[global_idx]
+            else
+                ib.mask[global_idx] = false
             end
         end
 
-        # 3. Interpolate the spatial derivative and multiply by dimension velocity
+        # 2. Call the masked interpolator using the raw global arrays
         if stencil_size >= upwind.order
             scale_d = scale[d]
             if upwind.order == 1
-                res = interp(1:stencil_size, distVec, wVec, dfVec; scale = scale_d)
+                res = interp(nb_slice, dist_all, w_all, ib.df, ib.mask; scale = scale_d)
                 dF_dx = State{1}(res[d, 1])
             else
-                res_tuple = interp(1:stencil_size, distVec, wVec, dfVec; scale = scale_d)
+                res_tuple = interp(nb_slice, dist_all, w_all, ib.df, ib.mask; scale = scale_d)
                 dF_dx = State{1}(res_tuple[1][d, 1])
             end
             return dF_dx * vel[d]
         else
-            return State{1}(0.0)
+            return zero(State{1})
         end
     end
 
-    # Return the aggregated divergence sum
     return sum(div_tuple) 
 end
 """
 Functor for PraveenAlgorithm. (Restricted to Scalar PDEs in 2D)
 """
 function (upwind::UpwindGradient{2, <:Any, PraveenAlgorithm})(
-    eq,
-    i::Int,                         
-    f_i::State{1},                  
-    nb_slice::UnitRange{Int},       
-    pg::ParticleGrid{2},             
-    f_neighbors::AbstractVector{State{1}},    
-    df_neighbors::AbstractVector{State{1}}    
+    eq::HyperbolicPDE, i::Int, f_i::State{1}, nb_slice::UnitRange{Int},       
+    pg::ParticleGrid{2}, ib::InteractionBuffer{2, 1}    
 )
-    # Extract 2D Velocity
     vel = Space{2}(velocity(eq, f_i))
 
-    dist_all_full = get_distances(pg)
-    w_all_full = get_weights(pg)
+    dist_all = get_distances(pg)
+    w_all = get_weights(pg)
 
     num_nb = length(nb_slice)
-    if num_nb < 3; return State{1}(0.0); end 
+    if num_nb < 3; return zero(State{1}); end 
     
     scale = min(pg.meta.dx[1], pg.meta.dx[2])
-    if scale < 1e-14; return State{1}(0.0); end
+    if scale < 1e-14; return zero(State{1}); end
     invL = 1.0 / scale
 
     N_s = @SMatrix zeros(Float64, 2, 2)
     
     @inbounds for global_idx in nb_slice
-        w_k = w_all_full[global_idx]
-        dist_s = dist_all_full[global_idx] * invL
+        w_k = w_all[global_idx]
+        dist_s = dist_all[global_idx] * invL
         N_s += w_k * (dist_s * dist_s')
     end
     
-    if abs(det(N_s)) < 1e-14; return State{1}(0.0); end
+    if abs(det(N_s)) < 1e-14; return zero(State{1}); end
 
-    div = State{1}(0.0)
+    div = zero(State{1})
 
     @inbounds for global_idx in nb_slice
-        w_k    = w_all_full[global_idx] 
-        dist_k = dist_all_full[global_idx] 
+        w_k    = w_all[global_idx] 
+        dist_k = dist_all[global_idx] 
        
         b_s = w_k * dist_k * invL
         c_s = N_s \ b_s
         coeff = c_s * invL
 
         hyp = norm(dist_k)
+    
         if hyp < 1e-14
             nx, ny = 1.0, 0.0
         else
@@ -205,7 +183,8 @@ function (upwind::UpwindGradient{2, <:Any, PraveenAlgorithm})(
     
         cij = alfaBar * bracketMinus1 + bracketMinus2
         
-        div += cij * df_neighbors[global_idx] 
+        # Read natively from the Interaction Buffer's difference array
+        div += cij * ib.df[global_idx] 
     end
     
     return 2.0 * div
