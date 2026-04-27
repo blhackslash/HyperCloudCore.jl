@@ -1,21 +1,13 @@
 # =========================================================================
-# DYNAMIC DIVERGENCE & MOOD DISPATCH
+# DYNAMIC MOOD DISPATCH (Stateless & Fallback-Free)
 # =========================================================================
 
-# Base cases: NO MOOD or NO FALLBACK -> Skip candidate construction entirely!
-@inline _get_divergence(grad, fallback::NoFallbackGrad, mood, eq, p_idx, fi, nb_slice, pg, rk::GeneralRKTimeStepper, stage, dt) = grad(eq, p_idx, fi, nb_slice, pg, rk.int_buffer)
-@inline _get_divergence(grad, fallback, mood::NoMOOD, eq, p_idx, fi, nb_slice, pg, rk::GeneralRKTimeStepper, stage, dt) = grad(eq, p_idx, fi, nb_slice, pg, rk.int_buffer)
-@inline _get_divergence(grad, fallback::NoFallbackGrad, mood::NoMOOD, eq, p_idx, fi, nb_slice, pg, rk::GeneralRKTimeStepper, stage, dt) = grad(eq, p_idx, fi, nb_slice, pg, rk.int_buffer)
+@inline _check_mood(grad, mood::NoMOOD, eq, p_idx, fi, nb_slice, pg, rk::GeneralRKTimeStepper, stage, dt) = grad(eq, p_idx, fi, nb_slice, pg, rk.int_buffer)
 
 # Active MOOD case: Construct candidate and flag if unstable
-@inline function _get_divergence(
-    grad, fallback, mood, eq, p_idx, fi, nb_slice, pg, rk::GeneralRKTimeStepper, stage, dt
+@inline function _check_mood(
+    grad, mood, eq, p_idx, fi, nb_slice, pg, rk::GeneralRKTimeStepper, stage, dt
 )
-    # FAST PATH: If already dropped to Euler, just return 1st-order fallback flux instantly
-    if rk.mood_triggered[p_idx]
-        return fallback(eq, p_idx, fi, nb_slice, pg, rk.int_buffer)
-    end
-    
     div_val = grad(eq, p_idx, fi, nb_slice, pg, rk.int_buffer)
     
     s = length(rk.K_stages)
@@ -39,9 +31,8 @@
     
     rho_candidate = base_rho - dt * A_coef * div_val
     
-    # If MOOD triggers, we flag this particle for the rest of the timestep
+    # If MOOD triggers, flag the particle to "opt out" of the remaining stages
     if mood(grad, p_idx, fi, nb_slice, rho_candidate, pg, rk.int_buffer.f)
-        div_val = fallback(eq, p_idx, fi, nb_slice, pg, rk.int_buffer)
         rk.mood_triggered[p_idx] = true 
     end
     
@@ -56,6 +47,7 @@ function (rk::GeneralRKTimeStepper{D,M})(
     eq::HyperbolicPDE{D,M,R}, pg::ParticleGrid, time::Real, dt::Real, 
     source_term::AbstractSourceTerm = NoSourceTerm()
 ) where {D,M,R}
+    
     N = pg.meta.N
     M_neighbors = length(pg.neighbor.indices)
     s = length(rk.K_stages)
@@ -72,21 +64,19 @@ function (rk::GeneralRKTimeStepper{D,M})(
     rho_stage      = rk.rho_stage
     K_stages       = rk.K_stages
     mood_triggered = rk.mood_triggered
-    int_buffer = rk.int_buffer
+    int_buffer     = rk.int_buffer
     
     main_grad      = rk.gradientInterpolator
     fallback_grad  = rk.fallbackInterpolator
     mood_fun       = rk.mood
-    has_fallback = !(fallback_grad isa NoFallbackGrad)
     
     rhos           = pg.rhos
     is_boundary    = pg.core.is_boundary
     
     # Initialize state
     rho_n[1:N] .= view(rhos, 1:N)
-    fill!(mood_triggered, false) # Reset MOOD flags at start of full dt
+    fill!(mood_triggered, false) 
     
-    # Extract neighbor tracking arrays
     nb_slices  = pg.neighbor.ranges
     nb_indices = pg.neighbor.indices
     
@@ -95,12 +85,6 @@ function (rk::GeneralRKTimeStepper{D,M})(
         delta_t = stage == 1 ? c[stage] * dt : (c[stage] - c[stage-1]) * dt
         if delta_t > 0
             pg.mover(pg, delta_t, eq, source_term)
-            
-            #pg.neighbor(pg)
-            
-            # CRITICAL: Refresh neighbor arrays as pg.neighbor(pg) might have resized them!
-            #nb_slices  = pg.neighbor.ranges
-            #nb_indices = pg.neighbor.indices
         end
 
         # --- 2. Calculate U^{(stage)} ---
@@ -110,65 +94,54 @@ function (rk::GeneralRKTimeStepper{D,M})(
             @batch for p_idx in 1:N
                 if is_boundary[p_idx]; continue; end
                 
+                # OPTIMIZATION: If MOOD triggered, lock state at U^n (provides safe donor for BCs)
                 if mood_triggered[p_idx]
-                    # Safe Euler Trajectory 
-                    rho_stage[p_idx] = rho_n[p_idx] - c[stage] * dt * K_stages[1][p_idx]
-                else
-                    # High-Order RK Trajectory
-                    u_stage = rho_n[p_idx]
-                    for j in 1:(stage-1)
-                        if A[stage, j] != 0.0
-                            u_stage -= dt * A[stage, j] * K_stages[j][p_idx]
-                        end
-                    end
-                    rho_stage[p_idx] = u_stage
+                    rho_stage[p_idx] = rho_n[p_idx]
+                    continue
                 end
+                
+                u_stage = rho_n[p_idx]
+                for j in 1:(stage-1)
+                    if A[stage, j] != 0.0
+                        u_stage -= dt * A[stage, j] * K_stages[j][p_idx]
+                    end
+                end
+                rho_stage[p_idx] = u_stage
             end
             apply_boundary_conditions!(pg, rho_stage)
         end
         
-        # --- 3. Pre-Gather (Optimized) ---
+        # --- 3. Pre-Gather (High-Order Only) ---
         update_size!(main_grad, N)
-        if has_fallback; update_size!(fallback_grad, N); end
         
         @batch for p_idx in 1:N
+            # OPTIMIZATION: Skip completely if MOOD triggered!
+            if is_boundary[p_idx] || mood_triggered[p_idx]; continue; end
+            
             fi = rho_stage[p_idx]
             nb_slice = nb_slices[p_idx]
             
-            # Pass unpacked arrays cleanly
             update_content!(int_buffer, nb_indices, fi, nb_slice, rho_stage)
-            
-            # Massive Speedup: If already dropped to Euler, skip allocating high-order matrices!
-            if mood_triggered[p_idx]
-                update_content!(fallback_grad, p_idx, fi, nb_slice, pg, int_buffer)
-            else
-                update_content!(main_grad, p_idx, fi, nb_slice, pg, int_buffer)
-                if !(fallback_grad isa NoFallbackGrad) && !(mood_fun isa NoMOOD)
-                    update_content!(fallback_grad, p_idx, fi, nb_slice, pg, int_buffer)
-                end
-            end
+            update_content!(main_grad, p_idx, fi, nb_slice, pg, int_buffer)
         end
         
         # --- 4. Divergence & Dynamic MOOD Check ---
         @batch for p_idx in 1:N
-            if is_boundary[p_idx]; continue; end
+            if is_boundary[p_idx] || mood_triggered[p_idx]; continue; end
             
             fi = rho_stage[p_idx]
             nb_slice = nb_slices[p_idx]
             
-            K_stages[stage][p_idx] = _get_divergence(
-                main_grad, fallback_grad, mood_fun,
-                eq, p_idx, fi, nb_slice, pg,
-                rk, stage, dt
+            K_stages[stage][p_idx] = _check_mood(
+                main_grad, mood_fun, eq, p_idx, fi, nb_slice, pg, rk, stage, dt
             )
         end
     end
     
-    # --- 5. Final Assembly ---
+    # --- 5. Final Assembly (The Euler Catcher) ---
     delta_t = (1.0 - c[s]) * dt
     if delta_t > 0
         pg.mover(pg, delta_t, eq, source_term)
-        # pg.reorder(pg) # Recommended!
         pg.neighbor(pg)
     end
 
@@ -176,8 +149,16 @@ function (rk::GeneralRKTimeStepper{D,M})(
         if is_boundary[p_idx]; continue; end
         
         if mood_triggered[p_idx]
-            # Safe Full Euler Step
-            rhos[p_idx] = rho_n[p_idx] - dt * K_stages[1][p_idx]
+            # PERFECT EULER FALLBACK: Evaluate safe 1st-order step directly from U^n
+            fi = rho_n[p_idx]
+            nb_slice = nb_slices[p_idx]
+            
+            update_content!(int_buffer, nb_indices, fi, nb_slice, rho_n)
+            update_content!(fallback_grad, p_idx, fi, nb_slice, pg, int_buffer)
+            
+            div_fallback = fallback_grad(eq, p_idx, fi, nb_slice, pg, int_buffer)
+            rhos[p_idx] = rho_n[p_idx] - dt * div_fallback
+            
         else
             # Full RK Step
             rho_final = rho_n[p_idx]

@@ -13,17 +13,14 @@ function (imex_ts::GeneralIMEXTimeStepper{D, M})(
 
     update_size!(imex_ts, N_particles, M_neighbors)
     
-    # 1. Unpack fields and reset step state
     U_n = imex_ts.U_n
     U_n[1:N_particles] .= view(pg.rhos, 1:N_particles)
     fill!(imex_ts.mood_triggered, false)
 
-    # 2. Extract neighbor tracking arrays
     nb_slices  = pg.neighbor.ranges
     nb_indices = pg.neighbor.indices
 
     for i in 1:s
-        # Move grid
         delta_t = i != s ? (bt.ct[i+1] - bt.ct[i]) * dt : (1.0 - bt.ct[i]) * dt
         if delta_t > 0
             imex_ts.grid_mover(pg, delta_t)           
@@ -32,12 +29,17 @@ function (imex_ts::GeneralIMEXTimeStepper{D, M})(
         current_Y_i = imex_ts.Y_stages[i]
 
         # ==================================================================
-        # PHASE 1: Accumulate Stages (Native SVector Math!)
+        # PHASE 1: Accumulate Stages
         # ==================================================================
         @batch for p_idx in 1:N_particles
             if pg.core.is_boundary[p_idx]; current_Y_i[p_idx] = pg.rhos[p_idx]; continue; end
+            
+            # Lock state at U^n if MOOD triggered
+            if imex_ts.mood_triggered[p_idx]
+                current_Y_i[p_idx] = U_n[p_idx]
+                continue
+            end
 
-            # SVector math eliminates the M-component loop entirely!
             Y_local = U_n[p_idx]
             for j in 1:(i-1)
                 if bt.At[i,j] != 0.0
@@ -51,7 +53,7 @@ function (imex_ts::GeneralIMEXTimeStepper{D, M})(
         end
 
         # ==================================================================
-        # PHASE 2: Non-Local Potential (Synchronization Point)
+        # PHASE 2: Non-Local Potential
         # ==================================================================
         if imex_ts.source_term_object isa NonLocalRelaxationSourceTerm
             update_nonlocal_potential!(imex_ts.source_term_object, current_Y_i, pg, imex_ts.eq_macro)  
@@ -60,13 +62,10 @@ function (imex_ts::GeneralIMEXTimeStepper{D, M})(
         # ==================================================================
         # PHASE 3: Implicit Solve & K_I Evaluation
         # ==================================================================
-        time_implicit = time_n + bt.c[i] * dt
-        
         if abs(bt.A[i,i]) > 1e-14
             @batch for p_idx in 1:N_particles
-                if pg.core.is_boundary[p_idx]; continue; end
+                if pg.core.is_boundary[p_idx] || imex_ts.mood_triggered[p_idx]; continue; end
                 
-                # Zero allocations: purely functional solve returning an SVector!
                 current_Y_i[p_idx] = solve(
                     imex_ts.implicit_solver, current_Y_i[p_idx], dt * bt.A[i,i],
                     imex_ts.source_term_object, p_idx, imex_ts.eq_macro, imex_ts.source_term_object.km
@@ -75,9 +74,8 @@ function (imex_ts::GeneralIMEXTimeStepper{D, M})(
         end
         
         @batch for p_idx in 1:N_particles
-            if pg.core.is_boundary[p_idx]; imex_ts.K_I_stages[i][p_idx] = zero(State{M}); continue; end
+            if pg.core.is_boundary[p_idx] || imex_ts.mood_triggered[p_idx]; continue; end
             
-            # Zero allocations: purely functional source term evaluation!
             imex_ts.K_I_stages[i][p_idx] = imex_ts.source_term_object(
                 current_Y_i[p_idx], p_idx, imex_ts.eq_macro, imex_ts.source_term_object.km
             )
@@ -89,56 +87,35 @@ function (imex_ts::GeneralIMEXTimeStepper{D, M})(
         apply_boundary_conditions!(pg, current_Y_i)
         
         grad = imex_ts.gradientInterpolator
-        fallback = imex_ts.fallbackInterpolator
-        has_fallback = !(fallback isa NoFallbackGrad)
-        
+        has_fallback = !(imex_ts.fallbackInterpolator isa NoFallbackGrad)
         update_size!(grad, N_particles)
-        if has_fallback; update_size!(fallback, N_particles); end
         
         @batch for p_idx in 1:N_particles
-            if pg.core.is_boundary[p_idx]; continue; end
+            if pg.core.is_boundary[p_idx] || imex_ts.mood_triggered[p_idx]; continue; end
             
             fi = current_Y_i[p_idx]
             nb_slice = nb_slices[p_idx]
 
             update_content!(imex_ts.int_buffer, nb_indices, fi, nb_slice, current_Y_i)
-            
-            if imex_ts.mood_triggered[p_idx]
-                update_content!(fallback, p_idx, fi, nb_slice, pg, imex_ts.int_buffer)
-            else
-                update_content!(grad, p_idx, fi, nb_slice, pg, imex_ts.int_buffer)
-                if has_fallback; update_content!(fallback, p_idx, fi, nb_slice, pg, imex_ts.int_buffer); end
-            end
+            update_content!(grad, p_idx, fi, nb_slice, pg, imex_ts.int_buffer)
         end 
 
         # ==================================================================
         # PHASE 4b: Explicit Flux Evaluation (K_E)
         # ==================================================================
         @batch for p_idx in 1:N_particles
-            if pg.core.is_boundary[p_idx]
-                imex_ts.K_E_stages[i][p_idx] = zero(State{M})
-                continue
-            end
+            if pg.core.is_boundary[p_idx] || imex_ts.mood_triggered[p_idx]; continue; end
             
             fi = current_Y_i[p_idx]
             nb_slice = nb_slices[p_idx]
 
-            if imex_ts.mood_triggered[p_idx]
-                div_val = fallback(eq_kin, p_idx, fi, nb_slice, pg, imex_ts.int_buffer)
-                imex_ts.K_E_stages[i][p_idx] = -div_val
+            div_high = grad(eq_kin, p_idx, fi, nb_slice, pg, imex_ts.int_buffer) 
+            rho_candidate = fi - dt * div_high
+            
+            if has_fallback && imex_ts.mood(grad, p_idx, fi, nb_slice, rho_candidate, pg, imex_ts.int_buffer.f)
+                imex_ts.mood_triggered[p_idx] = true # Triggers optical dropout!
             else
-                div_high = grad(eq_kin, p_idx, fi, nb_slice, pg, imex_ts.int_buffer) 
-                
-                rho_candidate = fi - dt * div_high
-                
-                # Check MOOD on the full State{M} vector at once
-                if has_fallback && imex_ts.mood(grad, p_idx, fi, nb_slice, rho_candidate, pg, imex_ts.int_buffer.f)
-                    div_fallback = fallback(eq_kin, p_idx, fi, nb_slice, pg, imex_ts.int_buffer)
-                    imex_ts.K_E_stages[i][p_idx] = -div_fallback
-                    imex_ts.mood_triggered[p_idx] = true
-                else
-                    imex_ts.K_E_stages[i][p_idx] = -div_high
-                end
+                imex_ts.K_E_stages[i][p_idx] = -div_high
             end
         end 
     end # End of stages loop
@@ -150,11 +127,16 @@ function (imex_ts::GeneralIMEXTimeStepper{D, M})(
         if pg.core.is_boundary[p_idx]; continue; end
         
         if imex_ts.mood_triggered[p_idx]
-            # PERFECT IMEX EULER FALLBACK:
-            # 1. TVD Explicit Predictor (K_E_stages[1] was evaluated with the fallback gradient!)
-            Y_pred = U_n[p_idx] + dt * imex_ts.K_E_stages[1][p_idx]
+            # PERFECT IMEX EULER FALLBACK
+            fi = U_n[p_idx]
+            nb_slice = nb_slices[p_idx]
             
-            # 2. L-Stable Implicit Solve for the stiff source term (Backward Euler)
+            update_content!(imex_ts.int_buffer, nb_indices, fi, nb_slice, U_n)
+            update_content!(imex_ts.fallbackInterpolator, p_idx, fi, nb_slice, pg, imex_ts.int_buffer)
+            
+            div_fallback = imex_ts.fallbackInterpolator(eq_kin, p_idx, fi, nb_slice, pg, imex_ts.int_buffer)
+            Y_pred = U_n[p_idx] - dt * div_fallback
+            
             pg.rhos[p_idx] = solve(
                 imex_ts.implicit_solver, Y_pred, dt,
                 imex_ts.source_term_object, p_idx, imex_ts.eq_macro, imex_ts.source_term_object.km

@@ -24,7 +24,6 @@ end
     min1 = math_min(1.0, Float64(r))
     return math_max(0.0, min1)
 end
-
 """
 Generalized local extrema limiting. Works flawlessly for 1D, 2D, and 3D, 
 and applies component-wise limiting for Systems of Equations (State{M}).
@@ -39,15 +38,12 @@ function _limit_slopes(
     distVec::AbstractVector{Space{D}}
 ) where {B_LEN, M, D}
     
-    # 1. Stack-allocated Mutable Vectors! ZERO GC allocations.
+    # 1. Stack-allocated Mutable Vectors!
     u_max = MVector{M, Float64}(f_i)
     u_min = MVector{M, Float64}(f_i)
     
-    @inbounds for local_idx in 1:length(nb_slice)
-        global_idx = nb_slice[local_idx]
+    @inbounds for global_idx in nb_slice
         f_j = f_neighbors[global_idx]
-        
-        # Simple, native loops. M is a type parameter, so this unrolls perfectly.
         for m in 1:M
             u_max[m] = max(u_max[m], f_j[m])
             u_min[m] = min(u_min[m], f_j[m])
@@ -57,14 +53,12 @@ function _limit_slopes(
     # 2. Calculate limiting factor phi
     phi_i = MVector{M, Float64}(undef)
     fill!(phi_i, 1.0)
-    
-    # Pre-allocate a stack buffer for the Taylor reconstruction
     delta_recon = MVector{M, Float64}(undef)
     
-    @inbounds for local_idx in 1:length(nb_slice)
-        dist_k = distVec[local_idx]
+    @inbounds for global_idx in nb_slice
+        dist_k = distVec[global_idx] 
         
-        # Reconstruct difference at neighbor using ONLY the linear slopes (first D elements)
+        # Reconstruct difference at neighbor using ONLY the linear slopes
         fill!(delta_recon, 0.0)
         for d in 1:D
             grad_d = raw_grad[d]
@@ -85,14 +79,9 @@ function _limit_slopes(
         end
     end
 
-    # 3. Apply limiting factor ONLY to the linear slopes
-    # Repackages everything safely back into your strictly typed SVector
+    # 3. Apply limiting factor to ALL slopes (Linear AND High-Order)
     limited_grad = SVector{B_LEN, State{M}}(ntuple(Val(B_LEN)) do k
-        if k <= D
-            State{M}(ntuple(m -> raw_grad[k][m] * phi_i[m], Val(M)))
-        else
-            raw_grad[k]
-        end
+        State{M}(ntuple(m -> raw_grad[k][m] * phi_i[m], Val(M)))
     end)
     
     return limited_grad
@@ -118,10 +107,8 @@ function _limit_slopes(
     dist_L, dist_R = 0.0, 0.0
     min_dist_L, min_dist_R = Inf, Inf
 
-    # Find the closest Left and Right neighbors
-    @inbounds for local_idx in 1:length(nb_slice)
-        global_idx = nb_slice[local_idx]
-        dx_k = distVec[local_idx][1]
+    @inbounds for global_idx in nb_slice
+        dx_k = distVec[global_idx][1] 
         
         if dx_k > 1e-9 && dx_k < min_dist_R # Right neighbor
             min_dist_R = dx_k
@@ -134,28 +121,35 @@ function _limit_slopes(
         end
     end
 
-    # Calculate backward and forward differences
     slope_L = abs(dist_L) > 1e-12 ? (f_i - val_L) / (-dist_L) : zero(State{M})
     slope_R = abs(dist_R) > 1e-12 ? (val_R - f_i) / dist_R    : zero(State{M})
 
-    # Apply limiter component-by-component
+    # Apply limiter component-by-component and derive a continuous scaling factor
+    phi_scale = MVector{M, Float64}(undef)
+    
     limited_slope = State{M}(ntuple(Val(M)) do m
         sL = slope_L[m]
         sR = slope_R[m]
         
         if sL * sR <= 0.0
+            phi_scale[m] = 0.0
             return 0.0
         else
             r = abs(sR) < 1e-12 ? 1.0 : sL / sR
-            # Automatically dispatches to Minmod or Superbee!
             phi = limiter_phi(strategy, r)
-            return phi * sR
+            new_slope = phi * sR
+            
+            # Calculate how much we shrank the original MLS slope
+            orig_slope = raw_grad[1][m]
+            phi_scale[m] = abs(orig_slope) > 1e-12 ? clamp(abs(new_slope / orig_slope), 0.0, 1.0) : 0.0
+            
+            return new_slope
         end
     end)
     
-    # Re-pack into the unified SVector. (1D Linear slope is always index 1)
+    # Apply the scaling factor to all higher-order terms
     limited_grad = SVector{B_LEN, State{M}}(ntuple(Val(B_LEN)) do k
-        k == 1 ? limited_slope : raw_grad[k]
+        k == 1 ? limited_slope : State{M}(ntuple(m -> raw_grad[k][m] * phi_scale[m], Val(M)))
     end)
     
     return limited_grad
