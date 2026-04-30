@@ -28,7 +28,6 @@ end
 function update_size!(ts::GeneralRKTimeStepper, N_particles::Int, M_neighbors::Int)
     ensure_capacity!(ts.rho_n, N_particles)
     ensure_capacity!(ts.rho_stage, N_particles)
-    ensure_capacity!(ts.mood_triggered, N_particles)
     
     for i in 1:length(ts.K_stages)
         ensure_capacity!(ts.K_stages[i], N_particles)

@@ -18,17 +18,17 @@ Abstract MOOD Criterion type. Each MOOD criterion should overload the ()-operato
 Returns true for a MOOD event.
 """
 abstract type MOODCriterion end
-
+abstract type RealMOOD <: MOODCriterion end
 # --- MOODu1 (Simple DMP Check) ---
-struct MOODu1 <: MOODCriterion 
+struct MOODu1 <: RealMOOD 
     d::Float64
 end
 # --- MOODu2 (DMP Check + Conditional Curvature Relaxation) ---
-struct MOODu2 <: MOODCriterion 
+struct MOODu2 <: RealMOOD 
     d::Float64
 end
 struct NoMOOD <: MOODCriterion end
-struct OnlyMOOD <: MOODCriterion end
+struct OnlyMOOD <: RealMOOD end
 
 """
     GradientInterpolator
@@ -52,27 +52,17 @@ struct SuperbeeLimiter <: RealSlopeLimiter end
 struct MinmodLimiter <: RealSlopeLimiter end
 struct NoLimiter <: AbstractSlopeLimiter end
 
-struct MUSCL{D, M, B_LEN, ORDER, I <: Interpolator, L <: AbstractSlopeLimiter, NF, MOOD} <: GradientInterpolator
-    interpolator::I
+# Singleton for Order 1 (Degree 0)
+struct ConstantReconstruction end
+
+struct MUSCL{D, M, B_LEN, MAX_ORDER, MOOD, INTERPS, L, NF} <: GradientInterpolator
+    interpolators::INTERPS
     limiter::L
     numericalFlux::NF
     mood::MOOD
     gradients::Vector{SVector{B_LEN, State{M}}} 
-end
-
-function MUSCL(
-    dimension::Int, M::Int, order::Int; 
-    limiter=NoLimiter(), numericalFlux=RusanovFlux(), mood=NoMOOD()
-)
-    # Statically determine the basis length
-    B_LEN_VAL = basis_length(Val(dimension), Val(order))
-    B_LEN = typeof(B_LEN_VAL).parameters[1] 
-    
-    interp = Interpolator{dimension, order, 1}()
-    # Pass `order` directly into the type signature!
-    return MUSCL{dimension, M, B_LEN, order, typeof(interp), typeof(limiter), typeof(numericalFlux), typeof(mood)}(
-        interp, limiter, numericalFlux, mood, SVector{B_LEN,State{M}}[]
-    )
+    particle_orders::Vector{Int} 
+    mood_triggered::Vector{Bool} # Moved here from the TimeStepper!
 end
 
 ## ------------------------------- Upwind -------------------------------

@@ -28,30 +28,23 @@ struct RKButcherTableau
     b::Vector{Float64}
     c::Vector{Float64}
 end
-struct GeneralRKTimeStepper{D, M, PDE <: HyperbolicPDE, G1 <: GradientInterpolator, G2, MOOD} <: MeshfreeTimeStepper
+struct GeneralRKTimeStepper{D, M, PDE <: HyperbolicPDE, G1 <: GradientInterpolator} <: MeshfreeTimeStepper
     pde::PDE
     gradientInterpolator::G1
-    fallbackInterpolator::G2
-    mood::MOOD
     tableau::RKButcherTableau
     
     rho_n::Vector{State{M}}
     rho_stage::Vector{State{M}}
     K_stages::Vector{Vector{State{M}}} 
-    mood_triggered::Vector{Bool} # Tracks if a particle dropped to Euler
-
-    # Unified memory for interactions
+    
     int_buffer::InteractionBuffer{D, M}
 
-    function GeneralRKTimeStepper(pde::HyperbolicPDE{D, M}, grad::G1, fallback::G2, mood::MOOD, tableau::RKButcherTableau) where {G1, G2, MOOD, D, M}
+    function GeneralRKTimeStepper(pde::HyperbolicPDE{D, M}, grad::G1, tableau::RKButcherTableau) where {G1, D, M}
         s = size(tableau.A, 1)
-        
-        # Notice D is now part of the new{} call
-        new{D, M, typeof(pde), G1, G2, MOOD}(
-            pde, grad, fallback, mood, tableau, 
+        new{D, M, typeof(pde), G1}(
+            pde, grad, tableau, 
             State{M}[], State{M}[], 
             [State{M}[] for _ in 1:s],
-            Bool[], 
             InteractionBuffer{D, M}()
         )
     end
@@ -118,9 +111,8 @@ end
 end
 
 
-struct GeneralIMEXTimeStepper{D, M, G1, G2, MOOD, IS, ST_OBJ, BT, GM, EQ_MACRO} <: MeshfreeSystemTimeStepper
-    gradientInterpolator::G1
-    fallbackInterpolator::G2
+struct GeneralIMEXTimeStepper{D, M, G, MOOD, IS, ST_OBJ, BT, GM, EQ_MACRO} <: MeshfreeSystemTimeStepper
+    gradientInterpolator::G
     mood::MOOD
     implicit_solver::IS
     source_term_object::ST_OBJ

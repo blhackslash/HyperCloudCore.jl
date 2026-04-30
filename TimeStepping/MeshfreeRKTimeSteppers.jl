@@ -1,46 +1,159 @@
 # =========================================================================
-# DYNAMIC MOOD DISPATCH (Stateless & Fallback-Free)
+# STAGE EVALUATION DISPATCH
 # =========================================================================
 
-@inline _check_mood(grad, mood::NoMOOD, eq, p_idx, fi, nb_slice, pg, rk::GeneralRKTimeStepper, stage, dt) = grad(eq, p_idx, fi, nb_slice, pg, rk.int_buffer)
-
-# Active MOOD case: Construct candidate and flag if unstable
-@inline function _check_mood(
-    grad, mood, eq, p_idx, fi, nb_slice, pg, rk::GeneralRKTimeStepper, stage, dt
+# 1. Fallback for Generic Gradients and MUSCL{NoMOOD}
+@inline function evaluate_stage_derivatives!(
+    main_grad::GradientInterpolator, eq, pg, rk, stage, dt, rho_stage
 )
-    div_val = grad(eq, p_idx, fi, nb_slice, pg, rk.int_buffer)
-    
-    s = length(rk.K_stages)
-    base_rho = rk.rho_n[p_idx]
-    A_coef = 0.0
-    
-    # Predict the state at the NEXT step using strict RK weights
-    if stage < s
-        for j in 1:(stage-1)
-            a_val = rk.tableau.A[stage+1, j]
-            if a_val != 0.0; base_rho -= dt * a_val * rk.K_stages[j][p_idx]; end
-        end
-        A_coef = rk.tableau.A[stage+1, stage]
-    else
-        for j in 1:(s-1)
-            b_val = rk.tableau.b[j]
-            if b_val != 0.0; base_rho -= dt * b_val * rk.K_stages[j][p_idx]; end
-        end
-        A_coef = rk.tableau.b[stage]
+    N = pg.meta.N
+    nb_slices = pg.neighbor.ranges
+    nb_indices = pg.neighbor.indices
+    is_boundary = pg.core.is_boundary
+    int_buffer = rk.int_buffer
+    K_stage = rk.K_stages[stage]
+
+    update_size!(main_grad, N)
+
+    @batch for p_idx in 1:N
+        if is_boundary[p_idx]; continue; end
+        
+        fi = rho_stage[p_idx]
+        nb_slice = nb_slices[p_idx]
+        
+        update_content!(int_buffer, nb_indices, fi, nb_slice, rho_stage)
+        update_content!(main_grad, p_idx, fi, nb_slice, pg, int_buffer)
     end
     
-    rho_candidate = base_rho - dt * A_coef * div_val
-    
-    # If MOOD triggers, flag the particle to "opt out" of the remaining stages
-    if mood(grad, p_idx, fi, nb_slice, rho_candidate, pg, rk.int_buffer.f)
-        rk.mood_triggered[p_idx] = true 
+    @batch for p_idx in 1:N
+        if is_boundary[p_idx]; continue; end
+        
+        fi = rho_stage[p_idx]
+        nb_slice = nb_slices[p_idx]
+        
+        K_stage[p_idx] = main_grad(eq, p_idx, fi, nb_slice, pg, int_buffer)
     end
+end
+
+# 2. MUSCL Specialization (Iterative MOOD Order Dropping & Halo Effect)
+@inline function evaluate_stage_derivatives!(
+    main_grad::MUSCL{D, M, B_LEN, MAX_ORDER, MOOD}, eq, pg, rk, stage, dt, rho_stage
+) where {D, M, B_LEN, MAX_ORDER, MOOD <: RealMOOD}
     
-    return div_val
+    mood_fun = main_grad.mood
+    N = pg.meta.N
+    nb_slices = pg.neighbor.ranges
+    nb_indices = pg.neighbor.indices
+    is_boundary = pg.core.is_boundary
+    int_buffer = rk.int_buffer
+    K_stage = rk.K_stages[stage]
+    
+    orders = main_grad.particle_orders
+    mood_triggered = main_grad.mood_triggered
+
+    update_size!(main_grad, N)
+
+    # Reset spatial order to maximum at the start of every timestep
+    if stage == 1
+        fill!(orders, MAX_ORDER)
+    end
+
+    needs_recalc = pg.shared.bit_buffer
+    fill!(needs_recalc, true)
+
+    iteration = 0
+    while true
+        iteration += 1
+
+        # Phase A: Pre-Gather Gradients
+        @batch for p_idx in 1:N
+            if is_boundary[p_idx] || !needs_recalc[p_idx]; continue; end
+            
+            fi = rho_stage[p_idx]
+            nb_slice = nb_slices[p_idx]
+            
+            update_content!(int_buffer, nb_indices, fi, nb_slice, rho_stage)
+            update_content!(main_grad, p_idx, fi, nb_slice, pg, int_buffer)
+        end
+        
+        fill!(mood_triggered, false)
+
+        # Phase B: Reconstruct Interface Fluxes & Predict Candidates
+        @batch for p_idx in 1:N
+            if is_boundary[p_idx] || !needs_recalc[p_idx]; continue; end
+            
+            fi = rho_stage[p_idx]
+            nb_slice = nb_slices[p_idx]
+            
+            div_val = main_grad(eq, p_idx, fi, nb_slice, pg, int_buffer)
+            
+            # Predict candidate state
+            s = length(rk.K_stages)
+            base_rho = rk.rho_n[p_idx]
+            A_coef = stage < s ? rk.tableau.A[stage+1, stage] : rk.tableau.b[stage]
+            
+            if stage < s
+                for j in 1:(stage-1)
+                    a_val = rk.tableau.A[stage+1, j]
+                    if a_val != 0.0; base_rho -= dt * a_val * rk.K_stages[j][p_idx]; end
+                end
+            else
+                for j in 1:(s-1)
+                    b_val = rk.tableau.b[j]
+                    if b_val != 0.0; base_rho -= dt * b_val * rk.K_stages[j][p_idx]; end
+                end
+            end
+            
+            rho_candidate = base_rho - dt * A_coef * div_val
+            
+            if mood_fun(main_grad, p_idx, fi, nb_slice, rho_candidate, pg, int_buffer.f)
+                mood_triggered[p_idx] = true
+            end
+            
+            K_stage[p_idx] = div_val
+        end
+
+        # Phase C: MOOD Evaluator & Halo Reduction
+        any_triggered = false
+        fill!(needs_recalc, false)
+        
+        for p_idx in 1:N
+            if mood_triggered[p_idx] && orders[p_idx] > 1
+                any_triggered = true
+                orders[p_idx] -= 1
+                needs_recalc[p_idx] = true
+                
+                # Halo 1: Immediate Neighbors
+                nb_slice = nb_slices[p_idx]
+                for k in nb_slice
+                    j = nb_indices[k]
+                    if !is_boundary[j]
+                        if orders[j] > orders[p_idx]
+                            orders[j] = orders[p_idx]
+                        end
+                        needs_recalc[j] = true
+                        
+                        # Extended Halo 2: Neighbors of Neighbors must recompute!
+                        nb_slice_j = nb_slices[j]
+                        for kj in nb_slice_j
+                            jj = nb_indices[kj]
+                            if !is_boundary[jj]
+                                needs_recalc[jj] = true
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        
+        if !any_triggered || iteration >= MAX_ORDER
+            break
+        end
+    end
 end
 
 # =========================================================================
-# GENERAL RUNGE-KUTTA (Explicit Space-Time MOOD)
+# GENERAL RUNGE-KUTTA (Explicit Space-Time)
 # =========================================================================
 
 function (rk::GeneralRKTimeStepper{D,M})(
@@ -57,28 +170,15 @@ function (rk::GeneralRKTimeStepper{D,M})(
     
     update_size!(rk, N, M_neighbors)
     
-    # ==========================================================
-    # 1. UNPACK STRUCT FIELDS TO PREVENT CLOSURE INSTABILITY
-    # ==========================================================
-    rho_n          = rk.rho_n
-    rho_stage      = rk.rho_stage
-    K_stages       = rk.K_stages
-    mood_triggered = rk.mood_triggered
-    int_buffer     = rk.int_buffer
+    rho_n       = rk.rho_n
+    rho_stage   = rk.rho_stage
+    K_stages    = rk.K_stages
+    main_grad   = rk.gradientInterpolator
     
-    main_grad      = rk.gradientInterpolator
-    fallback_grad  = rk.fallbackInterpolator
-    mood_fun       = rk.mood
+    rhos        = pg.rhos
+    is_boundary = pg.core.is_boundary
     
-    rhos           = pg.rhos
-    is_boundary    = pg.core.is_boundary
-    
-    # Initialize state
     rho_n[1:N] .= view(rhos, 1:N)
-    fill!(mood_triggered, false) 
-    
-    nb_slices  = pg.neighbor.ranges
-    nb_indices = pg.neighbor.indices
     
     for stage in 1:s
         # --- 1. Incremental Grid Movement ---
@@ -94,12 +194,6 @@ function (rk::GeneralRKTimeStepper{D,M})(
             @batch for p_idx in 1:N
                 if is_boundary[p_idx]; continue; end
                 
-                # OPTIMIZATION: If MOOD triggered, lock state at U^n (provides safe donor for BCs)
-                if mood_triggered[p_idx]
-                    rho_stage[p_idx] = rho_n[p_idx]
-                    continue
-                end
-                
                 u_stage = rho_n[p_idx]
                 for j in 1:(stage-1)
                     if A[stage, j] != 0.0
@@ -111,34 +205,11 @@ function (rk::GeneralRKTimeStepper{D,M})(
             apply_boundary_conditions!(pg, rho_stage)
         end
         
-        # --- 3. Pre-Gather (High-Order Only) ---
-        update_size!(main_grad, N)
-        
-        @batch for p_idx in 1:N
-            # OPTIMIZATION: Skip completely if MOOD triggered!
-            if is_boundary[p_idx] || mood_triggered[p_idx]; continue; end
-            
-            fi = rho_stage[p_idx]
-            nb_slice = nb_slices[p_idx]
-            
-            update_content!(int_buffer, nb_indices, fi, nb_slice, rho_stage)
-            update_content!(main_grad, p_idx, fi, nb_slice, pg, int_buffer)
-        end
-        
-        # --- 4. Divergence & Dynamic MOOD Check ---
-        @batch for p_idx in 1:N
-            if is_boundary[p_idx] || mood_triggered[p_idx]; continue; end
-            
-            fi = rho_stage[p_idx]
-            nb_slice = nb_slices[p_idx]
-            
-            K_stages[stage][p_idx] = _check_mood(
-                main_grad, mood_fun, eq, p_idx, fi, nb_slice, pg, rk, stage, dt
-            )
-        end
+        # --- 3. Evaluate Spatial Derivatives (Iterative MOOD Loop) ---
+        evaluate_stage_derivatives!(main_grad, eq, pg, rk, stage, dt, rho_stage)
     end
     
-    # --- 5. Final Assembly (The Euler Catcher) ---
+    # --- 4. Final Assembly ---
     delta_t = (1.0 - c[s]) * dt
     if delta_t > 0
         pg.mover(pg, delta_t, eq, source_term)
@@ -148,27 +219,13 @@ function (rk::GeneralRKTimeStepper{D,M})(
     @batch for p_idx in 1:N
         if is_boundary[p_idx]; continue; end
         
-        if mood_triggered[p_idx]
-            # PERFECT EULER FALLBACK: Evaluate safe 1st-order step directly from U^n
-            fi = rho_n[p_idx]
-            nb_slice = nb_slices[p_idx]
-            
-            update_content!(int_buffer, nb_indices, fi, nb_slice, rho_n)
-            update_content!(fallback_grad, p_idx, fi, nb_slice, pg, int_buffer)
-            
-            div_fallback = fallback_grad(eq, p_idx, fi, nb_slice, pg, int_buffer)
-            rhos[p_idx] = rho_n[p_idx] - dt * div_fallback
-            
-        else
-            # Full RK Step
-            rho_final = rho_n[p_idx]
-            for j in 1:s
-                if b[j] != 0.0
-                    rho_final -= dt * b[j] * K_stages[j][p_idx]
-                end
+        rho_final = rho_n[p_idx]
+        for j in 1:s
+            if b[j] != 0.0
+                rho_final -= dt * b[j] * K_stages[j][p_idx]
             end
-            rhos[p_idx] = rho_final
         end
+        rhos[p_idx] = rho_final
     end
     
     apply_boundary_conditions!(pg, rhos)
