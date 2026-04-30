@@ -12,7 +12,6 @@ function update_size!(ib::InteractionBuffer, num_interactions::Int)
 end
 function update_size!(ts::GeneralIMEXTimeStepper, N_particles::Int, M_neighbors::Int)
     ensure_capacity!(ts.U_n, N_particles)
-    ensure_capacity!(ts.mood_triggered, N_particles)
     
     for i in 1:ts.num_stages
         ensure_capacity!(ts.Y_stages[i], N_particles)

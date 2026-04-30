@@ -111,9 +111,8 @@ end
 end
 
 
-struct GeneralIMEXTimeStepper{D, M, G, MOOD, IS, ST_OBJ, BT, GM, EQ_MACRO} <: MeshfreeSystemTimeStepper
+struct GeneralIMEXTimeStepper{D, M, G, IS, ST_OBJ, BT, GM, EQ_MACRO} <: MeshfreeSystemTimeStepper
     gradientInterpolator::G
-    mood::MOOD
     implicit_solver::IS
     source_term_object::ST_OBJ
     butcher_tableau::BT
@@ -126,18 +125,16 @@ struct GeneralIMEXTimeStepper{D, M, G, MOOD, IS, ST_OBJ, BT, GM, EQ_MACRO} <: Me
     K_E_stages::Vector{Vector{State{M}}}
     K_I_stages::Vector{Vector{State{M}}}
     
-    mood_triggered::Vector{Bool}
-    
     # Unified memory for interactions
     int_buffer::InteractionBuffer{D, M}
     num_stages::Int
 end
 
 function GeneralIMEXTimeStepper(
-    gradientInterpolator::G1, fallbackInterpolator::G2, mood::MOOD,
+    gradientInterpolator::G,
     implicit_solver::IS, source_term_object::ST_OBJ, 
     grid_mover::GM, eq_macro::EQ_MACRO, butcher_tableau::BT, 
-) where {G1, G2, MOOD, IS, ST_OBJ, BT, GM, EQ_MACRO}
+) where {G, IS, ST_OBJ, BT, GM, EQ_MACRO}
     
     s = size(butcher_tableau.A, 1)
     
@@ -145,14 +142,13 @@ function GeneralIMEXTimeStepper(
     M = length(source_term_object.scaled_inv_speeds) 
     D = length(source_term_object.scaled_inv_speeds[1])
     
-    return GeneralIMEXTimeStepper{D, M, G1, G2, MOOD, IS, ST_OBJ, BT, GM, EQ_MACRO}(
-        gradientInterpolator, fallbackInterpolator, mood, 
+    return GeneralIMEXTimeStepper{D, M, G, IS, ST_OBJ, BT, GM, EQ_MACRO}(
+        gradientInterpolator, 
         implicit_solver, source_term_object, butcher_tableau, grid_mover, eq_macro,
         State{M}[], 
         [State{M}[] for _ in 1:s], 
         [State{M}[] for _ in 1:s], 
         [State{M}[] for _ in 1:s], 
-        Bool[], 
         InteractionBuffer{D, M}(), 
         s
     )

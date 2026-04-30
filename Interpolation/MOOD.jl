@@ -85,9 +85,9 @@ end
 
 # --- MOODu2 (N-Dimensional MUSCL Optimization) ---
 function (mood::MOODu2)(
-    g::MUSCL{D, M, B_LEN, ORDER}, p_idx::Int, rho_i::State{M}, nb_slice::UnitRange{Int}, 
+    g::MUSCL{D, M, B_LEN, MAX_ORDER}, p_idx::Int, rho_i::State{M}, nb_slice::UnitRange{Int}, 
     newRho::State{M}, pg::ParticleGrid{D}, int_buffer_f::AbstractVector{State{M}}
-) where {D, M, B_LEN, ORDER}
+) where {D, M, B_LEN, MAX_ORDER}
     
     # 1. Base Extrema Check (DMP)
     minU, maxU = findLocalExtrema(rho_i, nb_slice, int_buffer_f)
@@ -106,11 +106,12 @@ function (mood::MOODu2)(
     if !dmp_fail; return false; end
     
     # 2. Curvature (u2) Check
-    if ORDER < 2
-        return true # DMP failed, and no curvature info exists to rescue it
+    # ✅ FIXED: If the scheme doesn't support curvature (MAX_ORDER < 3) 
+    # OR the particle has dynamically dropped to linear or lower, we cannot rescue it!
+    if MAX_ORDER < 3 || g.particle_orders[p_idx] < 3
+        return true # DMP failed, and no curvature info exists to rescue it, drop order
     end
     
-    # ✅ FIXED: Read directly from the global gradients array! No threadid() needed.
     grad_vec = g.gradients
     neighbors = pg.neighbor.indices
     
