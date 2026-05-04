@@ -48,47 +48,43 @@ end
 # FAST SPATIAL HASHING (Coordinates -> 1D Bin Index)
 # =========================================================================
 
-# 1D implementation
-@inline function get_flat_bin_index(pos::Space{1}, mins::Space{1}, bin_size::Float64, dims::NTuple{1, Int})
-    idx = floor(Int, (pos[1] - mins[1]) / bin_size) + 1
+@inline function get_flat_bin_index(pos::Space{1}, mins::Space{1}, bin_size::Space{1}, dims::NTuple{1, Int})
+    idx = floor(Int, (pos[1] - mins[1]) / bin_size[1]) + 1
     return clamp(idx, 1, dims[1])
 end
 
-# 2D implementation (Standard Column-Major Flattening)
-@inline function get_flat_bin_index(pos::Space{2}, mins::Space{2}, bin_size::Float64, dims::NTuple{2, Int})
-    idx_x = floor(Int, (pos[1] - mins[1]) / bin_size) + 1
-    idx_y = floor(Int, (pos[2] - mins[2]) / bin_size) + 1
-    
-    # Clamp to domain safely
-    cx = clamp(idx_x, 1, dims[1])
-    cy = clamp(idx_y, 1, dims[2])
-    
-    return cx + (cy - 1) * dims[1]
+@inline function get_flat_bin_index(pos::Space{2}, mins::Space{2}, bin_size::Space{2}, dims::NTuple{2, Int})
+    idx_x = floor(Int, (pos[1] - mins[1]) / bin_size[1]) + 1
+    idx_y = floor(Int, (pos[2] - mins[2]) / bin_size[2]) + 1
+    return clamp(idx_x, 1, dims[1]) + (clamp(idx_y, 1, dims[2]) - 1) * dims[1]
 end
 
-# Fallback for D-Dimensions (3D+)
-@inline function get_flat_bin_index(pos::Space{D}, mins::Space{D}, bin_size::Float64, dims::NTuple{D, Int}) where {D}
+@inline function get_flat_bin_index(pos::Space{D}, mins::Space{D}, bin_size::Space{D}, dims::NTuple{D, Int}) where {D}
     cartesian = ntuple(Val(D)) do d
-        clamp(floor(Int, (pos[d] - mins[d]) / bin_size) + 1, 1, dims[d])
+        clamp(floor(Int, (pos[d] - mins[d]) / bin_size[d]) + 1, 1, dims[d])
     end
     return LinearIndices(dims)[cartesian...]
 end
-
 # =========================================================================
-# PERIODIC BINS CONSTRUCTOR
+# PERIODIC BINS CONSTRUCTOR (Perfect Tiling)
 # =========================================================================
 function GlobalBins(
     mins_tot::NTuple{D, Real}, maxs_tot::NTuple{D, Real}, 
     mins_interior::NTuple{D, Real}, maxs_interior::NTuple{D, Real},
-    R::Real, r::Real, max_particles::Int, ::Val{:periodic}
-) where {D}
+    R::Real, r::Real, max_particles::Int, buffer::Vector{SVector{N_OFF, Int}}, ::Val{:periodic}
+) where {D, N_OFF}
     
     mins_t = Space{D}(mins_tot...)
     maxs_t = Space{D}(maxs_tot...)
-
     domain_size = maxs_t .- mins_t
-    coarse_dims = ntuple(d -> ceil(Int, domain_size[d] / R), Val(D))
-    fine_dims   = ntuple(d -> ceil(Int, domain_size[d] / r), Val(D))
+
+    # PERFECT TILING: Bins must exactly divide the domain.
+    # floor() ensures the resulting bin size is always >= R.
+    coarse_dims = ntuple(d -> max(1, floor(Int, domain_size[d] / R)), Val(D))
+    fine_dims   = ntuple(d -> max(1, floor(Int, domain_size[d] / r)), Val(D))
+
+    coarse_size = domain_size ./ coarse_dims
+    fine_size   = domain_size ./ fine_dims
 
     total_coarse_bins = prod(coarse_dims)
     total_fine_bins   = prod(fine_dims)
@@ -97,19 +93,17 @@ function GlobalBins(
     next = zeros(Int, ceil(Int, max_particles * 1.25))
     
     fine_occ  = zeros(Bool, total_fine_bins)
-    
-    # Fast path: All bins are interior (1) for periodic boundaries
     fine_type = ones(UInt8, total_fine_bins) 
 
-    return GlobalBins{D, :periodic}(
+    return GlobalBins{D, :periodic, N_OFF}(
         mins_t, maxs_t, 
-        Float64(R), coarse_dims, head, next,
-        Float64(r), fine_dims, fine_occ, fine_type
+        coarse_size, coarse_dims, head, next,
+        fine_size, fine_dims, fine_occ, fine_type, buffer
     )
 end
 
 # =========================================================================
-# NON-PERIODIC BINS CONSTRUCTOR
+# NON-PERIODIC BINS CONSTRUCTOR (Overhang Allowed)
 # =========================================================================
 function GlobalBins(
     mins_tot::NTuple{D, Real}, maxs_tot::NTuple{D, Real}, 
@@ -126,6 +120,10 @@ function GlobalBins(
     coarse_dims = ntuple(d -> ceil(Int, domain_size[d] / R), Val(D))
     fine_dims   = ntuple(d -> ceil(Int, domain_size[d] / r), Val(D))
 
+    # For non-periodic domains, overhang is mathematically safe
+    coarse_size = Space{D}(ntuple(_ -> Float64(R), Val(D)))
+    fine_size   = Space{D}(ntuple(_ -> Float64(r), Val(D)))
+
     total_coarse_bins = prod(coarse_dims)
     total_fine_bins   = prod(fine_dims)
 
@@ -137,7 +135,7 @@ function GlobalBins(
 
     for (flat_idx, I) in enumerate(CartesianIndices(fine_dims))
         bin_center = ntuple(Val(D)) do d
-            mins_t[d] + (I[d] - 0.5) * r
+            mins_t[d] + (I[d] - 0.5) * fine_size[d]
         end
         
         is_interior = all(1:D) do d
@@ -159,8 +157,8 @@ function GlobalBins(
 
     return GlobalBins{D, BC, N_OFF}(
         mins_t, maxs_t, 
-        Float64(R), coarse_dims, head, next,
-        Float64(r), fine_dims, fine_occ, fine_type, buffer
+        coarse_size, coarse_dims, head, next,
+        fine_size, fine_dims, fine_occ, fine_type, buffer
     )
 end
 

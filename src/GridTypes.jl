@@ -129,11 +129,11 @@ end
 struct GlobalBins{D, BC, N_OFF}
     mins::Space{D}
     maxs::Space{D}
-    coarse_size::Float64
+    coarse_size::Space{D}
     coarse_dims::NTuple{D, Int}
     head::Vector{Int}
     next::Vector{Int}
-    fine_size::Float64
+    fine_size::Space{D}
     fine_dims::NTuple{D, Int}
     fine_occupation::Vector{Bool}
     fine_type::Vector{UInt8}
