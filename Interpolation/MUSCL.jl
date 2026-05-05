@@ -90,7 +90,7 @@ function update_content!(
     if p_order == 1
         muscl.gradients[i] = raw_grad # Order 1 is strictly 0.0, no limiters needed
     else
-        muscl.gradients[i] = _limit_slopes(muscl.limiter, raw_grad, nb_slice, f_i, ib.f, pg, dist_all)
+        muscl.gradients[i] = _limit_slopes(muscl.limiter, raw_grad, nb_slice, f_i, ib.f, pg, dist_all, Val(MAX_ORDER - 1))
     end
     return nothing
 end

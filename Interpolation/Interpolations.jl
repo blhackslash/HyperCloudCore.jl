@@ -40,12 +40,12 @@ end
 
 include("FluxFunctions.jl")
 include("MOOD.jl")
-include("InterpolationUtils.jl")
+include("Interpolators.jl")
 
 #include("CentralGradient.jl")
 
 #include("MUSCLCoeffs.jl")
-include("MUSCLLimiter.jl")
+include("Limiter.jl")
 include("MUSCL.jl")
 
 include("Upwind.jl")

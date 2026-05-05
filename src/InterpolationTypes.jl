@@ -46,10 +46,23 @@ struct NoFallbackGrad <: GradientInterpolator end
 ## ------------------------------- MUSCL -------------------------------
 abstract type AbstractSlopeLimiter end
 abstract type RealSlopeLimiter <: AbstractSlopeLimiter end
-struct BarthJespersenLimiter <: RealSlopeLimiter end
-struct VenkatakrishnanLimiter <: RealSlopeLimiter end
-struct SuperbeeLimiter <: RealSlopeLimiter end
-struct MinmodLimiter <: RealSlopeLimiter end
+
+struct BarthJespersenLimiter{Mode} <: RealSlopeLimiter 
+    BarthJespersenLimiter(mode::Symbol=:soft) = new{mode}()
+end
+
+struct VenkatakrishnanLimiter{Mode} <: RealSlopeLimiter 
+    VenkatakrishnanLimiter(mode::Symbol=:soft) = new{mode}()
+end
+
+struct SuperbeeLimiter{Mode} <: RealSlopeLimiter 
+    SuperbeeLimiter(mode::Symbol=:soft) = new{mode}()
+end
+
+struct MinmodLimiter{Mode} <: RealSlopeLimiter 
+    MinmodLimiter(mode::Symbol=:soft) = new{mode}()
+end
+
 struct NoLimiter <: AbstractSlopeLimiter end
 
 # Singleton for Order 1 (Degree 0)
