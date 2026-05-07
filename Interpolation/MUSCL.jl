@@ -111,11 +111,12 @@ function (muscl::MUSCL{D, M, B_LEN, ORDER})(
     grad_i = muscl.gradients[i]
     F_i    = flux(eq, f_i)
     dist_all = get_distances(pg)
+    nb_indices = pg.neighbor.indices
     
     @inbounds for global_idx in nb_slice
         dist_k = dist_all[global_idx]
         f_j    = ib.f[global_idx]
-        grad_j = muscl.gradients[pg.neighbor.indices[global_idx]]
+        grad_j = muscl.gradients[nb_indices[global_idx]]
         
         p_interface_i = build_basis(Val(ORDER-1),  0.5 * dist_k)
         p_interface_j = build_basis(Val(ORDER-1), -0.5 * dist_k)

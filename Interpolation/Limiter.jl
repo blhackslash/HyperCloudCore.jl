@@ -120,33 +120,33 @@ function _limit_slopes(
 
     phi_scale = MVector{M, Float64}(undef)
     
-    limited_slope = State{M}(ntuple(Val(M)) do m
+    for m in 1:M
         sL = slope_L[m]
         sR = slope_R[m]
+        orig_slope = raw_grad[1][m] # The highly accurate MLS slope
         
         if sL * sR <= 0.0
-            phi_scale[m] = 0.0
-            return 0.0
+            phi_scale[m] = 0.0 # Extrema clipping
         else
             r = abs(sR) < 1e-12 ? 1.0 : sL / sR
             phi = limiter_phi(strategy, r)
             new_slope = phi * sR
             
-            orig_slope = raw_grad[1][m]
-            phi_scale[m] = abs(orig_slope) > 1e-12 ? clamp(abs(new_slope / orig_slope), 0.0, 1.0) : 0.0
-            
-            return new_slope
+            # Safely calculate the scaling factor without overwriting the MLS slope!
+            if orig_slope * new_slope <= 0.0
+                phi_scale[m] = 0.0
+            else
+                phi_scale[m] = clamp(new_slope / orig_slope, 0.0, 1.0)
+            end
         end
-    end)
+    end
     
     # Apply limiting based on Mode
     limited_grad = SVector{B_LEN, State{M}}(ntuple(Val(B_LEN)) do k
-        if k == 1 
-            limited_slope # Always replace linear slope
-        elseif Mode === :hard
-            State{M}(ntuple(m -> raw_grad[k][m] * phi_scale[m], Val(M))) # Squash curves
+        if Mode === :hard || k <= D 
+            State{M}(ntuple(m -> raw_grad[k][m] * phi_scale[m], Val(M))) 
         else
-            raw_grad[k] # Leave curves untouched!
+            raw_grad[k] # Leave curves untouched in :soft mode
         end
     end)
     
