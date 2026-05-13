@@ -25,6 +25,17 @@ end
     return expr
 end
 
+# Dynamically drops the MLS degree of the divergence operator to prevent Runge's Phenomenon
+@generated function compute_dynamic_divergence(interps::Tuple, div_idx::Int, nb_slice, dist_all, w_all, dfFlux, df_scratch, scale)
+    N = length(interps.parameters)
+    expr = :(interps[$N](nb_slice, dist_all, w_all, dfFlux, df_scratch; scale=scale))
+    # Build if/else chain from N-1 down to 2 (Since Index 1 is Constant/Zero, we stop at 2 for Linear/1st-Deriv)
+    for i in (N-1):-1:2
+        expr = :(div_idx == $i ? interps[$i](nb_slice, dist_all, w_all, dfFlux, df_scratch; scale=scale) : $expr)
+    end
+    return expr
+end
+
 # =========================================================================
 # CONSTRUCTOR & SIZING
 # =========================================================================
@@ -104,7 +115,7 @@ function (muscl::MUSCL{D, M, B_LEN, ORDER})(
     pg::ParticleGrid{D}, ib::InteractionBuffer{D, M}    
 ) where {D, M, B_LEN, ORDER}
 
-    if length(nb_slice) < B_LEN
+    if isempty(nb_slice)
         return zero(State{M})
     end
 
@@ -118,6 +129,7 @@ function (muscl::MUSCL{D, M, B_LEN, ORDER})(
         f_j    = ib.f[global_idx]
         grad_j = muscl.gradients[nb_indices[global_idx]]
         
+        # Safe to evaluate high-order basis because dropped gradients are padded with 0.0s
         p_interface_i = build_basis(Val(ORDER-1),  0.5 * dist_k)
         p_interface_j = build_basis(Val(ORDER-1), -0.5 * dist_k)
 
@@ -134,11 +146,14 @@ function (muscl::MUSCL{D, M, B_LEN, ORDER})(
         # Write directly to the global slot
         ib.dfFlux[global_idx] = F_num - F_i + nc_jump
     end
+
+    p_order = muscl.particle_orders[i]
+    div_idx = max(2, p_order)
     
-    div_interp = muscl.interpolators[ORDER]
-    
-    div = div_interp(
-        nb_slice, dist_all, get_weights(pg), ib.dfFlux, ib.df_scratch; scale = pg.meta.dx
+    div = compute_dynamic_divergence(
+        muscl.interpolators, div_idx, 
+        nb_slice, dist_all, get_weights(pg), 
+        ib.dfFlux, ib.df_scratch, pg.meta.dx
     )
     
     return 2.0 * div
