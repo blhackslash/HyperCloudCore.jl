@@ -40,8 +40,8 @@ end
 
 # 2. MUSCL Specialization (Iterative MOOD Order Dropping & Halo Effect)
 @inline function evaluate_stage_derivatives_imex!(
-    main_grad::MUSCL{D, M, B_LEN, MAX_ORDER, MOOD}, eq_kin, pg, imex_ts, i, dt, current_Y_i
-) where {D, M, B_LEN, MAX_ORDER, MOOD <: RealMOOD}
+    main_grad::MUSCL{D, M, B_LEN, MAX_ORDER, DIV_ORDER, MOOD}, eq_kin, pg, imex_ts, i, dt, current_Y_i
+) where {D, M, B_LEN, MAX_ORDER, DIV_ORDER, MOOD <: RealMOOD}
     
     mood_fun = main_grad.mood
     N_particles = pg.meta.N

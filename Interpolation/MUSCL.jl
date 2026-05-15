@@ -37,26 +37,35 @@ end
 end
 
 # =========================================================================
+# DIVERGENCE ORDER DISPATCH (Zero-Overhead Compile-Time Logic)
+# =========================================================================
+@inline _resolve_div_idx(::Val{0}, p_order) = max(2, p_order)
+@inline _resolve_div_idx(::Val{DO}, p_order) where {DO} = max(2, DO)
+
+# =========================================================================
 # CONSTRUCTOR & SIZING
 # =========================================================================
 
 function MUSCL(
     dimension::Int, M::Int, max_order::Int; 
-    limiter=NoLimiter(), numericalFlux=RusanovFlux(), mood=NoMOOD()
+    div_order::Int=0, limiter=NoLimiter(), numericalFlux=RusanovFlux(), mood=NoMOOD()
 )
-    @assert max_order >= 1 "MUSCL order must be at least 1."
+    @assert max_order >= 2 "MUSCL must have a maximum order of at least 2."
+    @assert div_order >= 0 "Divergence order only supports 0 (adaptive) or positive values!"
+    if div_order > max_order; 
+        @warn "Divergence order is too large. Setting to max_order as Fallback!"
+        div_order = max_order
+    end
     
-    # MUSCL Order K -> Polynomial Degree K - 1
     max_degree = max_order - 1
-    B_LEN_VAL = max_degree == 0 ? Val(1) : basis_length(Val(dimension), Val(max_degree))
+    B_LEN_VAL = basis_length(Val(dimension), Val(max_degree))
     B_LEN = typeof(B_LEN_VAL).parameters[1] 
     
-    # Build a tuple of interpolators from Order 1 to MAX_ORDER
     interps = ntuple(Val(max_order)) do k
         k == 1 ? ConstantReconstruction() : Interpolator{dimension, k - 1, 1}()
     end
     
-    return MUSCL{dimension, M, B_LEN, max_order, typeof(mood), typeof(interps), typeof(limiter), typeof(numericalFlux)}(
+    return MUSCL{dimension, M, B_LEN, max_order, div_order, typeof(mood), typeof(interps), typeof(limiter), typeof(numericalFlux)}(
         interps, limiter, numericalFlux, mood, SVector{B_LEN,State{M}}[], Int[], Bool[]
     )
 end
@@ -110,10 +119,10 @@ end
 # FLUX PASS: RECONSTRUCT INTERFACES AND COMPUTE DIVERGENCE
 # =========================================================================
 
-function (muscl::MUSCL{D, M, B_LEN, ORDER})(
+function (muscl::MUSCL{D, M, B_LEN, MAX_ORDER, DIV_ORDER})(
     eq::HyperbolicPDE, i::Int, f_i::State{M}, nb_slice::UnitRange{Int},       
     pg::ParticleGrid{D}, ib::InteractionBuffer{D, M}    
-) where {D, M, B_LEN, ORDER}
+) where {D, M, B_LEN, MAX_ORDER, DIV_ORDER}
 
     if isempty(nb_slice)
         return zero(State{M})
@@ -129,9 +138,8 @@ function (muscl::MUSCL{D, M, B_LEN, ORDER})(
         f_j    = ib.f[global_idx]
         grad_j = muscl.gradients[nb_indices[global_idx]]
         
-        # Safe to evaluate high-order basis because dropped gradients are padded with 0.0s
-        p_interface_i = build_basis(Val(ORDER-1),  0.5 * dist_k)
-        p_interface_j = build_basis(Val(ORDER-1), -0.5 * dist_k)
+        p_interface_i = build_basis(Val(MAX_ORDER-1),  0.5 * dist_k)
+        p_interface_j = build_basis(Val(MAX_ORDER-1), -0.5 * dist_k)
 
         fij = f_i + sum(grad_i .* p_interface_i)
         fji = f_j + sum(grad_j .* p_interface_j)
@@ -143,12 +151,12 @@ function (muscl::MUSCL{D, M, B_LEN, ORDER})(
         F_num = muscl.numericalFlux(f_L, f_R, F_L, F_R, eq)
         nc_jump = evaluate_nc_jump(eq, f_L, f_R, dist_k)
         
-        # Write directly to the global slot
         ib.dfFlux[global_idx] = F_num - F_i + nc_jump
     end
 
     p_order = muscl.particle_orders[i]
-    div_idx = max(2, p_order)
+    
+    div_idx = _resolve_div_idx(Val(DIV_ORDER), p_order)
     
     div = compute_dynamic_divergence(
         muscl.interpolators, div_idx, 

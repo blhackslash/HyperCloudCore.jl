@@ -68,14 +68,14 @@ struct NoLimiter <: AbstractSlopeLimiter end
 # Singleton for Order 1 (Degree 0)
 struct ConstantReconstruction end
 
-struct MUSCL{D, M, B_LEN, MAX_ORDER, MOOD, INTERPS, L, NF} <: GradientInterpolator
+struct MUSCL{D, M, B_LEN, MAX_ORDER, DIV_ORDER, MOOD, INTERPS, L, NF} <: GradientInterpolator
     interpolators::INTERPS
     limiter::L
     numericalFlux::NF
     mood::MOOD
     gradients::Vector{SVector{B_LEN, State{M}}} 
     particle_orders::Vector{Int} 
-    mood_triggered::Vector{Bool} # Moved here from the TimeStepper!
+    mood_triggered::Vector{Bool} 
 end
 
 ## ------------------------------- Upwind -------------------------------
