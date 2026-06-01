@@ -16,7 +16,10 @@
 @inline basis_length(::Val{3}, ::Val{3}) = Val(19)
 
 @inline basis_length(::Val{1}, ::Val{4}) = Val(4)
+@inline basis_length(::Val{2}, ::Val{4}) = Val(14)
+
 @inline basis_length(::Val{1}, ::Val{5}) = Val(5)
+@inline basis_length(::Val{2}, ::Val{5}) = Val(20)
 
 
 # =========================================================================
@@ -52,9 +55,24 @@
     d[1]*d[2]*d[3]
 )
 
-# --- Order 4 & 5 (1D Only) ---
+# --- Order 4 ---
 @inline build_basis(::Val{4}, d::SVector{1, Float64}) = SVector(d[1], 0.5*d[1]^2, (1.0/6.0)*d[1]^3, (1.0/24.0)*d[1]^4)
+@inline build_basis(::Val{4}, d::SVector{2, Float64}) = SVector(
+    d[1], d[2], 
+    0.5*d[1]^2, 0.5*d[2]^2, d[1]*d[2], 
+    (1.0/6.0)*d[1]^3, (1.0/6.0)*d[2]^3, 0.5*d[1]^2*d[2], 0.5*d[1]*d[2]^2,
+    (1.0/24.0)*d[1]^4, (1.0/24.0)*d[2]^4, (1.0/6.0)*d[1]^3*d[2], (1.0/6.0)*d[1]*d[2]^3, 0.25*d[1]^2*d[2]^2
+)
+
+# --- Order 5 ---
 @inline build_basis(::Val{5}, d::SVector{1, Float64}) = SVector(d[1], 0.5*d[1]^2, (1.0/6.0)*d[1]^3, (1.0/24.0)*d[1]^4, (1.0/120.0)*d[1]^5)
+@inline build_basis(::Val{5}, d::SVector{2, Float64}) = SVector(
+    d[1], d[2], 
+    0.5*d[1]^2, 0.5*d[2]^2, d[1]*d[2], 
+    (1.0/6.0)*d[1]^3, (1.0/6.0)*d[2]^3, 0.5*d[1]^2*d[2], 0.5*d[1]*d[2]^2,
+    (1.0/24.0)*d[1]^4, (1.0/24.0)*d[2]^4, (1.0/6.0)*d[1]^3*d[2], (1.0/6.0)*d[1]*d[2]^3, 0.25*d[1]^2*d[2]^2,
+    (1.0/120.0)*d[1]^5, (1.0/120.0)*d[2]^5, (1.0/24.0)*d[1]^4*d[2], (1.0/24.0)*d[1]*d[2]^4, (1.0/12.0)*d[1]^3*d[2]^2, (1.0/12.0)*d[1]^2*d[2]^3
+)
 
 
 # =========================================================================
@@ -81,9 +99,24 @@
     invL^3, invL^3, invL^3, invL^3, invL^3, invL^3, invL^3, invL^3, invL^3, invL^3
 )
 
-# --- Order 4 & 5 (1D Only) ---
+# --- Order 4 ---
 @inline build_scale_factors(::Val{1}, ::Val{4}, invL) = SVector(invL, invL^2, invL^3, invL^4)
+@inline build_scale_factors(::Val{2}, ::Val{4}, invL) = SVector(
+    invL, invL, 
+    invL^2, invL^2, invL^2, 
+    invL^3, invL^3, invL^3, invL^3, 
+    invL^4, invL^4, invL^4, invL^4, invL^4
+)
+
+# --- Order 5 ---
 @inline build_scale_factors(::Val{1}, ::Val{5}, invL) = SVector(invL, invL^2, invL^3, invL^4, invL^5)
+@inline build_scale_factors(::Val{2}, ::Val{5}, invL) = SVector(
+    invL, invL, 
+    invL^2, invL^2, invL^2, 
+    invL^3, invL^3, invL^3, invL^3, 
+    invL^4, invL^4, invL^4, invL^4, invL^4,
+    invL^5, invL^5, invL^5, invL^5, invL^5, invL^5
+)
 # =========================================================================
 # UPWIND MATRIX-VECTORIZED DISPATCH (Stateless)
 # =========================================================================
@@ -186,7 +219,7 @@ end
     b_s = zero(SMatrix{B_LEN, M, Float64, B_LEN * M})
 
     @inbounds for i in nb_slice
-        if !mask[i]; continue; end # ✅ Zero-copy filtering!
+        if !mask[i]; continue; end
         
         w = wVec[i]
         p_s = build_basis(Val(IO), distVec[i] * invL) 
