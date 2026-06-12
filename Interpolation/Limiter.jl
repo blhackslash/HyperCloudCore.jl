@@ -143,7 +143,7 @@ function _limit_slopes(
     
     # Apply limiting based on Mode
     limited_grad = SVector{B_LEN, State{M}}(ntuple(Val(B_LEN)) do k
-        if Mode === :hard || k <= D 
+        if Mode === :hard || k <= 1 
             State{M}(ntuple(m -> raw_grad[k][m] * phi_scale[m], Val(M))) 
         else
             raw_grad[k] # Leave curves untouched in :soft mode
