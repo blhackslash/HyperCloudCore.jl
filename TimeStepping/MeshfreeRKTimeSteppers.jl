@@ -36,11 +36,11 @@
 end
 
 # 2. MUSCL Specialization (Iterative MOOD Order Dropping & Halo Effect)
+# 2. MUSCL Specialization (Iterative MOOD Order Dropping)
 @inline function evaluate_stage_derivatives!(
     main_grad::MUSCL{D, M, B_LEN, MAX_ORDER, DIV_ORDER, MOOD}, eq, pg, rk, stage, dt, rho_stage
 ) where {D, M, B_LEN, MAX_ORDER, DIV_ORDER, MOOD <: RealMOOD}
     
-    mood_fun = main_grad.mood
     N = pg.meta.N
     nb_slices = pg.neighbor.ranges
     nb_indices = pg.neighbor.indices
@@ -49,16 +49,14 @@ end
     K_stage = rk.K_stages[stage]
     
     orders = main_grad.particle_orders
-    mood_triggered = main_grad.mood_triggered
+    needs_recalc = pg.shared.bit_buffer
 
     update_size!(main_grad, N)
 
-    # Reset spatial order to maximum at the start of every timestep
     if stage == 1
         fill!(orders, MAX_ORDER)
     end
 
-    needs_recalc = pg.shared.bit_buffer
     fill!(needs_recalc, true)
 
     iteration = 0
@@ -75,78 +73,21 @@ end
             update_content!(int_buffer, nb_indices, fi, nb_slice, rho_stage)
             update_content!(main_grad, p_idx, fi, nb_slice, pg, int_buffer)
         end
-        
-        fill!(mood_triggered, false)
 
-        # Phase B: Reconstruct Interface Fluxes & Predict Candidates
+        # Phase B: Reconstruct Interface Fluxes
         @batch for p_idx in 1:N
             if is_boundary[p_idx] || !needs_recalc[p_idx]; continue; end
             
             fi = rho_stage[p_idx]
             nb_slice = nb_slices[p_idx]
             
-            div_val = main_grad(eq, p_idx, fi, nb_slice, pg, int_buffer)
-            
-            # Predict candidate state
-            s = length(rk.K_stages)
-            base_rho = rk.rho_n[p_idx]
-            A_coef = stage < s ? rk.tableau.A[stage+1, stage] : rk.tableau.b[stage]
-            
-            if stage < s
-                for j in 1:(stage-1)
-                    a_val = rk.tableau.A[stage+1, j]
-                    if a_val != 0.0; base_rho -= dt * a_val * rk.K_stages[j][p_idx]; end
-                end
-            else
-                for j in 1:(s-1)
-                    b_val = rk.tableau.b[j]
-                    if b_val != 0.0; base_rho -= dt * b_val * rk.K_stages[j][p_idx]; end
-                end
-            end
-            
-            rho_candidate = base_rho - dt * A_coef * div_val
-            
-            if mood_fun(main_grad, p_idx, fi, nb_slice, rho_candidate, pg, int_buffer.f)
-                mood_triggered[p_idx] = true
-            end
-            
-            K_stage[p_idx] = div_val
+            K_stage[p_idx] = main_grad(eq, p_idx, fi, nb_slice, pg, int_buffer)
         end
 
-        # Phase C: MOOD Evaluator & Halo Reduction
-        any_triggered = false
-        fill!(needs_recalc, false)
+        # Phase C: MOOD Evaluator & Halo Reduction (External Dispatch)
+        needs_another_pass = evaluate_mood_and_halo!(main_grad, pg, rk, stage, dt, rho_stage)
         
-        for p_idx in 1:N
-            if mood_triggered[p_idx] && orders[p_idx] > 1
-                any_triggered = true
-                orders[p_idx] -= 1
-                needs_recalc[p_idx] = true
-                
-                # Halo 1: Immediate Neighbors
-                nb_slice = nb_slices[p_idx]
-                for k in nb_slice
-                    j = nb_indices[k]
-                    if !is_boundary[j]
-                        if orders[j] > orders[p_idx]
-                            orders[j] = orders[p_idx]
-                        end
-                        needs_recalc[j] = true
-                        
-                        # Extended Halo 2: Neighbors of Neighbors must recompute!
-                        nb_slice_j = nb_slices[j]
-                        for kj in nb_slice_j
-                            jj = nb_indices[kj]
-                            if !is_boundary[jj]
-                                needs_recalc[jj] = true
-                            end
-                        end
-                    end
-                end
-            end
-        end
-        
-        if !any_triggered || iteration >= MAX_ORDER
+        if !needs_another_pass || iteration >= MAX_ORDER
             break
         end
     end

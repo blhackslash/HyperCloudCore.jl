@@ -21,6 +21,19 @@
 @inline basis_length(::Val{1}, ::Val{5}) = Val(5)
 @inline basis_length(::Val{2}, ::Val{5}) = Val(20)
 
+# =========================================================================
+# EPD_1 BASIS TRUNCATION
+# =========================================================================
+@generated function mask_basis(basis::SVector{B_LEN, Float64}, order::Int, ::Val{D}) where {B_LEN, D}
+    expr = :(zero(SVector{B_LEN, Float64}))
+    # Assuming MAX_ORDER generally won't exceed 5 based on your Interpolators.jl
+    for o in 5:-1:2 
+        len = typeof(basis_length(Val(D), Val(o-1))).parameters[1]
+        mask_tuple = ntuple(k -> k <= len ? :(basis[$k]) : :(0.0), B_LEN)
+        expr = :(order == $o ? SVector{B_LEN, Float64}($(mask_tuple...)) : $expr)
+    end
+    return expr
+end
 
 # =========================================================================
 # BASIS VECTOR EVALUATORS

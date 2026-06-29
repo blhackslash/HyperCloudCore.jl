@@ -1,3 +1,83 @@
+@inline function evaluate_mood_and_halo!(
+    main_grad, pg, rk, stage, dt, rho_stage
+)
+    return false
+end
+
+# Dispatch 2: Specialization for MUSCL with an active MOOD Criterion
+@inline function evaluate_mood_and_halo!(
+    main_grad::MUSCL{D, M, B_LEN, MAX_ORDER, DIV_ORDER, MOOD}, 
+    pg, rk, stage, dt, rho_stage
+) where {D, M, B_LEN, MAX_ORDER, DIV_ORDER, MOOD <: RealMOOD}
+    
+    mood_fun = main_grad.mood
+    N = pg.meta.N
+    nb_slices = pg.neighbor.ranges
+    nb_indices = pg.neighbor.indices
+    is_boundary = pg.core.is_boundary
+    
+    int_buffer = rk.int_buffer
+    orders = main_grad.particle_orders
+    mood_triggered = main_grad.mood_triggered
+    needs_recalc = pg.shared.bit_buffer
+    
+    any_triggered = false
+    fill!(mood_triggered, false)
+
+    # Step 1: Predict candidate state and evaluate MOOD
+    @batch for p_idx in 1:N
+        # Only evaluate MOOD if the particle just computed a new divergence
+        if is_boundary[p_idx] || !needs_recalc[p_idx]; continue; end
+        
+        fi = rho_stage[p_idx]
+        nb_slice = nb_slices[p_idx]
+        div_val = rk.K_stages[stage][p_idx]
+
+        s = length(rk.K_stages)
+        base_rho = rk.rho_n[p_idx]
+        A_coef = stage < s ? rk.tableau.A[stage+1, stage] : rk.tableau.b[stage]
+        
+        if stage < s
+            for j in 1:(stage-1)
+                a_val = rk.tableau.A[stage+1, j]
+                if a_val != 0.0; base_rho -= dt * a_val * rk.K_stages[j][p_idx]; end
+            end
+        else
+            for j in 1:(s-1)
+                b_val = rk.tableau.b[j]
+                if b_val != 0.0; base_rho -= dt * b_val * rk.K_stages[j][p_idx]; end
+            end
+        end
+        
+        rho_candidate = base_rho - dt * A_coef * div_val
+        
+        if mood_fun(main_grad, p_idx, fi, nb_slice, rho_candidate, pg, int_buffer.f)
+            mood_triggered[p_idx] = true
+        end
+    end
+    
+    fill!(needs_recalc, false)
+
+    # Step 2: Drop order and trigger highly localized EPD_1 Halo
+    for p_idx in 1:N
+        if mood_triggered[p_idx] && orders[p_idx] > 1
+            any_triggered = true
+            orders[p_idx] -= 1
+            needs_recalc[p_idx] = true # Recompute self
+            
+            # EPD_1 Halo: Immediate Neighbors ONLY
+            for k in nb_slices[p_idx]
+                j = nb_indices[k]
+                if !is_boundary[j]
+                    needs_recalc[j] = true
+                end
+            end
+        end
+    end
+    
+    return any_triggered
+end
+
 # =========================================================================
 # STATE{M} EXTREMA FINDERS
 # =========================================================================

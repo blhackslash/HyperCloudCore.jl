@@ -133,13 +133,25 @@ function (muscl::MUSCL{D, M, B_LEN, MAX_ORDER, DIV_ORDER})(
     dist_all = get_distances(pg)
     nb_indices = pg.neighbor.indices
     
+    p_order_i = muscl.particle_orders[i]
+    
     @inbounds for global_idx in nb_slice
         dist_k = dist_all[global_idx]
         f_j    = ib.f[global_idx]
-        grad_j = muscl.gradients[nb_indices[global_idx]]
         
-        p_interface_i = build_basis(Val(MAX_ORDER-1),  0.5 * dist_k)
-        p_interface_j = build_basis(Val(MAX_ORDER-1), -0.5 * dist_k)
+        j_idx  = nb_indices[global_idx]
+        grad_j = muscl.gradients[j_idx]
+        p_order_j = muscl.particle_orders[j_idx]
+        
+        # EPD_1 Strategy: Determine strictly shared interface degree
+        interface_order = min(p_order_i, p_order_j)
+        
+        p_interface_i_raw = build_basis(Val(MAX_ORDER-1),  0.5 * dist_k)
+        p_interface_j_raw = build_basis(Val(MAX_ORDER-1), -0.5 * dist_k)
+
+        # Truncate the basis vectors to the shared interface order
+        p_interface_i = mask_basis(p_interface_i_raw, interface_order, Val(D))
+        p_interface_j = mask_basis(p_interface_j_raw, interface_order, Val(D))
 
         fij = f_i + sum(grad_i .* p_interface_i)
         fji = f_j + sum(grad_j .* p_interface_j)
