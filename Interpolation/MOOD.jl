@@ -90,13 +90,28 @@ end
 
 # StrictEPD0 forces neighbors to recalculate AND drops their order to match
 @inline function trigger_halo!(::StrictEPD0, p_idx, pg, needs_recalc, orders)
+    nb_slices = pg.neighbor.ranges
     nb_indices = pg.neighbor.indices
-    @inbounds for k in pg.neighbor.ranges[p_idx]
+    is_boundary = pg.core.is_boundary
+    
+    @inbounds for k in nb_slices[p_idx]
         j = nb_indices[k]
-        if !pg.core.is_boundary[j]
+        
+        if !is_boundary[j]
+            # 1. Flag immediate neighbor for recalculation
             needs_recalc[j] = true
-            # Reduce neighbor order to match the current triggered cell
+            
+            # 2. Drop the neighbor's order to match the troubled cell
             orders[j] = min(orders[j], orders[p_idx])
+            
+            # 3. Extended Halo 2: Because cell `j`'s order just changed,
+            # its neighbors must also recompute their divergence!
+            for m in nb_slices[j]
+                nj = nb_indices[m]
+                if !is_boundary[nj]
+                    needs_recalc[nj] = true
+                end
+            end
         end
     end
 end
