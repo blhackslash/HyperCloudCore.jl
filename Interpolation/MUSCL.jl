@@ -46,18 +46,25 @@ end
 # CONSTRUCTOR & SIZING
 # =========================================================================
 
+# 1. Add the missing functor for ConstantReconstruction
+@inline function (::ConstantReconstruction)(
+    nb_slice, dist_all, w_all, dfFlux, df_scratch; scale
+)
+    return 0.0
+end
+
+# 2. Update the MUSCL Constructor
 function MUSCL(
-    dimension::Int, M::Int, max_order::Int; 
+    dimension::Int, M::Int, max_order::Int;
     div_order::Int=0, limiter=NoLimiter(), numericalFlux=RusanovFlux(), mood=NoMOOD()
 )
-    @assert max_order >= 2 "MUSCL must have a maximum order of at least 2."
+    @assert max_order >= 1 "MUSCL must have a maximum order of at least 1."
     @assert div_order >= 0 "Divergence order only supports 0 (adaptive) or positive values!"
-    if div_order > max_order; 
-        @warn "Divergence order is too large. Setting to max_order as Fallback!"
-        div_order = max_order
-    end
+    if div_order > max_order; div_order = max_order; end
     
-    max_degree = max_order - 1
+    # Fake the degree to at least 1 for the zero-padding type stability 
+    # (Order 1 gradients will just remain safely zeroed out)
+    max_degree = max(1, max_order - 1) 
     B_LEN_VAL = basis_length(Val(dimension), Val(max_degree))
     B_LEN = typeof(B_LEN_VAL).parameters[1] 
     
@@ -133,18 +140,25 @@ function (muscl::MUSCL{D, M, B_LEN, MAX_ORDER, DIV_ORDER})(
     dist_all = get_distances(pg)
     nb_indices = pg.neighbor.indices
     
-    p_order_i = muscl.particle_orders[i]
+    nb_indices = pg.neighbor.indices
+    strategy = muscl.mood.strategy
+    
+    # Pre-evaluate the effective order for cell i ONCE
+    eff_order_i = get_effective_order(strategy, muscl.particle_orders, i, nb_slice, nb_indices)
     
     @inbounds for global_idx in nb_slice
         dist_k = dist_all[global_idx]
         f_j    = ib.f[global_idx]
-        
         j_idx  = nb_indices[global_idx]
-        grad_j = muscl.gradients[j_idx]
-        p_order_j = muscl.particle_orders[j_idx]
         
-        # EPD_1 Strategy: Determine strictly shared interface degree
-        interface_order = min(p_order_i, p_order_j)
+        grad_j = muscl.gradients[j_idx]
+        
+        # Evaluate effective order for cell j
+        nb_slice_j = pg.neighbor.ranges[j_idx]
+        eff_order_j = get_effective_order(strategy, muscl.particle_orders, j_idx, nb_slice_j, nb_indices)
+        
+        # EPD Interface Strategy
+        interface_order = min(eff_order_i, eff_order_j)
         
         p_interface_i_raw = build_basis(Val(MAX_ORDER-1),  0.5 * dist_k)
         p_interface_j_raw = build_basis(Val(MAX_ORDER-1), -0.5 * dist_k)

@@ -17,19 +17,39 @@ struct RoeDiffusiveFlux <: NumericalFluxFunction end
 Abstract MOOD Criterion type. Each MOOD criterion should overload the ()-operator, checks if the MOOD criterion at that cell is satisfied.
 Returns true for a MOOD event.
 """
+# =========================================================================
+# MOOD STRATEGIES & CRITERIA (Pure Dispatch Tags & Data Holders)
+# =========================================================================
+abstract type MOODStrategy end
+struct EPD1 <: MOODStrategy end
+struct EPD2 <: MOODStrategy end
+
 abstract type MOODCriterion end
 abstract type RealMOOD <: MOODCriterion end
-# --- MOODu1 (Simple DMP Check) ---
+
+# --- Concrete Criteria ---
 struct MOODu1 <: RealMOOD 
     d::Float64
 end
-# --- MOODu2 (DMP Check + Conditional Curvature Relaxation) ---
+
 struct MOODu2 <: RealMOOD 
     d::Float64
 end
+
 struct NoMOOD <: MOODCriterion end
 struct OnlyMOOD <: RealMOOD end
 
+# =========================================================================
+# THE MASTER MOOD FUNCTOR STRUCT
+# =========================================================================
+struct MOOD{S <: MOODStrategy, C <: MOODCriterion}
+    strategy::S
+    criterion::C
+end
+
+# Convenience Constructors (Defaulting to EPD1 and NoMOOD)
+MOOD(criterion::MOODCriterion) = MOOD(EPD1(), criterion)
+MOOD() = MOOD(EPD1(), NoMOOD())
 """
     GradientInterpolator
 

@@ -4,11 +4,10 @@
     return false
 end
 
-# Dispatch 2: Specialization for MUSCL with an active MOOD Criterion
 @inline function evaluate_mood_and_halo!(
-    main_grad::MUSCL{D, M, B_LEN, MAX_ORDER, DIV_ORDER, MOOD}, 
+    main_grad::MUSCL{D, M, B_LEN, MAX_ORDER, DIV_ORDER, MOOD{S, C}}, 
     pg, rk, stage, dt, rho_stage
-) where {D, M, B_LEN, MAX_ORDER, DIV_ORDER, MOOD <: RealMOOD}
+) where {D, M, B_LEN, MAX_ORDER, DIV_ORDER, S <: MOODStrategy, C <: RealMOOD}
     
     mood_fun = main_grad.mood
     N = pg.meta.N
@@ -63,19 +62,55 @@ end
         if mood_triggered[p_idx] && orders[p_idx] > 1
             any_triggered = true
             orders[p_idx] -= 1
-            needs_recalc[p_idx] = true # Recompute self
+            needs_recalc[p_idx] = true 
             
-            # EPD_1 Halo: Immediate Neighbors ONLY
-            for k in nb_slices[p_idx]
-                j = nb_indices[k]
-                if !is_boundary[j]
-                    needs_recalc[j] = true
-                end
-            end
+            trigger_halo!(main_grad.mood.strategy, p_idx, pg, needs_recalc)
         end
     end
     
     return any_triggered
+end
+
+# --- Effective Order Evaluators ---
+@inline get_effective_order(::EPD1, orders, i, nb_slice, nb_indices) = orders[i]
+
+@inline function get_effective_order(::EPD2, orders, i, nb_slice, nb_indices)
+    eff = orders[i]
+    @inbounds for k in nb_slice
+        eff = min(eff, orders[nb_indices[k]])
+    end
+    return eff
+end
+
+# --- Halo Triggers ---
+@inline function trigger_halo!(::EPD1, p_idx, pg, needs_recalc)
+    nb_indices = pg.neighbor.indices
+    @inbounds for k in pg.neighbor.ranges[p_idx]
+        j = nb_indices[k]
+        if !pg.core.is_boundary[j]
+            needs_recalc[j] = true
+        end
+    end
+end
+
+@inline function trigger_halo!(::EPD2, p_idx, pg, needs_recalc)
+    nb_slices = pg.neighbor.ranges
+    nb_indices = pg.neighbor.indices
+    is_boundary = pg.core.is_boundary
+    
+    @inbounds for k in nb_slices[p_idx]
+        j = nb_indices[k]
+        if !is_boundary[j]
+            needs_recalc[j] = true
+            # EPD_2 Cascade: Second neighbors must also recompute!
+            for m in nb_slices[j]
+                nj = nb_indices[m]
+                if !is_boundary[nj]
+                    needs_recalc[nj] = true
+                end
+            end
+        end
+    end
 end
 
 # =========================================================================
@@ -130,53 +165,43 @@ end
 # MOOD CRITERIA FUNCTORS
 # =========================================================================
 
-(mood::NoMOOD)(args...) = false
-(mood::OnlyMOOD)(args...) = true
+(m::MOOD{<:MOODStrategy, NoMOOD})(args...) = false
+(m::MOOD{<:MOODStrategy, OnlyMOOD})(args...) = true
 
 # --- MOODu1 (Standard DMP) ---
-function (mood::MOODu1)(
+function (m::MOOD{<:MOODStrategy, MOODu1})(
     g::Any, p_idx::Int, rho_i::State{M}, nb_slice::UnitRange{Int}, 
     newRho::State{M}, pg::ParticleGrid{D}, int_buffer_f::AbstractVector{State{M}}
 ) where {D, M}
     
     minU, maxU = findLocalExtrema(rho_i, nb_slice, int_buffer_f)
-    δ = mood.d
+    δ = m.criterion.d # Extract parameter from the nested criterion
     
-    # Check DMP component-by-component
-    for m in 1:M
-        if abs(maxU[m] - minU[m]) >= δ^3 # Flatness check
-            if newRho[m] < minU[m] - δ || newRho[m] > maxU[m] + δ
-                return true # MOOD event triggered
+    for m_idx in 1:M
+        if abs(maxU[m_idx] - minU[m_idx]) >= δ^3
+            if newRho[m_idx] < minU[m_idx] - δ || newRho[m_idx] > maxU[m_idx] + δ
+                return true
             end
         end
     end
     return false
 end
 
-# --- MOODu2 (Generic Fallback for Non-MUSCL gradients like Upwind) ---
-function (mood::MOODu2)(
-    g::Any, p_idx::Int, rho_i::State{M}, nb_slice::UnitRange{Int}, 
-    newRho::State{M}, pg::ParticleGrid{D}, int_buffer_f::AbstractVector{State{M}}
-) where {D, M}
-    # No curvature available, so just evaluate u1 (DMP)
-    return MOODu1(mood.d)(g, p_idx, rho_i, nb_slice, newRho, pg, int_buffer_f)
-end
-
 
 # --- MOODu2 (N-Dimensional MUSCL Optimization) ---
-function (mood::MOODu2)(
+function (m::MOOD{<:MOODStrategy, MOODu2})(
     g::MUSCL{D, M, B_LEN, MAX_ORDER}, p_idx::Int, rho_i::State{M}, nb_slice::UnitRange{Int}, 
     newRho::State{M}, pg::ParticleGrid{D}, int_buffer_f::AbstractVector{State{M}}
 ) where {D, M, B_LEN, MAX_ORDER}
     
     # 1. Base Extrema Check (DMP)
     minU, maxU = findLocalExtrema(rho_i, nb_slice, int_buffer_f)
-    δ = mood.d
+    δ = m.criterion.d
     
     dmp_fail = false
-    for m in 1:M
-        if abs(maxU[m] - minU[m]) >= δ^3
-            if newRho[m] < minU[m] - δ || newRho[m] > maxU[m] + δ
+    for m_idx in 1:M
+        if abs(maxU[m_idx] - minU[m_idx]) >= δ^3
+            if newRho[m_idx] < minU[m_idx] - δ || newRho[m_idx] > maxU[m_idx] + δ
                 dmp_fail = true
                 break
             end
@@ -184,10 +209,7 @@ function (mood::MOODu2)(
     end
     
     if !dmp_fail; return false; end
-    
-    # 2. Curvature (u2) Check
-    # ✅ FIXED: If the scheme doesn't support curvature (MAX_ORDER < 3) 
-    # OR the particle has dynamically dropped to linear or lower, we cannot rescue it!
+
     if MAX_ORDER < 3 || g.particle_orders[p_idx] < 3
         return true # DMP failed, and no curvature info exists to rescue it, drop order
     end
@@ -218,4 +240,12 @@ function (mood::MOODu2)(
     end
     
     return !u2_satisfied # Return true (Drop Order) if u2 was not satisfied
+end
+
+function (m::MOOD{<:MOODStrategy, MOODu2})(
+    g::Any, p_idx::Int, rho_i::State{M}, nb_slice::UnitRange{Int}, 
+    newRho::State{M}, pg::ParticleGrid{D}, int_buffer_f::AbstractVector{State{M}}
+) where {D, M}
+    # Create a temporary u1 struct to evaluate DMP only
+    return MOOD(m.strategy, MOODu1(m.criterion.d))(g, p_idx, rho_i, nb_slice, newRho, pg, int_buffer_f)
 end
