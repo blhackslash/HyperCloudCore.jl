@@ -23,6 +23,8 @@ Returns true for a MOOD event.
 abstract type MOODStrategy end
 struct EPD1 <: MOODStrategy end
 struct EPD2 <: MOODStrategy end
+struct EPD0 <: MOODStrategy end
+struct StrictEPD0 <: MOODStrategy end
 
 abstract type MOODCriterion end
 abstract type RealMOOD <: MOODCriterion end

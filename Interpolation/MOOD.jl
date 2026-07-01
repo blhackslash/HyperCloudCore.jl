@@ -5,9 +5,9 @@
 end
 
 @inline function evaluate_mood_and_halo!(
-    main_grad::MUSCL{D, M, B_LEN, MAX_ORDER, DIV_ORDER, MOOD{S, C}}, 
+    main_grad::MUSCL{D, M, B_LEN, MAX_ORDER, DIV_ORDER, MOOD{S, C}, INTERPS, L, NF}, 
     pg, rk, stage, dt, rho_stage
-) where {D, M, B_LEN, MAX_ORDER, DIV_ORDER, S <: MOODStrategy, C <: RealMOOD}
+) where {D, M, B_LEN, MAX_ORDER, DIV_ORDER, S <: MOODStrategy, C <: RealMOOD, INTERPS, L, NF}
     
     mood_fun = main_grad.mood
     N = pg.meta.N
@@ -64,7 +64,7 @@ end
             orders[p_idx] -= 1
             needs_recalc[p_idx] = true 
             
-            trigger_halo!(main_grad.mood.strategy, p_idx, pg, needs_recalc)
+            trigger_halo!(main_grad.mood.strategy, p_idx, pg, needs_recalc, orders)
         end
     end
     
@@ -81,9 +81,27 @@ end
     end
     return eff
 end
+@inline get_effective_order(::EPD0, orders, i, nb_slice, nb_indices) = orders[i]
+@inline get_effective_order(::StrictEPD0, orders, i, nb_slice, nb_indices) = orders[i]
 
 # --- Halo Triggers ---
-@inline function trigger_halo!(::EPD1, p_idx, pg, needs_recalc)
+# EPD0 does absolutely nothing to its neighbors
+@inline trigger_halo!(::EPD0, p_idx, pg, needs_recalc, orders) = nothing
+
+# StrictEPD0 forces neighbors to recalculate AND drops their order to match
+@inline function trigger_halo!(::StrictEPD0, p_idx, pg, needs_recalc, orders)
+    nb_indices = pg.neighbor.indices
+    @inbounds for k in pg.neighbor.ranges[p_idx]
+        j = nb_indices[k]
+        if !pg.core.is_boundary[j]
+            needs_recalc[j] = true
+            # Reduce neighbor order to match the current triggered cell
+            orders[j] = min(orders[j], orders[p_idx])
+        end
+    end
+end
+# --- Halo Triggers ---
+@inline function trigger_halo!(::EPD1, p_idx, pg, needs_recalc, orders)
     nb_indices = pg.neighbor.indices
     @inbounds for k in pg.neighbor.ranges[p_idx]
         j = nb_indices[k]
@@ -93,7 +111,7 @@ end
     end
 end
 
-@inline function trigger_halo!(::EPD2, p_idx, pg, needs_recalc)
+@inline function trigger_halo!(::EPD2, p_idx, pg, needs_recalc,orders)
     nb_slices = pg.neighbor.ranges
     nb_indices = pg.neighbor.indices
     is_boundary = pg.core.is_boundary
@@ -190,9 +208,9 @@ end
 
 # --- MOODu2 (N-Dimensional MUSCL Optimization) ---
 function (m::MOOD{<:MOODStrategy, MOODu2})(
-    g::MUSCL{D, M, B_LEN, MAX_ORDER}, p_idx::Int, rho_i::State{M}, nb_slice::UnitRange{Int}, 
+    g::MUSCL{D, M, B_LEN, MAX_ORDER, DIV_ORDER, MOOD_T, INTERPS, L, NF}, p_idx::Int, rho_i::State{M}, nb_slice::UnitRange{Int}, 
     newRho::State{M}, pg::ParticleGrid{D}, int_buffer_f::AbstractVector{State{M}}
-) where {D, M, B_LEN, MAX_ORDER}
+) where {D, M, B_LEN, MAX_ORDER, DIV_ORDER, MOOD_T, INTERPS, L, NF}
     
     # 1. Base Extrema Check (DMP)
     minU, maxU = findLocalExtrema(rho_i, nb_slice, int_buffer_f)

@@ -62,7 +62,7 @@ export exponentialWeightFunction, inverseWeightFunction
 # Interpolation
 export Interpolator, GradientInterpolator, MUSCL, UpwindGradient, WENO, CentralGradient, NoFallbackGrad
 export NumericalFluxFunction, UpwindFlux, RusanovFlux, RoeDiffusiveFlux
-export MOODCriterion, MOODu1, MOODu2, NoMOOD, OnlyMOOD, MOOD, EPD1, EPD2
+export MOODCriterion, MOODu1, MOODu2, NoMOOD, OnlyMOOD, MOOD, EPD1, EPD2, EPD0, StrictEPD0
 export AbstractSlopeLimiter, BarthJespersenLimiter, VenkatakrishnanLimiter, SuperbeeLimiter, MinmodLimiter, NoLimiter
 
 # 6. Specific Time Steppers (Export the ones you actually use)

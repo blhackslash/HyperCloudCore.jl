@@ -37,9 +37,9 @@ end
 
 # 2. MUSCL Specialization (Iterative MOOD Order Dropping & Halo Effect)
 # 2. MUSCL Specialization (Iterative MOOD Order Dropping)
-@inline function evaluate_mood_and_halo!(
+@inline function evaluate_stage_derivatives!(
     main_grad::MUSCL{D, M, B_LEN, MAX_ORDER, DIV_ORDER, MOOD{S, C}}, 
-    pg, rk, stage, dt, rho_stage
+    eq, pg, rk, stage, dt, rho_stage
 ) where {D, M, B_LEN, MAX_ORDER, DIV_ORDER, S <: MOODStrategy, C <: RealMOOD}
     
     mood_fun = main_grad.mood

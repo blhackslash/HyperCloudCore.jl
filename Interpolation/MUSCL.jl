@@ -13,7 +13,8 @@
     raw = interp(nb_slice, dist_all, w_all, df; scale=scale)
     return _pad_grad(raw, Val(MAX_B_LEN))
 end
-
+@inline _get_interface_orders(::MOODStrategy, oi, oj) = (min(oi, oj), min(oi, oj)) # Default EPD1/EPD2 behavior
+@inline _get_interface_orders(::EPD0, oi, oj) = (oi, oj) # True EPD0 Asymmetric behavior
 # Generated function creates a highly optimized if-elseif chain at compile time 
 # so we can index a Tuple using a runtime variable (`order`) without type instability!
 @generated function dispatch_interpolator(interps::Tuple, order::Int, args...)
@@ -157,15 +158,14 @@ function (muscl::MUSCL{D, M, B_LEN, MAX_ORDER, DIV_ORDER})(
         nb_slice_j = pg.neighbor.ranges[j_idx]
         eff_order_j = get_effective_order(strategy, muscl.particle_orders, j_idx, nb_slice_j, nb_indices)
         
-        # EPD Interface Strategy
-        interface_order = min(eff_order_i, eff_order_j)
         
         p_interface_i_raw = build_basis(Val(MAX_ORDER-1),  0.5 * dist_k)
         p_interface_j_raw = build_basis(Val(MAX_ORDER-1), -0.5 * dist_k)
 
-        # Truncate the basis vectors to the shared interface order
-        p_interface_i = mask_basis(p_interface_i_raw, interface_order, Val(D))
-        p_interface_j = mask_basis(p_interface_j_raw, interface_order, Val(D))
+        interface_order_i, interface_order_j = _get_interface_orders(strategy, eff_order_i, eff_order_j)
+        
+        p_interface_i = mask_basis(p_interface_i_raw, interface_order_i, Val(D))
+        p_interface_j = mask_basis(p_interface_j_raw, interface_order_j, Val(D))
 
         fij = f_i + sum(grad_i .* p_interface_i)
         fji = f_j + sum(grad_j .* p_interface_j)
