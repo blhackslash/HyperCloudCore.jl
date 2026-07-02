@@ -71,6 +71,85 @@ end
     return any_triggered
 end
 
+@inline function evaluate_mood_and_halo!(
+    main_grad::MUSCL{D, M, B_LEN, MAX_ORDER, DIV_ORDER, MOOD{S, C}, INTERPS, L, NF}, 
+    pg, imex_ts::GeneralIMEXTimeStepper, i, dt, current_Y_i
+) where {D, M, B_LEN, MAX_ORDER, DIV_ORDER, S <: MOODStrategy, C <: RealMOOD, INTERPS, L, NF}
+    
+    mood_fun = main_grad.mood
+    N = pg.meta.N
+    nb_slices = pg.neighbor.ranges
+    is_boundary = pg.core.is_boundary
+    
+    int_buffer = imex_ts.int_buffer
+    orders = main_grad.particle_orders
+    mood_triggered = main_grad.mood_triggered
+    needs_recalc = pg.shared.bit_buffer
+    bt = imex_ts.butcher_tableau
+    
+    any_triggered = false
+    fill!(mood_triggered, false)
+
+    # Step 1: Predict candidate state and evaluate MOOD
+    @batch for p_idx in 1:N
+        if is_boundary[p_idx] || !needs_recalc[p_idx]; continue; end
+        
+        fi = current_Y_i[p_idx]
+        nb_slice = nb_slices[p_idx]
+        
+        # In IMEX, the explicit stage derivative is the negative divergence
+        div_val = -imex_ts.K_E_stages[i][p_idx] 
+        
+        # Predict candidate state for IMEX
+        s = imex_ts.num_stages
+        Y_local = imex_ts.U_n[p_idx]
+        
+        if i < s
+            for j in 1:(i-1)
+                if bt.At[i+1, j] != 0.0
+                    Y_local += (dt * bt.At[i+1, j]) * imex_ts.K_E_stages[j][p_idx]
+                end
+                if bt.A[i+1, j] != 0.0
+                    Y_local += (dt * bt.A[i+1, j]) * imex_ts.K_I_stages[j][p_idx]
+                end
+            end
+            Y_local += (dt * bt.A[i+1, i]) * imex_ts.K_I_stages[i][p_idx]
+            Y_local += (dt * bt.At[i+1, i]) * (-div_val)
+        else
+            for j in 1:(s-1)
+                if bt.bt[j] != 0.0
+                    Y_local += (dt * bt.bt[j]) * imex_ts.K_E_stages[j][p_idx]
+                end
+                if bt.b[j] != 0.0
+                    Y_local += (dt * bt.b[j]) * imex_ts.K_I_stages[j][p_idx]
+                end
+            end
+            Y_local += (dt * bt.b[i]) * imex_ts.K_I_stages[i][p_idx]
+            Y_local += (dt * bt.bt[i]) * (-div_val)
+        end
+        
+        if mood_fun(main_grad, p_idx, fi, nb_slice, Y_local, pg, int_buffer.f)
+            mood_triggered[p_idx] = true
+        end
+    end
+    
+    fill!(needs_recalc, false)
+
+    # Step 2: Drop order and trigger strategy-specific Halo
+    for p_idx in 1:N
+        if mood_triggered[p_idx] && orders[p_idx] > 1
+            any_triggered = true
+            orders[p_idx] -= 1
+            needs_recalc[p_idx] = true 
+            
+            # This elegantly falls back to your new Strategy dynamic dispatch!
+            trigger_halo!(main_grad.mood.strategy, p_idx, pg, needs_recalc, orders)
+        end
+    end
+    
+    return any_triggered
+end
+
 # --- Effective Order Evaluators ---
 @inline get_effective_order(::EPD1, orders, i, nb_slice, nb_indices) = orders[i]
 

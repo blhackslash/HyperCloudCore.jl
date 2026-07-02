@@ -68,8 +68,8 @@ export AbstractSlopeLimiter, BarthJespersenLimiter, VenkatakrishnanLimiter, Supe
 # 6. Specific Time Steppers (Export the ones you actually use)
 export SimpleSplitting, ARS233, PRSSP3, ARS222, ARS232, RKButcherTableau, GeneralRKTimeStepper, IMEXButcherTableau
 export EulerUpwind, LinearizedRelaxationImplicitSolver, GeneralIMEXTimeStepper, Kin2Macro
-export EulerTableau, RalstonRK2Tableau, SSPRK3Tableau, RK4Tableau
-export PR_IMEX_SSP3_ButcherTableau, IMEXButcherTableau, IMEXARS233ButcherTableau, ARS222_ButcherTableau, SSP2332ButcherTableau
+export RK1_Euler_Tableau, RK2_Ralston_Tableau, RK3_SSP_Tableau, RK4_Classical_Tableau
+export IMEX_Euler_Tableau, IMEX_ARS233_Tableau, IMEX_ARS222_Tableau, IMEX_PRSSP3_Tableau, IMEX_SSP2332_Tableau
 
 export NoSourceTerm, AbstractSourceTerm, RelaxationSourceTerm, NonLocalRelaxationSourceTerm
 export LinearizedRelaxationImplicitSolver, PicardIterationSolver, AbstractImplicitSolver

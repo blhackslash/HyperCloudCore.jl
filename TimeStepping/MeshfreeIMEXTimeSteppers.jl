@@ -38,12 +38,12 @@
     end
 end
 
-# 2. MUSCL Specialization (Iterative MOOD Order Dropping & Halo Effect)
+# 2. MUSCL Specialization (Iterative MOOD Order Dropping & External Halo Dispatch)
 @inline function evaluate_stage_derivatives_imex!(
-    main_grad::MUSCL{D, M, B_LEN, MAX_ORDER, DIV_ORDER, MOOD}, eq_kin, pg, imex_ts, i, dt, current_Y_i
-) where {D, M, B_LEN, MAX_ORDER, DIV_ORDER, MOOD <: RealMOOD}
+    main_grad::MUSCL{D, M, B_LEN, MAX_ORDER, DIV_ORDER, MOOD{S, C}, INTERPS, L, NF}, 
+    eq_kin, pg, imex_ts, i, dt, current_Y_i
+) where {D, M, B_LEN, MAX_ORDER, DIV_ORDER, S <: MOODStrategy, C <: RealMOOD, INTERPS, L, NF}
     
-    mood_fun = main_grad.mood
     N_particles = pg.meta.N
     nb_slices = pg.neighbor.ranges
     nb_indices = pg.neighbor.indices
@@ -52,8 +52,7 @@ end
     K_E_stage = imex_ts.K_E_stages[i]
     
     orders = main_grad.particle_orders
-    mood_triggered = main_grad.mood_triggered
-    bt = imex_ts.butcher_tableau
+    needs_recalc = pg.shared.bit_buffer
 
     update_size!(main_grad, N_particles)
 
@@ -61,7 +60,6 @@ end
         fill!(orders, MAX_ORDER)
     end
 
-    needs_recalc = pg.shared.bit_buffer
     fill!(needs_recalc, true)
 
     iteration = 0
@@ -79,87 +77,20 @@ end
             update_content!(main_grad, p_idx, fi, nb_slice, pg, int_buffer)
         end
         
-        fill!(mood_triggered, false)
-
-        # Phase B: Reconstruct Interface Fluxes & Predict Candidates
+        # Phase B: Reconstruct Interface Fluxes
         @batch for p_idx in 1:N_particles
             if is_boundary[p_idx] || !needs_recalc[p_idx]; continue; end
             
             fi = current_Y_i[p_idx]
             nb_slice = nb_slices[p_idx]
             
-            div_val = main_grad(eq_kin, p_idx, fi, nb_slice, pg, int_buffer)
-            
-            # Predict candidate state for IMEX
-            s = imex_ts.num_stages
-            Y_local = imex_ts.U_n[p_idx]
-            
-            if i < s
-                for j in 1:(i-1)
-                    if bt.At[i+1, j] != 0.0
-                        Y_local += (dt * bt.At[i+1, j]) * imex_ts.K_E_stages[j][p_idx]
-                    end
-                    if bt.A[i+1, j] != 0.0
-                        Y_local += (dt * bt.A[i+1, j]) * imex_ts.K_I_stages[j][p_idx]
-                    end
-                end
-                # Add the current implicit/explicit pair being evaluated
-                Y_local += (dt * bt.A[i+1, i]) * imex_ts.K_I_stages[i][p_idx]
-                Y_local += (dt * bt.At[i+1, i]) * (-div_val)
-            else
-                for j in 1:(s-1)
-                    if bt.bt[j] != 0.0
-                        Y_local += (dt * bt.bt[j]) * imex_ts.K_E_stages[j][p_idx]
-                    end
-                    if bt.b[j] != 0.0
-                        Y_local += (dt * bt.b[j]) * imex_ts.K_I_stages[j][p_idx]
-                    end
-                end
-                Y_local += (dt * bt.b[i]) * imex_ts.K_I_stages[i][p_idx]
-                Y_local += (dt * bt.bt[i]) * (-div_val)
-            end
-            
-            if mood_fun(main_grad, p_idx, fi, nb_slice, Y_local, pg, int_buffer.f)
-                mood_triggered[p_idx] = true
-            end
-            
-            K_E_stage[p_idx] = -div_val
+            K_E_stage[p_idx] = -main_grad(eq_kin, p_idx, fi, nb_slice, pg, int_buffer)
         end
 
-        # Phase C: MOOD Evaluator & Halo Reduction
-        any_triggered = false
-        fill!(needs_recalc, false)
+        # Phase C: MOOD Evaluator & Halo Reduction (Delegated)
+        needs_another_pass = evaluate_mood_and_halo!(main_grad, pg, imex_ts, i, dt, current_Y_i)
         
-        for p_idx in 1:N_particles
-            if mood_triggered[p_idx] && orders[p_idx] > 1
-                any_triggered = true
-                orders[p_idx] -= 1
-                needs_recalc[p_idx] = true
-                
-                # Halo 1: Immediate Neighbors
-                nb_slice = nb_slices[p_idx]
-                for k in nb_slice
-                    j = nb_indices[k]
-                    if !is_boundary[j]
-                        if orders[j] > orders[p_idx]
-                            orders[j] = orders[p_idx]
-                        end
-                        needs_recalc[j] = true
-                        
-                        # Extended Halo 2: Neighbors of Neighbors
-                        nb_slice_j = nb_slices[j]
-                        for kj in nb_slice_j
-                            jj = nb_indices[kj]
-                            if !is_boundary[jj]
-                                needs_recalc[jj] = true
-                            end
-                        end
-                    end
-                end
-            end
-        end
-        
-        if !any_triggered || iteration >= MAX_ORDER
+        if !needs_another_pass || iteration >= MAX_ORDER
             break
         end
     end
