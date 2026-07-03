@@ -740,22 +740,81 @@ function determineVolumes!(pg::ParticleGrid{1, M, WF, GM, BC}) where {M, WF, GM,
     end
     return
 end
-# 1. Define this helper OUTSIDE the getTimeStep function
-# This hides the anonymous function (d -> ...) from Polyester's macro parser!
+# =========================================================================
+# EXACT GEOMETRIC CFL CALCULATION FOR HIGH-ORDER MLS
+# =========================================================================
+
 @inline _get_Lambda(eq, U_i, ::Val{D}) where {D} = Space{D}(ntuple(d -> max_eigenvalue(eq, U_i, d), Val(D)))
 
-@inline function getTimeStep(pg::ParticleGrid{D, M}, eq::HyperbolicPDE) where {D, M}
-    # Zero-allocation cast of the existing int_buffer to Float64
+@inline _extract_order(::MUSCL{D, M, B_LEN, MAX_ORDER}) where {D, M, B_LEN, MAX_ORDER} = MAX_ORDER
+@inline _extract_order(g::UpwindGradient) = g.order
+@inline _extract_order(g::CentralGradient) = g.order
+@inline _extract_order(g::WENO) = g.order
+@inline _extract_order(::Any) = 2 # Fallback to Linear
+
+@generated function _compute_cfl_coeffs(::Val{D}, ::Val{IO}, ::Val{B_LEN}, nb_slice, dist_vec, w_vec, invL) where {D, IO, B_LEN}
+    quote
+        N_s = zero(SMatrix{B_LEN, B_LEN, Float64, B_LEN * B_LEN})
+        
+        @inbounds for idx in 1:length(nb_slice)
+            k = nb_slice[idx]
+            p_s = build_basis(Val(IO), dist_vec[k] * invL)
+            N_s += w_vec[k] * (p_s * p_s')
+        end
+        
+        if abs(det(N_s)) < 1e-14
+            return zero(SVector{D, Float64})
+        end
+        
+        inv_N_s = inv(N_s)
+        sum_c_local = zero(MVector{D, Float64})
+        
+        @inbounds for idx in 1:length(nb_slice)
+            k = nb_slice[idx]
+            w = w_vec[k]
+            p_s = build_basis(Val(IO), dist_vec[k] * invL)
+            
+            # Extract the effective geometric coefficient for the linear spatial derivatives
+            for d in 1:D
+                c_val = 0.0
+                for j in 1:B_LEN
+                    c_val += inv_N_s[d, j] * p_s[j]
+                end
+                sum_c_local[d] += abs(c_val * w * invL)
+            end
+        end
+        
+        return SVector{D, Float64}(sum_c_local)
+    end
+end
+
+@generated function dispatch_cfl(order::Int, ::Val{D}, nb_slice, dist_vec, w_vec, invL) where {D}
+    expr = :(zero(SVector{D, Float64}))
+    for o in 5:-1:2
+        IO = o - 1
+        B_LEN = typeof(basis_length(Val(D), Val(IO))).parameters[1]
+        call = :(_compute_cfl_coeffs(Val($D), Val($IO), Val($B_LEN), nb_slice, dist_vec, w_vec, invL))
+        expr = :(order == $o ? $call : $expr)
+    end
+    # Order 1/2 Fallback (Linear Stencil)
+    B_LEN_1 = typeof(basis_length(Val(D), Val(1))).parameters[1]
+    call_fallback = :(_compute_cfl_coeffs(Val($D), Val(1), Val($B_LEN_1), nb_slice, dist_vec, w_vec, invL))
+    expr = :(order <= 2 ? $call_fallback : $expr)
+    return expr
+end
+
+@inline function getTimeStep(pg::ParticleGrid{D, M}, eq::HyperbolicPDE, main_grad) where {D, M}
     dt_buffer = reinterpret(Float64, pg.shared.int_buffer)
     fill!(dt_buffer, Inf)
 
     w_vec = get_weights(pg)
     dist_vec = get_distances(pg)
 
-    # 1. Hoist static parameters OUTSIDE the @batch loop.
-    # This shields them from being mangled by Polyester's closure!
     valD = Val(D)
     dim = D 
+    invL = 1.0 / minimum(pg.meta.dx)
+    
+    p_order = _extract_order(main_grad)
 
     @batch for i in 1:pg.meta.N
         if pg.core.is_boundary[i]
@@ -768,50 +827,17 @@ end
         end
 
         U_i = pg.rhos[i]
-        
-        # Use the hoisted Val(D)
         Lambda = _get_Lambda(eq, U_i, valD)
 
-        # =====================================================================
-        # 2. THE FIRST-ELEMENT TRICK
-        # We initialize N_s with the first neighbor. The compiler knows 
-        # exactly what type `dx * dx'` is natively, so we never have to 
-        # explicitly pass `D` to an SMatrix constructor!
-        # =====================================================================
-        k_first = nb_slice[1]
-        dx_first = dist_vec[k_first]
-        N_s = w_vec[k_first] * (dx_first * dx_first')
-        
-        # Loop over the REST of the neighbors to accumulate
-        @inbounds for idx in 2:length(nb_slice)
-            k = nb_slice[idx]
-            w  = w_vec[k]
-            dx = dist_vec[k] 
-            N_s += w * (dx * dx')
-        end
-
-        if abs(det(N_s)) < 1e-14
-            continue
-        end
-
-        inv_N_s = inv(N_s)
-        sum_c = 0.0
-        
-        @inbounds for k in nb_slice
-            w  = w_vec[k]
-            dx = dist_vec[k]
-            
-            C_k = inv_N_s * (w * dx)
-            sum_c += dot(Lambda, abs.(C_k))
-        end
+        # Gets the exact geometric stencil sums for this specific polynomial order!
+        sum_c_vec = dispatch_cfl(p_order, valD, nb_slice, dist_vec, w_vec, invL)
+        sum_c = dot(Lambda, sum_c_vec)
 
         if sum_c > 1e-14
-            # Use the hoisted `dim` integer
             dt_buffer[i] = 1.0 / (dim * sum_c)
         end
     end
     
-    # SIMD-optimized sequential reduction
     return minimum(view(dt_buffer, 1:pg.meta.N))
 end
 

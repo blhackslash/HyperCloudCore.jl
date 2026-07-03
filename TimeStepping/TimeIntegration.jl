@@ -142,6 +142,7 @@ function mainTimeIntegrator!(
     snap_counter = 1
     t = 0.0
     k_step = 0
+    grad_interp = hasproperty(timestepper, :gradientInterpolator) ? timestepper.gradientInterpolator : NoFallbackGrad()
 
     # 1. Save initial condition (t=0)
     saveData!(xs, us, ts, snap_counter, pg, t, remove_ghosts)
@@ -151,7 +152,7 @@ function mainTimeIntegrator!(
 
     elapsed_time = @elapsed while t < tmax
         
-        dt = is_cfl ? dt_inp * getTimeStep(pg,eq) : dt_inp
+        dt = is_cfl ? dt_inp * getTimeStep(pg, eq, grad_interp) : dt_inp
         dt = min(dt, tmax - t)
         if dt <= 1e-12; break; end
 
