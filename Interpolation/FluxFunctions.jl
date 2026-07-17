@@ -22,7 +22,8 @@ end
 
 # 1. Conservative Variables (ρ, m, E)
 @inline function max_eigenvalue(eq::EulerEquation{D, M, <:Conservative}, U::State{M}, d::Int) where {D, M}
-    rho = max(U[1], 1e-9)
+
+    rho = if U[1] < 1e-9; @debug "Vanishing/Negative Density Found! This is expected for posteriori limiter like MOOD!"; 1e-9; else; U[1] end
     m_d = U[1+d]
     E = U[M]
     
