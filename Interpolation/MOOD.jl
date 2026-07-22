@@ -156,7 +156,9 @@ end
 @inline function get_effective_order(::EPD2, orders, i, nb_slice, nb_indices)
     eff = orders[i]
     @inbounds for k in nb_slice
-        eff = min(eff, orders[nb_indices[k]])
+        @inbounds idx = nb_indices[k]
+        @inbounds order = orders[idx]
+        eff = min(eff, order)
     end
     return eff
 end

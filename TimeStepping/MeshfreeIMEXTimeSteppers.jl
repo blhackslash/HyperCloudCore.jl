@@ -76,6 +76,14 @@ end
             update_content!(int_buffer, nb_indices, fi, nb_slice, current_Y_i)
             update_content!(main_grad, p_idx, fi, nb_slice, pg, int_buffer)
         end
+
+        # Phase A.5: Precompute Effective Orders for ALL particles (O(N))
+        effective_orders = pg.shared.int_buffer
+        @batch for p_idx in 1:N
+            if is_boundary[p_idx]; continue; end
+            nb_slice = nb_slices[p_idx]
+            effective_orders[p_idx] = get_effective_order(main_grad.mood.strategy, orders, p_idx, nb_slice, nb_indices)
+        end
         
         # Phase B: Reconstruct Interface Fluxes
         @batch for p_idx in 1:N_particles

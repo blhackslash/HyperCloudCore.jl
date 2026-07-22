@@ -144,8 +144,10 @@ function (muscl::MUSCL{D, M, B_LEN, MAX_ORDER, DIV_ORDER})(
     nb_indices = pg.neighbor.indices
     strategy = muscl.mood.strategy
     
+    effective_orders = pg.shared.int_buffer
     # Pre-evaluate the effective order for cell i ONCE
-    eff_order_i = get_effective_order(strategy, muscl.particle_orders, i, nb_slice, nb_indices)
+    eff_order_i = effective_orders[i]
+    
     
     @inbounds for global_idx in nb_slice
         dist_k = dist_all[global_idx]
@@ -155,9 +157,7 @@ function (muscl::MUSCL{D, M, B_LEN, MAX_ORDER, DIV_ORDER})(
         grad_j = muscl.gradients[j_idx]
         
         # Evaluate effective order for cell j
-        nb_slice_j = pg.neighbor.ranges[j_idx]
-        eff_order_j = get_effective_order(strategy, muscl.particle_orders, j_idx, nb_slice_j, nb_indices)
-        
+        eff_order_j = effective_orders[j_idx]
         
         p_interface_i_raw = build_basis(Val(MAX_ORDER-1),  0.5 * dist_k)
         p_interface_j_raw = build_basis(Val(MAX_ORDER-1), -0.5 * dist_k)

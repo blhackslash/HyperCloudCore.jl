@@ -176,11 +176,8 @@ function (interp::Interpolator{D, IO, 1})(
 end
 
 @inline function _mls_solve(
-    nb_slice::UnitRange{Int},
-    distVec::AbstractVector{Space{D}}, 
-    wVec::AbstractVector{Float64},
-    dfVec::AbstractVector{State{M}},
-    scale::Float64,
+    nb_slice::UnitRange{Int}, distVec::AbstractVector, wVec::AbstractVector,
+    dfVec::AbstractVector{State{M}}, scale::Float64,
     ::Val{B_LEN}, ::Val{IO}, ::Val{D}
 ) where {B_LEN, IO, D, M}
     
@@ -196,16 +193,25 @@ end
         b_s += w * (p_s * dfVec[i]') 
     end
     
-    if abs(det(N_s)) < 1e-14
-        return SVector{B_LEN, State{M}}(ntuple(_ -> zero(State{M}), Val(B_LEN)))
+    # 1. Perform a single, fast Cholesky factorization.
+    # check=false prevents it from throwing an error if the matrix is singular (e.g., starved particle)
+    C = cholesky(Symmetric(N_s), check=false)
+    
+    # 2. Check if the factorization succeeded (replaces the det() check)
+    if !LinearAlgebra.issuccess(C)
+        return zero(SVector{B_LEN, State{M}})
     end
     
-    c_s = N_s \ b_s 
+    # 3. Solve the system using the already-factorized matrix!
+    c_s = C \ b_s 
+    
     scales = build_scale_factors(Val(D), Val(IO), invL)
     
-    # Unscale the coefficients into pure physical derivatives (slopes, curves, etc.)
-    # Returns SVector{B_LEN, State{M}}
-    return SVector{B_LEN, State{M}}(ntuple(k -> State{M}(c_s[k, :] * scales[k]), Val(B_LEN)))
+    # (Optional: Use scalar indexing to guarantee zero allocations as discussed previously)
+    return SVector{B_LEN, State{M}}(ntuple(Val(B_LEN)) do k
+        row_val = State{M}(ntuple(m -> c_s[k, m], Val(M)))
+        row_val * scales[k]
+    end)
 end
 
 # Inside InterpolationUtils.jl (below the standard Universal MLS Interpolator)
@@ -240,11 +246,23 @@ end
         b_s += w * (p_s * dfVec[i]') 
     end
     
-    if abs(det(N_s)) < 1e-14
-        return SVector{B_LEN, State{M}}(ntuple(_ -> zero(State{M}), Val(B_LEN)))
+        # 1. Perform a single, fast Cholesky factorization.
+    # check=false prevents it from throwing an error if the matrix is singular (e.g., starved particle)
+    C = cholesky(Symmetric(N_s), check=false)
+    
+    # 2. Check if the factorization succeeded (replaces the det() check)
+    if !LinearAlgebra.issuccess(C)
+        return zero(SVector{B_LEN, State{M}})
     end
     
-    c_s = N_s \ b_s 
+    # 3. Solve the system using the already-factorized matrix!
+    c_s = C \ b_s 
+    
     scales = build_scale_factors(Val(D), Val(IO), invL)
-    return SVector{B_LEN, State{M}}(ntuple(k -> State{M}(c_s[k, :] * scales[k]), Val(B_LEN)))
+    
+    # (Optional: Use scalar indexing to guarantee zero allocations as discussed previously)
+    return SVector{B_LEN, State{M}}(ntuple(Val(B_LEN)) do k
+        row_val = State{M}(ntuple(m -> c_s[k, m], Val(M)))
+        row_val * scales[k]
+    end)
 end
