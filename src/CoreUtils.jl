@@ -1,4 +1,4 @@
-export @pebug, DEBUG_TARGET_PARTICLE, _set_thread_tolerance!
+export @pebug, DEBUG_TARGET_PARTICLE, set_thread_tolerance!
 
 # 1. Define a global, type-stable Reference to hold our debug state.
 # We default it to false.
@@ -31,7 +31,7 @@ const _USE_THREADS      = Ref(false)
 
 _use_threads() = _USE_THREADS[]
 _set_threads!(N::Int) = _THREAD_THRESHOLD[] < N ? _USE_THREADS[] = true : nothing
-_set_thread_tolerance!(N::Int) = _THREAD_TOLERANCE[] = N/100
+set_thread_tolerance!(N::Int) = _THREAD_TOLERANCE[] = N/100
 
 
 """
@@ -67,7 +67,6 @@ function calculate_thread_threshold(
 ) where {D, M, B_LEN}
     
     l3_cache_bytes = Int(CPUSummary.cache_size(Val(3))) * CPUSummary.num_cores()
-    println(l3_cache_bytes)
     
     # Estimate average neighbors per particle
     N_nb = length(pg.neighbor.indices) / max(1, pg.meta.N)

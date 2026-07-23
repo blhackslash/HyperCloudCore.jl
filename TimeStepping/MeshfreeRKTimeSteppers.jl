@@ -15,7 +15,7 @@
 
     update_size!(main_grad, N)
 
-    use_threads = use_threads()
+    use_threads = _use_threads()
 
     @smart_parallel use_threads for p_idx in 1:N
         if is_boundary[p_idx]; continue; end

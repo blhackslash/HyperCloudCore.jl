@@ -149,7 +149,7 @@ function mainTimeIntegrator!(
     snap_counter += 1 
     threshold = calculate_thread_threshold(pg,timestepper.gradientInterpolator)
     _set_threads!(threshold)
-    println(_use_threads())
+    @debug "Threads Handler used: $(_USE_THREADS[])"
 
     p = Progress(10000, desc="Running Simulation...")
 
