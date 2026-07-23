@@ -8,6 +8,7 @@ using Printf
 using ProgressMeter
 using Random
 using StaticArrays
+using CPUSummary
 using Base.Threads
 using Polyester: @batch
 

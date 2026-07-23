@@ -147,6 +147,9 @@ function mainTimeIntegrator!(
     # 1. Save initial condition (t=0)
     saveData!(xs, us, ts, snap_counter, pg, t, remove_ghosts)
     snap_counter += 1 
+    threshold = calculate_thread_threshold(pg,timestepper.gradientInterpolator)
+    _set_threads!(threshold)
+    println(_use_threads())
 
     p = Progress(10000, desc="Running Simulation...")
 

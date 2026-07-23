@@ -15,7 +15,9 @@
 
     update_size!(main_grad, N)
 
-    @batch for p_idx in 1:N
+    use_threads = use_threads()
+
+    @smart_parallel use_threads for p_idx in 1:N
         if is_boundary[p_idx]; continue; end
         
         fi = rho_stage[p_idx]
@@ -25,7 +27,7 @@
         update_content!(main_grad, p_idx, fi, nb_slice, pg, int_buffer)
     end
     
-    @batch for p_idx in 1:N
+    @smart_parallel use_threads for p_idx in 1:N
         if is_boundary[p_idx]; continue; end
         
         fi = rho_stage[p_idx]
@@ -61,12 +63,13 @@ end
 
     fill!(needs_recalc, true)
 
+    use_threads = _use_threads()
     iteration = 0
     while true
         iteration += 1
 
         # Phase A: Pre-Gather Gradients
-        @batch for p_idx in 1:N
+        @smart_parallel use_threads for p_idx in 1:N
             if is_boundary[p_idx] || !needs_recalc[p_idx]; continue; end
             
             fi = rho_stage[p_idx]
@@ -77,14 +80,14 @@ end
         end
         # Phase A.5: Precompute Effective Orders for ALL particles (O(N))
         effective_orders = pg.shared.int_buffer
-        @batch for p_idx in 1:N
+        @smart_parallel use_threads for p_idx in 1:N
             if is_boundary[p_idx]; continue; end
             nb_slice = nb_slices[p_idx]
             effective_orders[p_idx] = get_effective_order(main_grad.mood.strategy, orders, p_idx, nb_slice, nb_indices)
         end
 
         # Phase B: Reconstruct Interface Fluxes
-        @batch for p_idx in 1:N
+        @smart_parallel use_threads for p_idx in 1:N
             if is_boundary[p_idx] || !needs_recalc[p_idx]; continue; end
             
             fi = rho_stage[p_idx]
