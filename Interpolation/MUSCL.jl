@@ -144,9 +144,11 @@ function (muscl::MUSCL{D, M, B_LEN, MAX_ORDER, DIV_ORDER})(
     nb_indices = pg.neighbor.indices
     strategy = muscl.mood.strategy
     
+    is_nomood = muscl.mood.criterion isa NoMOOD
     effective_orders = pg.shared.int_buffer
+    
     # Pre-evaluate the effective order for cell i ONCE
-    eff_order_i = effective_orders[i]
+    eff_order_i = is_nomood ? MAX_ORDER : effective_orders[i]
     
     
     @inbounds for global_idx in nb_slice
@@ -156,8 +158,7 @@ function (muscl::MUSCL{D, M, B_LEN, MAX_ORDER, DIV_ORDER})(
         
         grad_j = muscl.gradients[j_idx]
         
-        # Evaluate effective order for cell j
-        eff_order_j = effective_orders[j_idx]
+        eff_order_j = is_nomood ? MAX_ORDER : effective_orders[j_idx]
         
         p_interface_i_raw = build_basis(Val(MAX_ORDER-1),  0.5 * dist_k)
         p_interface_j_raw = build_basis(Val(MAX_ORDER-1), -0.5 * dist_k)
