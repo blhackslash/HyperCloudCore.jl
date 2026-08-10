@@ -21,15 +21,12 @@ include("GridMovement.jl")
     end
 end
 
-# Calculate this ONCE at the start of your timestep / derivative loop
-# invL = Space{D}(1.0 ./ L)
-
-@inline function getPeriodicDistance(pos::AbstractVector{Space{D}}, i::Int, j::Int, L::Space{D}, invL::Space{D}) where {D}
+@inline function getPeriodicDistance(pos::AbstractVector{Space{D, T}}, i::Int, j::Int, L::Space{D, T}, invL::Space{D, T}) where {D, T}
     @inbounds begin
         p_i = pos[i]
         p_j = pos[j]
         
-        return Space{D}(ntuple(Val(D)) do d
+        return Space{D, T}(ntuple(Val(D)) do d
             dx = p_j[d] - p_i[d]
             
             # Replaced division with multiplication! (FMA friendly)
@@ -48,18 +45,18 @@ end
 # FAST SPATIAL HASHING (Coordinates -> 1D Bin Index)
 # =========================================================================
 
-@inline function get_flat_bin_index(pos::Space{1}, mins::Space{1}, bin_size::Space{1}, dims::NTuple{1, Int})
+@inline function get_flat_bin_index(pos::Space{1, T}, mins::Space{1, T}, bin_size::Space{1, T}, dims::NTuple{1, Int}) where {T}
     idx = floor(Int, (pos[1] - mins[1]) / bin_size[1]) + 1
     return clamp(idx, 1, dims[1])
 end
 
-@inline function get_flat_bin_index(pos::Space{2}, mins::Space{2}, bin_size::Space{2}, dims::NTuple{2, Int})
+@inline function get_flat_bin_index(pos::Space{2, T}, mins::Space{2, T}, bin_size::Space{2, T}, dims::NTuple{2, Int}) where {T}
     idx_x = floor(Int, (pos[1] - mins[1]) / bin_size[1]) + 1
     idx_y = floor(Int, (pos[2] - mins[2]) / bin_size[2]) + 1
     return clamp(idx_x, 1, dims[1]) + (clamp(idx_y, 1, dims[2]) - 1) * dims[1]
 end
 
-@inline function get_flat_bin_index(pos::Space{D}, mins::Space{D}, bin_size::Space{D}, dims::NTuple{D, Int}) where {D}
+@inline function get_flat_bin_index(pos::Space{D, T}, mins::Space{D, T}, bin_size::Space{D, T}, dims::NTuple{D, Int}) where {D, T}
     cartesian = ntuple(Val(D)) do d
         clamp(floor(Int, (pos[d] - mins[d]) / bin_size[d]) + 1, 1, dims[d])
     end
@@ -69,17 +66,15 @@ end
 # PERIODIC BINS CONSTRUCTOR (Perfect Tiling)
 # =========================================================================
 function GlobalBins(
-    mins_tot::NTuple{D, Real}, maxs_tot::NTuple{D, Real}, 
+    ::Type{T}, mins_tot::NTuple{D, Real}, maxs_tot::NTuple{D, Real}, 
     mins_interior::NTuple{D, Real}, maxs_interior::NTuple{D, Real},
     R::Real, r::Real, max_particles::Int, buffer::Vector{SVector{N_OFF, Int}}, ::Val{:periodic}
-) where {D, N_OFF}
+) where {D, N_OFF, T}
     
-    mins_t = Space{D}(mins_tot...)
-    maxs_t = Space{D}(maxs_tot...)
+    mins_t = Space{D, T}(mins_tot...)
+    maxs_t = Space{D, T}(maxs_tot...)
     domain_size = maxs_t .- mins_t
 
-    # PERFECT TILING: Bins must exactly divide the domain.
-    # floor() ensures the resulting bin size is always >= R.
     coarse_dims = ntuple(d -> max(1, floor(Int, domain_size[d] / R)), Val(D))
     fine_dims   = ntuple(d -> max(1, floor(Int, domain_size[d] / r)), Val(D))
 
@@ -95,34 +90,31 @@ function GlobalBins(
     fine_occ  = zeros(Bool, total_fine_bins)
     fine_type = ones(UInt8, total_fine_bins) 
 
-    return GlobalBins{D, :periodic, N_OFF}(
+    return GlobalBins{D, T, :periodic, N_OFF}(
         mins_t, maxs_t, 
         coarse_size, coarse_dims, head, next,
         fine_size, fine_dims, fine_occ, fine_type, buffer
     )
 end
 
-# =========================================================================
-# NON-PERIODIC BINS CONSTRUCTOR (Overhang Allowed)
-# =========================================================================
+
 function GlobalBins(
-    mins_tot::NTuple{D, Real}, maxs_tot::NTuple{D, Real}, 
+    ::Type{T}, mins_tot::NTuple{D, Real}, maxs_tot::NTuple{D, Real}, 
     mins_interior::NTuple{D, Real}, maxs_interior::NTuple{D, Real},
     R::Real, r::Real, max_particles::Int, buffer::Vector{SVector{N_OFF, Int}}, ::Val{BC}
-) where {D, BC, N_OFF}
+) where {D, BC, N_OFF, T}
     
-    mins_t = Space{D}(mins_tot...)
-    maxs_t = Space{D}(maxs_tot...)
-    mins_i = Space{D}(mins_interior...)
-    maxs_i = Space{D}(maxs_interior...)
+    mins_t = Space{D, T}(mins_tot...)
+    maxs_t = Space{D, T}(maxs_tot...)
+    mins_i = Space{D, T}(mins_interior...)
+    maxs_i = Space{D, T}(maxs_interior...)
 
     domain_size = maxs_t .- mins_t
     coarse_dims = ntuple(d -> ceil(Int, domain_size[d] / R), Val(D))
     fine_dims   = ntuple(d -> ceil(Int, domain_size[d] / r), Val(D))
 
-    # For non-periodic domains, overhang is mathematically safe
-    coarse_size = Space{D}(ntuple(_ -> Float64(R), Val(D)))
-    fine_size   = Space{D}(ntuple(_ -> Float64(r), Val(D)))
+    coarse_size = Space{D, T}(ntuple(_ -> T(R), Val(D)))
+    fine_size   = Space{D, T}(ntuple(_ -> T(r), Val(D)))
 
     total_coarse_bins = prod(coarse_dims)
     total_fine_bins   = prod(fine_dims)
@@ -135,7 +127,7 @@ function GlobalBins(
 
     for (flat_idx, I) in enumerate(CartesianIndices(fine_dims))
         bin_center = ntuple(Val(D)) do d
-            mins_t[d] + (I[d] - 0.5) * fine_size[d]
+            mins_t[d] + (I[d] - T(0.5)) * fine_size[d]
         end
         
         is_interior = all(1:D) do d
@@ -147,135 +139,119 @@ function GlobalBins(
         end
 
         if is_interior
-            fine_type[flat_idx] = 1 # Interior
+            fine_type[flat_idx] = 1 
         elseif is_in_domain
-            fine_type[flat_idx] = 2 # Ghost/Boundary
+            fine_type[flat_idx] = 2 
         else
-            fine_type[flat_idx] = 0 # OutOfBounds
+            fine_type[flat_idx] = 0 
         end
     end
 
-    return GlobalBins{D, BC, N_OFF}(
+    return GlobalBins{D, T, BC, N_OFF}(
         mins_t, maxs_t, 
         coarse_size, coarse_dims, head, next,
         fine_size, fine_dims, fine_occ, fine_type, buffer
     )
 end
 
-# =========================================================================
-# GENERALIZED D-DIMENSIONAL GRID GENERATOR
-# =========================================================================
-
 function createParticleGrid(
-    mins::NTuple{D, Real}, maxs::NTuple{D, Real}, Ns_interior::NTuple{D, Integer}, 
+    ::Type{T}, mins::NTuple{D, Real}, maxs::NTuple{D, Real}, Ns_interior::NTuple{D, Integer}, 
     bc::Symbol, interp_range_factor::Real;
-    M::Int = 1, randomness::Tuple = ntuple(i->0.0, D), 
-    rng = Random.default_rng(), merge_factor = 0.3, split_factor = 1., 
-    weight_func = exponentialWeightFunction(1.,1.), mover = NoGridMover()
-) where {D}
+    M::Int = 1, randomness::Tuple = ntuple(i->zero(T), D), 
+    rng = Random.default_rng(), merge_factor = T(0.3), split_factor = one(T), 
+    weight_func = ExponentialWeightFunction(one(T), one(T)), mover = NoGridMover()
+) where {D, T}
     
     N_ghost::Int = bc == :periodic ? 0 : ceil(Int, interp_range_factor)
     
     if bc == :periodic
         @assert N_ghost == 0 "Periodic grids do not use ghost cells."
         Ns_total = Ns_interior
-        dxs = (maxs .- mins) ./ max.(Ns_interior, 1.0)
+        dxs = (maxs .- mins) ./ max.(Ns_interior, T(1.0))
     else
         @assert N_ghost >= 0 "N_ghost must be non-negative."
         Ns_total = Ns_interior .+ 2*N_ghost
-        dxs = (maxs .- mins) ./ max.(Ns_interior .- 1, 1.0)
+        dxs = (maxs .- mins) ./ max.(Ns_interior .- 1, T(1.0))
     end
 
     N = prod(Ns_total)
     N_interior_total = prod(Ns_interior)
     N_ghost_total = N - N_interior_total
 
-    # Cast to Static Vectors for type-stable math
-    mins_f = Space{D}(mins...)
-    maxs_f = Space{D}(maxs...)
-    dxs_f  = Space{D}(dxs...)
-    rand_f = Space{D}(randomness...)
+    mins_f = Space{D, T}(mins...)
+    maxs_f = Space{D, T}(maxs...)
+    dxs_f  = Space{D, T}(dxs...)
+    rand_f = Space{D, T}(randomness...)
 
     mins_tot = mins_f .- N_ghost .* dxs_f
     maxs_tot = maxs_f .+ N_ghost .* dxs_f
     
     max_dx = maximum(dxs_f)
-    R = interp_range_factor *  max_dx
-    r = split_factor * max_dx
-    a = merge_factor * max_dx
-    regular = all(==(0.0), randomness)
+    R = T(interp_range_factor) * max_dx
+    r = T(split_factor) * max_dx
+    a = T(merge_factor) * max_dx
+    regular = all(==(zero(T)), randomness)
 
-    positions = Vector{Space{D}}(undef, N)
+    positions = Vector{Space{D, T}}(undef, N)
     is_boundary = zeros(Bool, N)
 
-    # ---------------------------------------------------------
-    # D-Dimensional Placement Loop using CartesianIndices
-    # ---------------------------------------------------------
     for (i, I) in enumerate(CartesianIndices(Ns_total))
         pos_tuple = ntuple(Val(D)) do d
             idx = I[d]
             
             if bc == :periodic
-                return mins_f[d] + dxs_f[d]*(idx - 0.5) + rand_f[d]*(rand(rng, Float64)*2 - 1)
+                return mins_f[d] + dxs_f[d]*(idx - T(0.5)) + rand_f[d]*(rand(rng, T)*2 - 1)
             else
                 if idx <= N_ghost
                     return mins_f[d] - (N_ghost - idx + 1) * dxs_f[d]
                 elseif idx > Ns_interior[d] + N_ghost
                     return maxs_f[d] + (idx - (Ns_interior[d] + N_ghost)) * dxs_f[d]
                 else
-                    # Keep single-particle domains perfectly centered
-                    base = Ns_interior[d] == 1 ? (mins_f[d] + maxs_f[d]) / 2.0 : mins_f[d] + (idx - N_ghost - 1) * dxs_f[d]
-                    return base + rand_f[d] * (rand(rng, Float64) * 2 - 1)
+                    base = Ns_interior[d] == 1 ? (mins_f[d] + maxs_f[d]) / T(2.0) : mins_f[d] + (idx - N_ghost - 1) * dxs_f[d]
+                    return base + rand_f[d] * (rand(rng, T) * 2 - 1)
                 end
             end
         end
         
-        positions[i] = Space{D}(pos_tuple)
-        
+        positions[i] = Space{D, T}(pos_tuple)
         if bc != :periodic
             is_boundary[i] = any(d -> I[d] <= N_ghost || I[d] > Ns_interior[d] + N_ghost, 1:D)
         end
     end
 
-    # ---------------------------------------------------------
-    # Struct Instantiation
-    # ---------------------------------------------------------
     L = maxs_f - mins_f
-    meta = GridMetadata{D}(
-        N, N_interior_total, N_ghost_total, mins_tot, maxs_tot, mins_f, maxs_f, L, 1. ./ L,
-        R, r, a, dxs_f, regular, bc, Float64(interp_range_factor), 0
+    meta = GridMetadata{D, T}(
+        N, N_interior_total, N_ghost_total, mins_tot, maxs_tot, mins_f, maxs_f, L, one(T) ./ L,
+        R, r, a, dxs_f, regular, bc, T(interp_range_factor), 0
     )
 
-    core = ParticleGridCore{D}(positions, is_boundary, zeros(Float64, N))
-    shared = SharedBuffers{D, M}(zeros(State{M}, N), similar(positions), zeros(Float64,N), zeros(Bool,N), zeros(Int, N))
-
-    reorder = ReorderData{D}(collect(1:N), collect(1:N), zeros(Int, N), zeros(Bool,N))
+    core = ParticleGridCore{D, T}(positions, is_boundary, zeros(T, N))
+    shared = SharedBuffers{D, M, T}(zeros(State{M, T}, N), similar(positions), zeros(T, N), zeros(Bool, N), zeros(Int, N))
+    reorder = ReorderData{D}(collect(1:N), collect(1:N), zeros(Int, N), zeros(Bool, N))
 
     N_OFF = get_n_offsets(Val(D))
     bins = GlobalBins(
-        Tuple(mins_tot), Tuple(maxs_tot), 
-        Tuple(mins_f), Tuple(maxs_f), 
+        T, Tuple(mins_tot), Tuple(maxs_tot), Tuple(mins_f), Tuple(maxs_f), 
         R, r, N, Vector{SVector{N_OFF, Int}}(undef, 0), Val(bc), 
     )
 
-    neighbors = NeighborData{D, typeof(weight_func)}(
+    neighbors = NeighborData{D, T, typeof(weight_func)}(
         weight_func, fill(1:0, N + 1), Int[], 
-        Vector{Float64}(undef,0), Vector{SVector{D,Float64}}(undef, 0), 
+        Vector{T}(undef, 0), Vector{Space{D, T}}(undef, 0), 
         zeros(Int, N), zeros(Int, N)
     )
 
-    pg = ParticleGrid{D, M, typeof(weight_func), typeof(mover), bc, N_OFF}(
+    pg = ParticleGrid{D, M, T, typeof(weight_func), typeof(mover), bc, N_OFF}(
         meta, core, shared, neighbors, reorder, bins, mover,
-        zeros(State{M}, N), zeros(SVector{M, Bool}, N), zeros(State{M}, N)
+        zeros(State{M, T}, N), zeros(SVector{M, Bool}, N), zeros(State{M, T}, N)
     )
 
-    if D > 1; pg.neighbor(pg); end # Pre-warm CellListMap
+    if D > 1; pg.neighbor(pg); end 
     pg.reorder(pg)
     pg.neighbor(pg)
     
     return pg
 end
-
 
 # Extractor simply returns the cached UnitRange
 @inline function getNBSlice(pg::ParticleGrid, p_idx::Int)
@@ -466,7 +442,7 @@ end
 # =========================================================================
 # PERIODIC BIN NEIGHBOR UPDATE
 # =========================================================================
-function update_bin_neighbors!(bins::GlobalBins{D, :periodic, N_OFF}) where {D, N_OFF}
+function update_bin_neighbors!(bins::GlobalBins{D, T, :periodic, N_OFF}) where {D, T, N_OFF}
     coarse_dims = bins.coarse_dims
     ci = CartesianIndices(coarse_dims)
     li = LinearIndices(coarse_dims)
@@ -493,10 +469,11 @@ function update_bin_neighbors!(bins::GlobalBins{D, :periodic, N_OFF}) where {D, 
     
     return nothing
 end
+
 # =========================================================================
 # NON-PERIODIC BIN NEIGHBOR UPDATE (With Dummy Sink Bin)
 # =========================================================================
-function update_bin_neighbors!(bins::GlobalBins{D, BC, N_OFF}) where {D, BC, N_OFF}
+function update_bin_neighbors!(bins::GlobalBins{D, T, BC, N_OFF}) where {D, T, BC, N_OFF}
     coarse_dims = bins.coarse_dims
     ci = CartesianIndices(coarse_dims)
     li = LinearIndices(coarse_dims)
@@ -629,7 +606,7 @@ end
 
 reorder_particles!(pg::ParticleGrid) = pg.reorder(pg)
 
-function apply_boundary_conditions!(pg::ParticleGrid{D, M}, rhos_buffer::AbstractVector{State{M}}) where {D, M}
+function apply_boundary_conditions!(pg::ParticleGrid{D, M, T}, rhos_buffer::AbstractVector{State{M, T}}) where {D, M, T}
     bc = pg.meta.bc
     
     # 1. Periodic needs no manual overriding; neighbors wrap automatically
@@ -648,7 +625,7 @@ function apply_boundary_conditions!(pg::ParticleGrid{D, M}, rhos_buffer::Abstrac
     end
     
 
-# 3. Outflow (Zero-Gradient): Adopt the state of the closest interior neighbor
+# 3. Outflow (Zero-Divergence): Adopt the state of the closest interior neighbor
     if bc == :outflow
         dist_vec = get_distances(pg)
         
@@ -714,7 +691,7 @@ end
 
 determineVolumes!(pg) = return
 
-function determineVolumes!(pg::ParticleGrid{1, M, WF, GM, BC}) where {M, WF, GM, BC}
+function determineVolumes!(pg::ParticleGrid{1, M, T, WF, GM, BC}) where {M, WF, GM, BC, T}
     N = pg.meta.N
     if N == 0; return; end
     
@@ -747,14 +724,14 @@ end
 @inline _get_Lambda(eq, U_i, ::Val{D}) where {D} = Space{D}(ntuple(d -> max_eigenvalue(eq, U_i, d), Val(D)))
 
 @inline _extract_order(::MUSCL{D, M, B_LEN, MAX_ORDER}) where {D, M, B_LEN, MAX_ORDER} = MAX_ORDER
-@inline _extract_order(g::UpwindGradient) = g.order
-@inline _extract_order(g::CentralGradient) = g.order
+@inline _extract_order(g::UpwindDivergence) = g.order
+@inline _extract_order(g::CentralDivergence) = g.order
 @inline _extract_order(g::WENO) = g.order
 @inline _extract_order(::Any) = 2 # Fallback to Linear
 
-@generated function _compute_cfl_coeffs(::Val{D}, ::Val{IO}, ::Val{B_LEN}, nb_slice, dist_vec, w_vec, invL) where {D, IO, B_LEN}
+@generated function _compute_cfl_coeffs(::Val{D}, ::Val{IO}, ::Val{B_LEN}, nb_slice, dist_vec, w_vec, invL, ::Type{T}) where {D, IO, B_LEN, T}
     quote
-        N_s = zero(SMatrix{B_LEN, B_LEN, Float64, B_LEN * B_LEN})
+        N_s = zero(SMatrix{B_LEN, B_LEN, T, B_LEN * B_LEN})
         
         @inbounds for idx in 1:length(nb_slice)
             k = nb_slice[idx]
@@ -762,21 +739,20 @@ end
             N_s += w_vec[k] * (p_s * p_s')
         end
         
-        if abs(det(N_s)) < 1e-14
-            return zero(SVector{D, Float64})
+        if abs(det(N_s)) < T(1e-14)
+            return zero(SVector{D, T})
         end
         
         inv_N_s = inv(N_s)
-        sum_c_local = zero(MVector{D, Float64})
+        sum_c_local = zero(MVector{D, T})
         
         @inbounds for idx in 1:length(nb_slice)
             k = nb_slice[idx]
             w = w_vec[k]
             p_s = build_basis(Val(IO), dist_vec[k] * invL)
             
-            # Extract the effective geometric coefficient for the linear spatial derivatives
             for d in 1:D
-                c_val = 0.0
+                c_val = zero(T)
                 for j in 1:B_LEN
                     c_val += inv_N_s[d, j] * p_s[j]
                 end
@@ -784,35 +760,34 @@ end
             end
         end
         
-        return SVector{D, Float64}(sum_c_local)
+        return SVector{D, T}(sum_c_local)
     end
 end
 
-@generated function dispatch_cfl(order::Int, ::Val{D}, nb_slice, dist_vec, w_vec, invL) where {D}
-    expr = :(zero(SVector{D, Float64}))
+@generated function dispatch_cfl(order::Int, ::Val{D}, nb_slice, dist_vec, w_vec, invL, ::Type{T}) where {D, T}
+    expr = :(zero(SVector{D, T}))
     for o in 5:-1:2
         IO = o - 1
         B_LEN = typeof(basis_length(Val(D), Val(IO))).parameters[1]
-        call = :(_compute_cfl_coeffs(Val($D), Val($IO), Val($B_LEN), nb_slice, dist_vec, w_vec, invL))
+        call = :(_compute_cfl_coeffs(Val($D), Val($IO), Val($B_LEN), nb_slice, dist_vec, w_vec, invL, T))
         expr = :(order == $o ? $call : $expr)
     end
-    # Order 1/2 Fallback (Linear Stencil)
     B_LEN_1 = typeof(basis_length(Val(D), Val(1))).parameters[1]
-    call_fallback = :(_compute_cfl_coeffs(Val($D), Val(1), Val($B_LEN_1), nb_slice, dist_vec, w_vec, invL))
+    call_fallback = :(_compute_cfl_coeffs(Val($D), Val(1), Val($B_LEN_1), nb_slice, dist_vec, w_vec, invL, T))
     expr = :(order <= 2 ? $call_fallback : $expr)
     return expr
 end
 
-@inline function getTimeStep(pg::ParticleGrid{D, M}, eq::HyperbolicPDE, main_grad) where {D, M}
-    dt_buffer = reinterpret(Float64, pg.shared.int_buffer)
-    fill!(dt_buffer, Inf)
+@inline function getTimeStep(pg::ParticleGrid{D, M, T}, eq::HyperbolicPDE, main_grad) where {D, M, T}
+    dt_buffer = pg.shared.float_buffer
+    fill!(dt_buffer, T(Inf))
 
     w_vec = get_weights(pg)
     dist_vec = get_distances(pg)
 
     valD = Val(D)
     dim = D 
-    invL = 1.0 / minimum(pg.meta.dx)
+    invL = one(T) / minimum(pg.meta.dx)
     
     p_order = _extract_order(main_grad)
 
@@ -829,18 +804,16 @@ end
         U_i = pg.rhos[i]
         Lambda = _get_Lambda(eq, U_i, valD)
 
-        # Gets the exact geometric stencil sums for this specific polynomial order!
-        sum_c_vec = dispatch_cfl(p_order, valD, nb_slice, dist_vec, w_vec, invL)
+        sum_c_vec = dispatch_cfl(p_order, valD, nb_slice, dist_vec, w_vec, invL, T)
         sum_c = dot(Lambda, sum_c_vec)
 
-        if sum_c > 1e-14
-            dt_buffer[i] = 1.0 / (dim * sum_c)
+        if sum_c > T(1e-14)
+            dt_buffer[i] = one(T) / (dim * sum_c)
         end
     end
     
     return minimum(view(dt_buffer, 1:pg.meta.N))
 end
-
 # =========================================================================
 # OVERLOADED CAPACITY MANAGERS
 # =========================================================================
@@ -848,7 +821,7 @@ end
 """
     ensure_capacity!(rd::ReorderData, req_capacity::Int)
 """
-@inline function ensure_capacity!(rd::ReorderData, req_capacity::Int)
+@inline function ensure_capacity!(rd::ReorderData{D}, req_capacity::Int) where {D}
     if length(rd.permutation) < req_capacity
         new_cap = ceil(Int, req_capacity * 1.25)
         
@@ -863,7 +836,7 @@ end
 """
     ensure_capacity!(core::ParticleGridCore, req_capacity::Int)
 """
-@inline function ensure_capacity!(core::ParticleGridCore, req_capacity::Int)
+@inline function ensure_capacity!(core::ParticleGridCore{D, T}, req_capacity::Int) where {D, T}
     if length(core.positions) < req_capacity
         new_cap = ceil(Int, req_capacity * 1.25)
         
@@ -887,12 +860,8 @@ end
 
 """
     ensure_capacity!(nd::NeighborData, req_particles::Int)
-    
-Note: This only resizes the arrays mapped to the number of PARTICLES (N). 
-The `indices` and `data` arrays map to the number of NEIGHBORS, which scales 
-differently and must be resized separately during the neighbor search.
 """
-@inline function ensure_capacity!(nd::NeighborData{D}, req_neighbors::Int) where {D}
+@inline function ensure_capacity!(nd::NeighborData{D, T, WF}, req_neighbors::Int) where {D, T, WF}
     if length(nd.indices) < req_neighbors
         new_cap = ceil(Int, req_neighbors * 1.25)
         resize!(nd.indices, new_cap)
@@ -902,7 +871,7 @@ differently and must be resized separately during the neighbor search.
     return nothing
 end
 
-@inline function ensure_capacity!(sb::SharedBuffers{D, M}, req_capacity::Int) where {D, M}
+@inline function ensure_capacity!(sb::SharedBuffers{D, M, T}, req_capacity::Int) where {D, M, T}
     if length(sb.pos_buffer) < req_capacity
         new_cap = ceil(Int, req_capacity * 1.25)
         
@@ -919,13 +888,11 @@ end
     if length(pg.rhos) < req_capacity
         new_cap = ceil(Int, req_capacity * 1.25)
         
-        # Native resize! now works for everything
         resize!(pg.rhos, new_cap)
         resize!(pg.mood_events, new_cap)
         resize!(pg.curvatures, new_cap)
     end
     
-    # Safely delegate down the chain
     ensure_capacity!(pg.core, req_capacity)
     ensure_capacity!(pg.shared, req_capacity)
     ensure_capacity!(pg.reorder, req_capacity)

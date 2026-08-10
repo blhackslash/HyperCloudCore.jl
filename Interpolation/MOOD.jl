@@ -5,14 +5,13 @@
 end
 
 @inline function evaluate_mood_and_halo!(
-    main_grad::MUSCL{D, M, B_LEN, MAX_ORDER, DIV_ORDER, MOOD{S, C}, INTERPS, L, NF}, 
+    main_grad::MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER, MOOD{S, C}, INTERPS, L, NF}, 
     pg, rk, stage, dt, rho_stage
-) where {D, M, B_LEN, MAX_ORDER, DIV_ORDER, S <: MOODStrategy, C <: RealMOOD, INTERPS, L, NF}
+) where {D, M, T, B_LEN, MAX_ORDER, DIV_ORDER, S <: MOODStrategy, C <: RealMOOD, INTERPS, L, NF}
     
     mood_fun = main_grad.mood
     N = pg.meta.N
     nb_slices = pg.neighbor.ranges
-    nb_indices = pg.neighbor.indices
     is_boundary = pg.core.is_boundary
     
     int_buffer = rk.int_buffer
@@ -23,9 +22,7 @@ end
     any_triggered = false
     fill!(mood_triggered, false)
 
-    # Step 1: Predict candidate state and evaluate MOOD
     @batch for p_idx in 1:N
-        # Only evaluate MOOD if the particle just computed a new divergence
         if is_boundary[p_idx] || !needs_recalc[p_idx]; continue; end
         
         fi = rho_stage[p_idx]
@@ -34,17 +31,17 @@ end
 
         s = length(rk.K_stages)
         base_rho = rk.rho_n[p_idx]
-        A_coef = stage < s ? rk.tableau.A[stage+1, stage] : rk.tableau.b[stage]
+        A_coef = stage < s ? rk.tableau.a[stage+1, stage] : rk.tableau.b[stage]
         
         if stage < s
             for j in 1:(stage-1)
-                a_val = rk.tableau.A[stage+1, j]
-                if a_val != 0.0; base_rho -= dt * a_val * rk.K_stages[j][p_idx]; end
+                a_val = rk.tableau.a[stage+1, j]
+                if a_val != zero(T); base_rho -= dt * a_val * rk.K_stages[j][p_idx]; end
             end
         else
             for j in 1:(s-1)
                 b_val = rk.tableau.b[j]
-                if b_val != 0.0; base_rho -= dt * b_val * rk.K_stages[j][p_idx]; end
+                if b_val != zero(T); base_rho -= dt * b_val * rk.K_stages[j][p_idx]; end
             end
         end
         
@@ -57,7 +54,6 @@ end
     
     fill!(needs_recalc, false)
 
-    # Step 2: Drop order and trigger highly localized EPD_1 Halo
     for p_idx in 1:N
         if mood_triggered[p_idx] && orders[p_idx] > 1
             any_triggered = true
@@ -72,9 +68,9 @@ end
 end
 
 @inline function evaluate_mood_and_halo!(
-    main_grad::MUSCL{D, M, B_LEN, MAX_ORDER, DIV_ORDER, MOOD{S, C}, INTERPS, L, NF}, 
+    main_grad::MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER, MOOD{S, C}, INTERPS, L, NF}, 
     pg, imex_ts::GeneralIMEXTimeStepper, i, dt, current_Y_i
-) where {D, M, B_LEN, MAX_ORDER, DIV_ORDER, S <: MOODStrategy, C <: RealMOOD, INTERPS, L, NF}
+) where {D, M, T, B_LEN, MAX_ORDER, DIV_ORDER, S <: MOODStrategy, C <: RealMOOD, INTERPS, L, NF}
     
     mood_fun = main_grad.mood
     N = pg.meta.N
@@ -85,47 +81,44 @@ end
     orders = main_grad.particle_orders
     mood_triggered = main_grad.mood_triggered
     needs_recalc = pg.shared.bit_buffer
-    bt = imex_ts.butcher_tableau
+    bt = imex_ts.tableau
     
     any_triggered = false
     fill!(mood_triggered, false)
 
-    # Step 1: Predict candidate state and evaluate MOOD
     @batch for p_idx in 1:N
         if is_boundary[p_idx] || !needs_recalc[p_idx]; continue; end
         
         fi = current_Y_i[p_idx]
         nb_slice = nb_slices[p_idx]
         
-        # In IMEX, the explicit stage derivative is the negative divergence
         div_val = -imex_ts.K_E_stages[i][p_idx] 
         
-        # Predict candidate state for IMEX
         s = imex_ts.num_stages
-        Y_local = imex_ts.U_n[p_idx]
+        Y_local = imex_ts.rho_n[p_idx]
         
         if i < s
             for j in 1:(i-1)
-                if bt.At[i+1, j] != 0.0
-                    Y_local += (dt * bt.At[i+1, j]) * imex_ts.K_E_stages[j][p_idx]
+                if bt.a_t[i+1, j] != zero(T)
+                    Y_local += (dt * bt.a_t[i+1, j]) * imex_ts.K_E_stages[j][p_idx]
                 end
-                if bt.A[i+1, j] != 0.0
-                    Y_local += (dt * bt.A[i+1, j]) * imex_ts.K_I_stages[j][p_idx]
+                if bt.a[i+1, j] != zero(T)
+                    Y_local += (dt * bt.a[i+1, j]) * imex_ts.K_I_stages[j][p_idx]
                 end
             end
-            Y_local += (dt * bt.A[i+1, i]) * imex_ts.K_I_stages[i][p_idx]
-            Y_local += (dt * bt.At[i+1, i]) * (-div_val)
+            Y_local += (dt * bt.a[i+1, i]) * imex_ts.K_I_stages[i][p_idx]
+            Y_local += (dt * bt.a_t[i+1, i]) * (-div_val)
         else
             for j in 1:(s-1)
-                if bt.bt[j] != 0.0
-                    Y_local += (dt * bt.bt[j]) * imex_ts.K_E_stages[j][p_idx]
+                if bt.b_t[j] != zero(T)
+                    Y_local += (dt * bt.b_t[j]) * imex_ts.K_E_stages[j][p_idx]
                 end
-                if bt.b[j] != 0.0
+                if bt.b[j] != zero(T)
                     Y_local += (dt * bt.b[j]) * imex_ts.K_I_stages[j][p_idx]
                 end
             end
             Y_local += (dt * bt.b[i]) * imex_ts.K_I_stages[i][p_idx]
-            Y_local += (dt * bt.bt[i]) * (-div_val)
+            Y_local += (dt * bt.b_t[i]) * (-div_val)
         end
         
         if mood_fun(main_grad, p_idx, fi, nb_slice, Y_local, pg, int_buffer.f)
@@ -135,14 +128,12 @@ end
     
     fill!(needs_recalc, false)
 
-    # Step 2: Drop order and trigger strategy-specific Halo
     for p_idx in 1:N
         if mood_triggered[p_idx] && orders[p_idx] > 1
             any_triggered = true
             orders[p_idx] -= 1
             needs_recalc[p_idx] = true 
             
-            # This elegantly falls back to your new Strategy dynamic dispatch!
             trigger_halo!(main_grad.mood.strategy, p_idx, pg, needs_recalc, orders)
         end
     end
@@ -150,9 +141,9 @@ end
     return any_triggered
 end
 
-# --- Effective Order Evaluators ---
+# --- Effective Order Evaluators & Halo Triggers ---
+# (Remaining logic unchanged except for types if applicable)
 @inline get_effective_order(::EPD1, orders, i, nb_slice, nb_indices) = orders[i]
-
 @inline function get_effective_order(::EPD2, orders, i, nb_slice, nb_indices)
     eff = orders[i]
     @inbounds for k in nb_slice
@@ -165,11 +156,8 @@ end
 @inline get_effective_order(::EPD0, orders, i, nb_slice, nb_indices) = orders[i]
 @inline get_effective_order(::StrictEPD0, orders, i, nb_slice, nb_indices) = orders[i]
 
-# --- Halo Triggers ---
-# EPD0 does absolutely nothing to its neighbors
 @inline trigger_halo!(::EPD0, p_idx, pg, needs_recalc, orders) = nothing
 
-# StrictEPD0 forces neighbors to recalculate AND drops their order to match
 @inline function trigger_halo!(::StrictEPD0, p_idx, pg, needs_recalc, orders)
     nb_slices = pg.neighbor.ranges
     nb_indices = pg.neighbor.indices
@@ -177,16 +165,9 @@ end
     
     @inbounds for k in nb_slices[p_idx]
         j = nb_indices[k]
-        
         if !is_boundary[j]
-            # 1. Flag immediate neighbor for recalculation
             needs_recalc[j] = true
-            
-            # 2. Drop the neighbor's order to match the troubled cell
             orders[j] = min(orders[j], orders[p_idx])
-            
-            # 3. Extended Halo 2: Because cell `j`'s order just changed,
-            # its neighbors must also recompute their divergence!
             for m in nb_slices[j]
                 nj = nb_indices[m]
                 if !is_boundary[nj]
@@ -196,7 +177,7 @@ end
         end
     end
 end
-# --- Halo Triggers ---
+
 @inline function trigger_halo!(::EPD1, p_idx, pg, needs_recalc, orders)
     nb_indices = pg.neighbor.indices
     @inbounds for k in pg.neighbor.ranges[p_idx]
@@ -216,7 +197,6 @@ end
         j = nb_indices[k]
         if !is_boundary[j]
             needs_recalc[j] = true
-            # EPD_2 Cascade: Second neighbors must also recompute!
             for m in nb_slices[j]
                 nj = nb_indices[m]
                 if !is_boundary[nj]
@@ -228,18 +208,15 @@ end
 end
 
 # =========================================================================
-# STATE{M} EXTREMA FINDERS
+# STATE{M, T} EXTREMA FINDERS
 # =========================================================================
 
-@inline function findLocalExtrema(rho_i::State{M}, nb_slice::UnitRange{Int}, neighbor_fs::AbstractVector{State{M}}) where {M}
+@inline function findLocalExtrema(rho_i::State{M, T}, nb_slice::UnitRange{Int}, neighbor_fs::AbstractVector{State{M, T}}) where {M, T}
     minU = rho_i
     maxU = rho_i
     
     @inbounds for k in nb_slice 
         rho_j = neighbor_fs[k]
-        
-        # Use native SVector broadcasting! 
-        # This completely eliminates the closure and unrolls automatically.
         minU = math_min.(minU, rho_j)
         maxU = math_max.(maxU, rho_j)
     end
@@ -248,13 +225,12 @@ end
 end
 
 @inline function findLocalExtremaAbs(
-    c_i::State{M}, curve_idx::Int, nb_slice::UnitRange{Int}, 
+    c_i::State{M, T}, curve_idx::Int, nb_slice::UnitRange{Int}, 
     neighbor_indices::AbstractVector{Int}, grad_vec::AbstractVector
-) where {M}
+) where {M, T}
     mini = c_i
     maxi = c_i
     
-    # Native SVector broadcasting for absolute value
     minAbs = abs.(c_i)
     maxAbs = minAbs
     
@@ -264,7 +240,6 @@ end
         
         abs_cj = abs.(c_j)
         
-        # Native broadcasting eliminates all closures
         mini = math_min.(mini, c_j)
         maxi = math_max.(maxi, c_j)
         minAbs = math_min.(minAbs, abs_cj)
@@ -273,8 +248,6 @@ end
     
     return mini, maxi, minAbs, maxAbs
 end
-
-
 # =========================================================================
 # MOOD CRITERIA FUNCTORS
 # =========================================================================
@@ -283,13 +256,13 @@ end
 (m::MOOD{<:MOODStrategy, OnlyMOOD})(args...) = true
 
 # --- MOODu1 (Standard DMP) ---
-function (m::MOOD{<:MOODStrategy, MOODu1})(
-    g::Any, p_idx::Int, rho_i::State{M}, nb_slice::UnitRange{Int}, 
-    newRho::State{M}, pg::ParticleGrid{D}, int_buffer_f::AbstractVector{State{M}}
-) where {D, M}
+function (m::MOOD{<:MOODStrategy, MOODu1{T}})(
+    g::Any, p_idx::Int, rho_i::State{M, T}, nb_slice::UnitRange{Int}, 
+    newRho::State{M, T}, pg::ParticleGrid{D, M, T}, int_buffer_f::AbstractVector{State{M, T}}
+) where {D, M, T}
     
     minU, maxU = findLocalExtrema(rho_i, nb_slice, int_buffer_f)
-    δ = m.criterion.d # Extract parameter from the nested criterion
+    δ = m.criterion.d 
     
     for m_idx in 1:M
         if abs(maxU[m_idx] - minU[m_idx]) >= δ^3
@@ -301,14 +274,12 @@ function (m::MOOD{<:MOODStrategy, MOODu1})(
     return false
 end
 
-
 # --- MOODu2 (N-Dimensional MUSCL Optimization) ---
-function (m::MOOD{<:MOODStrategy, MOODu2})(
-    g::MUSCL{D, M, B_LEN, MAX_ORDER, DIV_ORDER, MOOD_T, INTERPS, L, NF}, p_idx::Int, rho_i::State{M}, nb_slice::UnitRange{Int}, 
-    newRho::State{M}, pg::ParticleGrid{D}, int_buffer_f::AbstractVector{State{M}}
-) where {D, M, B_LEN, MAX_ORDER, DIV_ORDER, MOOD_T, INTERPS, L, NF}
+function (m::MOOD{<:MOODStrategy, MOODu2{T}})(
+    g::MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER, MOOD_T, INTERPS, L, NF}, p_idx::Int, rho_i::State{M, T}, nb_slice::UnitRange{Int}, 
+    newRho::State{M, T}, pg::ParticleGrid{D, M, T}, int_buffer_f::AbstractVector{State{M, T}}
+) where {D, M, T, B_LEN, MAX_ORDER, DIV_ORDER, MOOD_T, INTERPS, L, NF}
     
-    # 1. Base Extrema Check (DMP)
     minU, maxU = findLocalExtrema(rho_i, nb_slice, int_buffer_f)
     δ = m.criterion.d
     
@@ -325,7 +296,7 @@ function (m::MOOD{<:MOODStrategy, MOODu2})(
     if !dmp_fail; return false; end
 
     if MAX_ORDER < 3 || g.particle_orders[p_idx] < 3
-        return true # DMP failed, and no curvature info exists to rescue it, drop order
+        return true 
     end
     
     grad_vec = g.gradients
@@ -333,17 +304,15 @@ function (m::MOOD{<:MOODStrategy, MOODu2})(
     
     u2_satisfied = true
     
-    # Check curvature in every dimension (xx, yy, zz...)
     for d in 1:D
-        # Because of how we built the basis, spatial curves are perfectly aligned!
         curve_idx = D + d 
         c_i = grad_vec[p_idx][curve_idx]
         
         mini, maxi, minAbs, maxAbs = findLocalExtremaAbs(c_i, curve_idx, nb_slice, neighbors, grad_vec)
         
         for m in 1:M
-            ratio = maxAbs[m] < 1e-12 ? 1.0 : minAbs[m] / maxAbs[m]
-            valid = (mini[m] * maxi[m] > -δ) && (ratio >= 0.5 || maxAbs[m] < δ)
+            ratio = maxAbs[m] < T(1e-12) ? one(T) : minAbs[m] / maxAbs[m]
+            valid = (mini[m] * maxi[m] > -δ) && (ratio >= T(0.5) || maxAbs[m] < δ)
             
             if !valid
                 u2_satisfied = false
@@ -353,13 +322,12 @@ function (m::MOOD{<:MOODStrategy, MOODu2})(
         if !u2_satisfied; break; end
     end
     
-    return !u2_satisfied # Return true (Drop Order) if u2 was not satisfied
+    return !u2_satisfied 
 end
 
-function (m::MOOD{<:MOODStrategy, MOODu2})(
-    g::Any, p_idx::Int, rho_i::State{M}, nb_slice::UnitRange{Int}, 
-    newRho::State{M}, pg::ParticleGrid{D}, int_buffer_f::AbstractVector{State{M}}
-) where {D, M}
-    # Create a temporary u1 struct to evaluate DMP only
+function (m::MOOD{<:MOODStrategy, MOODu2{T}})(
+    g::Any, p_idx::Int, rho_i::State{M, T}, nb_slice::UnitRange{Int}, 
+    newRho::State{M, T}, pg::ParticleGrid{D, M, T}, int_buffer_f::AbstractVector{State{M, T}}
+) where {D, M, T}
     return MOOD(m.strategy, MOODu1(m.criterion.d))(g, p_idx, rho_i, nb_slice, newRho, pg, int_buffer_f)
 end

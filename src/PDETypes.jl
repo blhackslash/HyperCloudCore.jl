@@ -1,7 +1,6 @@
 # =========================================================================
 # CONSTANTS & DIFFERENTIAL ORDERS
 # =========================================================================
-const GAS_GAMMA_EULER = 1.4
 
 abstract type DifferentialOrder end
 struct Order0 <: DifferentialOrder end
@@ -47,16 +46,16 @@ Lagrangian() = Lagrangian(MappedPath())
 # =========================================================================
 # HYPERBOLIC PDE ABSTRACT TYPES
 # =========================================================================
-# A PDE in D dimensions with M variables, in Representation R
-abstract type HyperbolicPDE{D, M, R <: EquationRepresentation} end
+# A PDE in D dimensions with M variables, Real type T, in Representation R
+abstract type HyperbolicPDE{D, M, T, R <: EquationRepresentation} end
 
 # =========================================================================
 # CONCRETE PDEs & SMART CONSTRUCTORS
 # =========================================================================
 
 # --- Linear Advection ---
-struct LinearAdvection{D, M, R} <: HyperbolicPDE{D, M, R}
-    vel::Flux{D, M}
+struct LinearAdvection{D, M, T, R} <: HyperbolicPDE{D, M, T, R}
+    vel::Flux{D, M, T}
     rep::R
 end
 
@@ -64,27 +63,35 @@ function LinearAdvection(velocities; rep::R = Conservative()) where {R <: Equati
     svec_vel = param2fvec(velocities)
     D = length(svec_vel)
     M = length(svec_vel[1])
-    return LinearAdvection{D, M, R}(Flux{D, M}(svec_vel), rep)
+    T = eltype(svec_vel[1]) # Extract T dynamically from the provided velocities
+    return LinearAdvection{D, M, T, R}(Flux{D, M, T}(svec_vel), rep)
 end
 
 # --- Burgers Equation (Multi-Dimensional) ---
-struct BurgersEquation{D, R} <: HyperbolicPDE{D, 1, R} 
+struct BurgersEquation{D, T, R} <: HyperbolicPDE{D, 1, T, R} 
     rep::R
 end
 
-BurgersEquation{D}() where {D} = BurgersEquation{D, Conservative}(Conservative())
-BurgersEquation(::Val{D}, rep::R = Conservative()) where {D, R <: EquationRepresentation} = BurgersEquation{D, R}(rep)
+# Removed the parameterless BurgersEquation{D}() fallback
+BurgersEquation(::Val{D}, ::Type{T}, rep::R = Conservative()) where {D, T, R <: EquationRepresentation} = BurgersEquation{D, T, R}(rep)
+
 
 # --- Euler Equation ---
-struct EulerEquation{D, M, R} <: HyperbolicPDE{D, M, R}
+struct EulerEquation{D, M, T, R} <: HyperbolicPDE{D, M, T, R}
+    gamma::T
     rep::R
 end
 
-# Unified Smart Constructor: Pass the Dimension and the Representation instance
-function EulerEquation(::Val{D}, rep::R = Conservative()) where {D, R <: EquationRepresentation}
-    return EulerEquation{D, D + 2, R}(rep)
+# Added gamma parameter and removed default Float64
+function EulerEquation(::Val{D}, ::Type{T}, gamma::T = T(1.4), rep::R = Conservative()) where {D, T, R <: EquationRepresentation}
+    return EulerEquation{D, D + 2, T, R}(gamma, rep)
 end
 
+
 # --- Test U3 Equation ---
-struct TestU3Equation{a} end
-TestU3Equation(a::Float64) = TestU3Equation{a}()
+struct TestU3Equation{a, T, R} <: HyperbolicPDE{1, 1, T, R} 
+    rep::R
+end
+
+# Removed default Float64
+TestU3Equation(a::Real, ::Type{T}, rep::R=Conservative()) where {T, R} = TestU3Equation{a, T, R}(rep)

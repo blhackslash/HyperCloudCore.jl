@@ -1,87 +1,63 @@
-
 ## ------------------------------- Weight Functions ------------------------------
 abstract type MLSWeightFunction end
 
 """
-    exponentialWeightFunction(alpha::Real, range::Real)
-
-Functor that calculates an exponential weight based on distance.
-The parameters `alpha` (shape parameter) and `range` (normalization distance)
-are stored directly in the struct.
+    ExponentialWeightFunction(alpha::Real, range::Real)
 """
-struct exponentialWeightFunction <: MLSWeightFunction
-    alpha::Float64
-    range::Float64
-    inv_range_sq::Float64
+struct ExponentialWeightFunction{T} <: MLSWeightFunction
+    alpha::T
+    range::T
+    inv_range_sq::T
 end
 
 """
-    inverseWeightFunction(alpha::Real=0.0, range::Real=0.0)
-
-Functor that calculates an inverse-square distance weight.
-The parameters `alpha` and `range` are included for a consistent
-interface but are not used in the calculation.
+    InverseWeightFunction(alpha::Real=0.0, range::Real=0.0)
 """
-struct inverseWeightFunction <: MLSWeightFunction
-    alpha::Float64
-    range::Float64
+struct InverseWeightFunction{T} <: MLSWeightFunction
+    alpha::T
+    range::T
 end
 
 abstract type GridMover end
-
-# ---------------------------------------------------------
-# 1. NoGridMover
-# ---------------------------------------------------------
 struct NoGridMover <: GridMover end
-
-# ---------------------------------------------------------
-# 2. CustomGridMover
-# ---------------------------------------------------------
 struct CustomGridMover{F, P} <: GridMover
     vel_func::F
     params::P
 end
-
-# ---------------------------------------------------------
-# 3. PhysicalGridMover
-# ---------------------------------------------------------
-# Inside GridTypes.jl
 struct PhysicalGridMover{D} <: GridMover
-    # Maps spatial dimensions to the macroscopic state index representing velocity
-    # e.g., for a 1D scalar it's (1,), for 2D Euler it might be (2, 3)
     vel_indices::NTuple{D, Int} 
 end
 
 # ---------------------------------------------------------
 # 1. Grid Metadata
 # ---------------------------------------------------------
-mutable struct GridMetadata{D}
+mutable struct GridMetadata{D, T}
     N::Int                  
     N_interior::Int         
     N_ghost::Int            
-    mins::Space{D}
-    maxs::Space{D}
-    inner_mins::Space{D}
-    inner_maxs::Space{D}
-    L::Space{D}
-    L_inv::Space{D}
-    R::Float64
-    r::Float64
-    a::Float64
-    dx::Space{D} 
+    mins::Space{D, T}
+    maxs::Space{D, T}
+    inner_mins::Space{D, T}
+    inner_maxs::Space{D, T}
+    L::Space{D, T}
+    L_inv::Space{D, T}
+    R::T
+    r::T
+    a::T
+    dx::Space{D, T} 
     regular::Bool
     bc::Symbol              
-    range_factor::Float64
+    range_factor::T
     max_nb::Int       
 end
 
 # ---------------------------------------------------------
 # 2. Shared Workspace Buffers
 # ---------------------------------------------------------
-mutable struct SharedBuffers{D, M}
-    rho_buffer::Vector{State{M}}      
-    pos_buffer::Vector{Space{D}}
-    float_buffer::Vector{Float64}
+mutable struct SharedBuffers{D, M, T}
+    rho_buffer::Vector{State{M, T}}      
+    pos_buffer::Vector{Space{D, T}}
+    float_buffer::Vector{T}
     bit_buffer::Vector{Bool}
     int_buffer::Vector{Int}
 end
@@ -89,17 +65,12 @@ end
 # ---------------------------------------------------------
 # 3. Neighbor Search Context
 # ---------------------------------------------------------
-mutable struct NeighborData{D, WF}    
+mutable struct NeighborData{D, T, WF}    
     weight_func::WF
-
-    # CSR format using native UnitRanges
     ranges::Vector{UnitRange{Int}}
     indices::Vector{Int}
-    
-    weights::Vector{Float64}
-    distances::Vector{Space{D}} 
-
-    # --- Pure Serial Buffers ---
+    weights::Vector{T}
+    distances::Vector{Space{D, T}} 
     counts::Vector{Int}
     offsets::Vector{Int}
 end
@@ -113,52 +84,44 @@ struct ReorderData{D}
     new_permutation_buffer::Vector{Int} 
     seen_buffer::Vector{Bool}            
 end
+
 # ---------------------------------------------------------
 # 6. Particle Grid Core (Geometry & Topology)
 # ---------------------------------------------------------
-mutable struct ParticleGridCore{D}
-    positions::Vector{Space{D}}
+mutable struct ParticleGridCore{D, T}
+    positions::Vector{Space{D, T}}
     is_boundary::Vector{Bool}
-    volumes::Vector{Float64}
+    volumes::Vector{T}
 end
 
 @inline get_n_offsets(::Val{1}) = 3
 @inline get_n_offsets(::Val{2}) = 9
 @inline get_n_offsets(::Val{3}) = 27
 
-struct GlobalBins{D, BC, N_OFF}
-    mins::Space{D}
-    maxs::Space{D}
-    coarse_size::Space{D}
+struct GlobalBins{D, T, BC, N_OFF}
+    mins::Space{D, T}
+    maxs::Space{D, T}
+    coarse_size::Space{D, T}
     coarse_dims::NTuple{D, Int}
     head::Vector{Int}
     next::Vector{Int}
-    fine_size::Space{D}
+    fine_size::Space{D, T}
     fine_dims::NTuple{D, Int}
     fine_occupation::Vector{Bool}
     fine_type::Vector{UInt8}
-    
-    # Strictly typed Vector of SVectors!
     bin_neighbors::Vector{SVector{N_OFF, Int}} 
 end
 
-# Add BC parameter to ParticleGrid and pass it to GlobalBins
-mutable struct ParticleGrid{D, M, WF, GM, BC, N_OFF}
-    meta::GridMetadata{D}
-    core::ParticleGridCore{D}
-    shared::SharedBuffers{D, M}
-    neighbor::NeighborData{D, WF}
+mutable struct ParticleGrid{D, M, T, WF, GM, BC, N_OFF}
+    meta::GridMetadata{D, T}
+    core::ParticleGridCore{D, T}
+    shared::SharedBuffers{D, M, T}
+    neighbor::NeighborData{D, T, WF}
     reorder::ReorderData{D}
-    bins::GlobalBins{D, BC, N_OFF}    # <-- Now type-linked
+    bins::GlobalBins{D, T, BC, N_OFF} 
     mover::GM
 
-    rhos::Vector{State{M}}
+    rhos::Vector{State{M, T}}
     mood_events::Vector{SVector{M, Bool}}
-    curvatures::Vector{State{M}}
+    curvatures::Vector{State{M, T}}
 end
-
-# Update the Aliases
-#const ParticleGrid1D{M, WF, GM, BC} = ParticleGrid{1, M, WF, GM, BC}
-#const ParticleGrid2D{M, WF, GM, BC} = ParticleGrid{2, M, WF, GM, BC}
-
-

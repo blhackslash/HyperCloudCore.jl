@@ -1,40 +1,25 @@
-function exponentialWeightFunction(alpha::Float64, range::Float64)
-    inv_range_sq = 1.0 / (range^2)
-    exponentialWeightFunction(alpha,range,inv_range_sq)
+function ExponentialWeightFunction(alpha::T, range::T) where {T}
+    inv_range_sq = one(T) / (range^2)
+    ExponentialWeightFunction{T}(alpha, range, inv_range_sq)
 end
 
-
-# Provide a default constructor
-inverseWeightFunction() = inverseWeightFunction(0.0, 0.0)
-
-
-# --- Fast Exponential Approximations (unchanged) ---
+# Provide a parameterized default constructor
+InverseWeightFunction(::Type{T}) where {T} = InverseWeightFunction{T}(zero(T), zero(T))
 
 """
 A fast, high-accuracy, and stable approximation of `exp(x)` for `x <= 0`.
 """
-@inline function fast_exp_accurate(x::Float64)
+@inline function fast_exp_accurate(x::T) where {T}
     y = -x
-    denominator = 1.0 + y * (1.0 + y * (0.5 + y * (0.16666666666666666 + y * 0.041666666666666664)))
-    return 1.0 / denominator
+    denominator = one(T) + y * (one(T) + y * (T(0.5) + y * (T(0.16666666666666666) + y * T(0.041666666666666664))))
+    return one(T) / denominator
 end
 
-
-# --- SCALAR Functor Implementations ---
-
-"""
-Calculates the exponential weight for a single interaction given the squared distance.
-This is the most efficient version for use inside loops.
-"""
-@inline function (w::exponentialWeightFunction)(dist_sq::Real)
+@inline function (w::ExponentialWeightFunction{T})(dist_sq::Real) where {T}
     arg = -w.alpha * dist_sq * w.inv_range_sq
-    return fast_exp_accurate(arg)
+    return fast_exp_accurate(T(arg))
 end
 
-"""
-Calculates the inverse-square weight for a single interaction given the squared distance.
-"""
-@inline function (w::inverseWeightFunction)(dist_sq::Real)
-    # Add a small epsilon to prevent division by zero if two points are identical
-    return 1.0 / (dist_sq + 1e-12)
+@inline function (w::InverseWeightFunction{T})(dist_sq::Real) where {T}
+    return one(T) / (T(dist_sq) + T(1e-12))
 end

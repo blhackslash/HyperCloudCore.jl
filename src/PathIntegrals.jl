@@ -1,57 +1,45 @@
-
-
 # DO0 (The State): Returns a constant average regardless of 's'
-@inline function (::NaiveAveragePath)(eq::HyperbolicPDE, s, uL::State{M}, uR::State{M}, ::Order0) where {M}
-    return 0.5 * (uL + uR)
+@inline function (::NaiveAveragePath)(eq::HyperbolicPDE, s::T, u_L::State{M, T}, u_R::State{M, T}, ::Order0) where {M, T}
+    return T(0.5) * (u_L + u_R)
 end
 
 # DO1 (The Derivative): Fakes the derivative to be the standard jump
-@inline function (::NaiveAveragePath)(eq::HyperbolicPDE, s, uL::State{M}, uR::State{M}, ::Order1) where {M}
-    return uR - uL
+@inline function (::NaiveAveragePath)(eq::HyperbolicPDE, s::T, u_L::State{M, T}, u_R::State{M, T}, ::Order1) where {M, T}
+    return u_R - u_L
 end
 
 # Pure SVector math, completely unrolled by the compiler!
-@inline (::LinePath)(eq::HyperbolicPDE, s, uL::State{M}, uR::State{M}, ::Order0) where {M} = uL + s * (uR - uL)
-@inline (::LinePath)(eq::HyperbolicPDE, s, uL::State{M}, uR::State{M}, ::Order1) where {M} = uR - uL
-
-
-
+@inline (::LinePath)(eq::HyperbolicPDE, s::T, u_L::State{M, T}, u_R::State{M, T}, ::Order0) where {M, T} = u_L + s * (u_R - u_L)
+@inline (::LinePath)(eq::HyperbolicPDE, s::T, u_L::State{M, T}, u_R::State{M, T}, ::Order1) where {M, T} = u_R - u_L
 
 # 0th Derivative: Map to Cons -> Evaluate Base Path -> Map to Prim
-@inline function (mp::MappedPath)(eq::HyperbolicPDE, s, vL::State{M}, vR::State{M}, ::Order0) where {M}
-    wL = prim2cons(eq, vL)
-    wR = prim2cons(eq, vR)
+@inline function (mp::MappedPath)(eq::HyperbolicPDE, s::T, v_L::State{M, T}, v_R::State{M, T}, ::Order0) where {M, T}
+    w_L = prim2cons(eq, v_L)
+    w_R = prim2cons(eq, v_R)
     
-    w_s = mp.base_path(eq, s, wL, wR, DO0)
-    
+    w_s = mp.base_path(eq, s, w_L, w_R, DO0)
     return cons2prim(eq, w_s)
 end
 
 # 1st Derivative: The Chain Rule (∂V/∂W * dW/ds)
-@inline function (mp::MappedPath)(eq::HyperbolicPDE, s, vL::State{M}, vR::State{M}, ::Order1) where {M}
-    wL = prim2cons(eq, vL)
-    wR = prim2cons(eq, vR)
+@inline function (mp::MappedPath)(eq::HyperbolicPDE, s::T, v_L::State{M, T}, v_R::State{M, T}, ::Order1) where {M, T}
+    w_L = prim2cons(eq, v_L)
+    w_R = prim2cons(eq, v_R)
     
-    w_s  = mp.base_path(eq, s, wL, wR, DO0)
-    dw_s = mp.base_path(eq, s, wL, wR, DO1)
+    w_s  = mp.base_path(eq, s, w_L, w_R, DO0)
+    dw_s = mp.base_path(eq, s, w_L, w_R, DO1)
     
-    # We use SVector Finite Differences here as a highly-efficient, generalized chain rule.
-    # (If you ever want to use an exact analytical Jacobian, you can just create a new 
-    # `AnalyticalMappedPath <: AbstractPath` and plug the matrix in here!)
-    eps_fd = 1e-6
+    eps_fd = T(1e-6)
     V_s      = cons2prim(eq, w_s)
     V_s_plus = cons2prim(eq, w_s + eps_fd * dw_s)
     
     return (V_s_plus - V_s) / eps_fd
 end
 
-# Abstract definition
 function path_integral(eq::HyperbolicPDE, u_left::Tuple, u_right::Tuple)
     error("path_integral not implemented for $(typeof(eq))")
 end
 
-# --- Helper: Matrix-Vector Product for Non-Conservative Systems ---
-# To avoid heap-allocated matrices, we define A(U)*v directly as a Tuple.
 function A_matrix_times_vector(eq::HyperbolicPDE, U::Tuple, v::Tuple)
     error("A_matrix_times_vector not implemented for $(typeof(eq))")
 end
@@ -61,100 +49,88 @@ end
 # =========================================================================
 
 # 1. LAGRANGIAN (Material Derivative Frame)
-# A(V) = [0, ρ, 0; 0, 0, 1/ρ; 0, γp, 0]
-@inline function A_matrix_times_vector(::EulerEquation{1, 3, LR}, V::State{3}, dV::State{3}) where {LR <: Lagrangian}
+@inline function A_matrix_times_vector(eq::EulerEquation{1, 3, T, LR}, V::State{3, T}, dV::State{3, T}) where {T, LR <: Lagrangian}
     rho, u, p = V[1], V[2], V[3]
     drho, du, dp = dV[1], dV[2], dV[3]
     
-    return State{3}(rho * du, dp / rho, GAS_GAMMA_EULER * p * du)
+    return State{3, T}(rho * du, dp / rho, eq.gamma * p * du)
 end
 
 # 2. PRIMITIVE (Eulerian Frame)
-# A(V) = [u, ρ, 0; 0, u, 1/ρ; 0, γp, u]
-@inline function A_matrix_times_vector(::EulerEquation{1, 3, PR}, V::State{3}, dV::State{3}) where {PR <: Primitive}
+@inline function A_matrix_times_vector(eq::EulerEquation{1, 3, T, PR}, V::State{3, T}, dV::State{3, T}) where {T, PR <: Primitive}
     rho, u, p = V[1], V[2], V[3]
     drho, du, dp = dV[1], dV[2], dV[3]
     
-    return State{3}(
+    return State{3, T}(
         u * drho + rho * du,
         u * du + dp / rho,
-        GAS_GAMMA_EULER * p * du + u * dp
+        eq.gamma * p * du + u * dp
     )
 end
 
-@inline function gauss_lobatto_5()
-    # Standard 5-point Lobatto nodes on [-1, 1] are: -1, -sqrt(3/7), 0, sqrt(3/7), 1
-    # Transformed to [0, 1] using s = (x + 1) / 2
-    s2_offset = 0.5 * sqrt(3/7)
+@inline function gauss_lobatto_5(::Type{T}) where {T}
+    s2_offset = T(0.5) * sqrt(T(3)/T(7))
     nodes = (
-        0.0, 
-        0.5 - s2_offset, 
-        0.5, 
-        0.5 + s2_offset, 
-        1.0
+        zero(T), 
+        T(0.5) - s2_offset, 
+        T(0.5), 
+        T(0.5) + s2_offset, 
+        one(T)
     )
     
-    # Standard 5-point Lobatto weights on [-1, 1] are: 1/10, 49/90, 32/45, 49/90, 1/10
-    # Transformed to [0, 1] using W = w / 2
     weights = (
-        1/20,      # 0.05
-        49/180,    # ~0.2722
-        16/45,     # ~0.3555
-        49/180, 
-        1/20
+        T(1/20),
+        T(49/180),
+        T(16/45),
+        T(49/180), 
+        T(1/20)
     )
     return nodes, weights
 end
 
-@inline function simpson_3_point()
-    # Nodes on [0, 1]
-    nodes = (0.0, 0.5, 1.0)
-    # Weights (must sum to 1.0)
-    weights = (1/6, 4/6, 1/6)
+@inline function simpson_3_point(::Type{T}) where {T}
+    nodes = (zero(T), T(0.5), one(T))
+    weights = (T(1/6), T(4/6), T(1/6))
     return nodes, weights
 end
 
-@inline function path_integral(eq::HyperbolicPDE{D, M}, path::AbstractPath, uL::State{M}, uR::State{M}) where {D, M}
-    # Gauss-Lobatto 5 is strongly recommended for non-conservative integrals
-    nodes, weights = gauss_lobatto_5() 
+@inline function path_integral(eq::HyperbolicPDE{D, M, T}, path::AbstractPath, u_L::State{M, T}, u_R::State{M, T}) where {D, M, T}
+    nodes, weights = gauss_lobatto_5(T) 
     
-    integral = zero(State{M})
+    integral = zero(State{M, T})
 
     for i in eachindex(nodes)
         s = nodes[i]
         w = weights[i]
         
-        # The Path object handles all coordinate transformations internally!
-        U_s  = path(eq, s, uL, uR, DO0)
-        dU_s = path(eq, s, uL, uR, DO1)
+        U_s  = path(eq, s, u_L, u_R, DO0)
+        dU_s = path(eq, s, u_L, u_R, DO1)
         
         term = A_matrix_times_vector(eq, U_s, dU_s)
         integral += w * term
     end
     
-    if maximum(abs.(integral)) > 1000; error("Integral too large!"); end
+    if maximum(abs.(integral)) > T(1000)
+        error("Integral too large!")
+    end
     return integral
 end
 
-# 1. Conservative Fallback: Returns exactly 0 at compile time!
+# 1. Conservative Fallback
 @inline function evaluate_nc_jump(
-    eq::HyperbolicPDE{D, M, Conservative}, f_L::Flux{D, M}, f_R::Flux{D, M}, dist_k::Space{D}
-) where {D, M}
-    return zero(Flux{D, M})
+    eq::HyperbolicPDE{D, M, T, Conservative}, f_L::Flux{D, M, T}, f_R::Flux{D, M, T}, dist_k::Space{D, T}
+) where {D, M, T}
+    return zero(Flux{D, M, T})
 end
 
-# 2. Non-Conservative Evaluation: Triggers the Path Integral per dimension!
+# 2. Non-Conservative Evaluation
 @inline function evaluate_nc_jump(
-    eq::HyperbolicPDE{D, M, <:NCRepresentation}, f_L::Flux{D, M}, f_R::Flux{D, M}, dist_k::Space{D}
-) where {D, M}    
-    # Evaluate the path integral natively for each spatial dimension's interface state
-    return Flux{D, M}(ntuple(Val(D)) do d
-        # f_L[d] and f_R[d] securely extract the State{M} for the d-th axis
+    eq::HyperbolicPDE{D, M, T, <:NCRepresentation}, f_L::Flux{D, M, T}, f_R::Flux{D, M, T}, dist_k::Space{D, T}
+) where {D, M, T}    
+    return Flux{D, M, T}(ntuple(Val(D)) do d
         jump_d = path_integral(eq, eq.rep.path, f_L[d], f_R[d])
-        sign_i = dist_k[d] >= 0 ? 1.0 : -1.0
+        sign_i = dist_k[d] >= zero(T) ? one(T) : -one(T)
         
-        0.5 * jump_d * sign_i
-        # Multiply by 0.5 (for averaging) and project via the normal vector component
+        T(0.5) * jump_d * sign_i
     end)
 end
-

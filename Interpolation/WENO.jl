@@ -5,25 +5,21 @@
 @inline update_size!(::WENO, ::Int) = nothing
 @inline update_content!(::WENO, args...) = nothing
 
-function WENO(order::Int, dimension::Int; numericalFlux::NumericalFluxFunction = RusanovFlux())
+function WENO(::Type{T}, dimension::Int, M::Int, order::Int; flux::NumericalFluxFunction = RusanovFlux()) where {T}
     @assert order >= 2 "WENO requires order >= 2 for second derivatives."
     
     interpolator = Interpolator{dimension, order, 1}()
-    return WENO{dimension, typeof(interpolator)}(order, interpolator)
+    return WENO{dimension, M, T, typeof(interpolator)}(order, interpolator)
 end
 
 # =========================================================================
 # UNIVERSAL N-DIMENSIONAL WENO FUNCTOR
 # =========================================================================
 
-"""
-Functor for Universal N-Dimensional WENO.
-Calculates smoothness and weights natively component-by-component for State{M}.
-"""
-function (weno::WENO{D, I})(
-    eq::HyperbolicPDE, i::Int, f_i::State{M}, nb_slice::UnitRange{Int},       
-    pg::ParticleGrid{D}, ib::InteractionBuffer{D, M}    
-) where {D, M, I}
+function (weno::WENO{D, M, T, I})(
+    eq::HyperbolicPDE, i::Int, f_i::State{M, T}, nb_slice::UnitRange{Int},       
+    pg::ParticleGrid{D, M, T}, ib::InteractionBuffer{D, M, T}    
+) where {D, M, T, I}
 
     vel = velocity(eq, f_i)
     interp = weno.interpolator
@@ -31,39 +27,35 @@ function (weno::WENO{D, I})(
     w_all = get_weights(pg)
 
     num_nb = length(nb_slice)
-    if num_nb < weno.order; return zero(State{M}); end
+    if num_nb < weno.order; return zero(State{M, T}); end
 
-    # Use minimum dx for dimensional scaling
     scale_val = minimum(pg.meta.dx)
     dx2 = scale_val^2
     dx4 = dx2^2
-    e_tol = 1e-12
+    e_tol = T(1e-12)
 
     # --- 1. Central Stencil Calculation ---
     @inbounds for global_idx in nb_slice; ib.mask[global_idx] = true; end
     
-    # Bufferless masked MLS call
     resC = interp(nb_slice, dist_all, w_all, ib.df, ib.mask; scale=scale_val)
 
-    # Smoothness Indicator (Native SVector Component-wise!)
-    smoothC = zero(State{M})
+    smoothC = zero(State{M, T})
     @inbounds for k in 1:length(resC)
-        weight = k <= D ? dx2 : dx4 # First D terms are linear, rest are quadratic+
+        weight = k <= D ? dx2 : dx4 
         smoothC += (resC[k] .* resC[k]) * weight
     end
-    betaC = 0.5 ./ ((smoothC .+ e_tol) .^ 2)
+    betaC = T(0.5) ./ ((smoothC .+ e_tol) .^ 2)
 
-    div_total = zero(State{M})
+    div_total = zero(State{M, T})
 
     # --- 2. Directional Stencils (One per spatial dimension) ---
     for d in 1:D
         stencil_size = 0
-        use_left = vel[d] > 0.0
+        use_left = vel[d] > zero(T)
         
-        # Build Upwind-biased stencil for dimension d
         @inbounds for global_idx in nb_slice
             dist_k = dist_all[global_idx][d]
-            if (use_left && dist_k < 0.0) || (!use_left && dist_k >= 0.0)
+            if (use_left && dist_k < zero(T)) || (!use_left && dist_k >= zero(T))
                 ib.mask[global_idx] = true
                 stencil_size += 1
             else
@@ -71,22 +63,19 @@ function (weno::WENO{D, I})(
             end
         end
 
-        # Fallback to pure central if the directional stencil is starved
         if stencil_size < weno.order
             div_total += resC[d] * vel[d]
             continue
         end
 
-        # Interpolate directional stencil
         resS = interp(nb_slice, dist_all, w_all, ib.df, ib.mask; scale=scale_val)
 
-        # Smoothness Indicator for Directional Stencil
-        smoothS = zero(State{M})
+        smoothS = zero(State{M, T})
         @inbounds for k in 1:length(resS)
             weight = k <= D ? dx2 : dx4
             smoothS += (resS[k] .* resS[k]) * weight
         end
-        betaS = 0.5 ./ ((smoothS .+ e_tol) .^ 2)
+        betaS = T(0.5) ./ ((smoothS .+ e_tol) .^ 2)
 
         # --- 3. Apply Non-Linear Weights ---
         sum_beta = betaS .+ betaC
@@ -94,10 +83,7 @@ function (weno::WENO{D, I})(
         wS = betaS ./ sum_beta
         wC = betaC ./ sum_beta
 
-        # The derivative for dimension d is exactly the d-th basis component
         div_d = wS .* resS[d] .+ wC .* resC[d]
-        
-        # Accumulate into total divergence
         div_total += div_d * vel[d]
     end
 

@@ -1,189 +1,156 @@
 # =========================================================================
-# BASIS BUILDERS & MLS METADATA
+# COMPILE-TIME METADATA HELPERS
 # =========================================================================
 
-# B_LEN Resolver (Dimension D, Order IO) -> Length of basis
-@inline basis_length(::Val{1}, ::Val{1}) = Val(1)
-@inline basis_length(::Val{2}, ::Val{1}) = Val(2)
-@inline basis_length(::Val{3}, ::Val{1}) = Val(3)
+# 1. Compile-time factorial calculators
+_ct_factorial(n::Int) = n <= 1 ? 1 : n * _ct_factorial(n - 1)
+_ct_multi_factorial(t::Tuple) = prod(_ct_factorial.(t))
 
-@inline basis_length(::Val{1}, ::Val{2}) = Val(2)
-@inline basis_length(::Val{2}, ::Val{2}) = Val(5)
-@inline basis_length(::Val{3}, ::Val{2}) = Val(9)
-
-@inline basis_length(::Val{1}, ::Val{3}) = Val(3)
-@inline basis_length(::Val{2}, ::Val{3}) = Val(9)
-@inline basis_length(::Val{3}, ::Val{3}) = Val(19)
-
-@inline basis_length(::Val{1}, ::Val{4}) = Val(4)
-@inline basis_length(::Val{2}, ::Val{4}) = Val(14)
-
-@inline basis_length(::Val{1}, ::Val{5}) = Val(5)
-@inline basis_length(::Val{2}, ::Val{5}) = Val(20)
-
-# =========================================================================
-# EPD_1 BASIS TRUNCATION
-# =========================================================================
-@generated function mask_basis(basis::SVector{B_LEN, Float64}, order::Int, ::Val{D}) where {B_LEN, D}
-    expr = :(zero(SVector{B_LEN, Float64}))
-    # Assuming MAX_ORDER generally won't exceed 5 based on your Interpolators.jl
-    for o in 5:-1:2 
-        len = typeof(basis_length(Val(D), Val(o-1))).parameters[1]
-        mask_tuple = ntuple(k -> k <= len ? :(basis[$k]) : :(0.0), B_LEN)
-        expr = :(order == $o ? SVector{B_LEN, Float64}($(mask_tuple...)) : $expr)
+# 2. Generates exponents (a_1, a_2, ..., a_D) summing to the required orders
+function _generate_exponents(D::Int, max_order::Int)
+    res = NTuple{D, Int}[]
+    for order in 1:max_order
+        current_order_tuples = NTuple{D, Int}[]
+        
+        for t in Iterators.product(ntuple(_ -> 0:order, D)...)
+            if sum(t) == order
+                push!(current_order_tuples, t)
+            end
+        end
+        
+        # FIX: Using `reverse(x)` ensures (1, 0) comes before (0, 1).
+        # This guarantees that index 1 is X, index 2 is Y, index 3 is Z!
+        sort!(current_order_tuples, by = x -> (-maximum(x), reverse(x)))
+        append!(res, current_order_tuples)
     end
-    return expr
+    return res
+end
+
+# 3. Dynamic B_LEN Resolver
+@generated function basis_length(::Val{D}, ::Val{IO}) where {D, IO}
+    len = length(_generate_exponents(D, IO))
+    return :(Val($len))
 end
 
 # =========================================================================
-# BASIS VECTOR EVALUATORS
+# BASIS VECTOR EVALUATORS (Fully Generalized & Type-Stable)
 # =========================================================================
-# Evaluates the polynomial basis natively.
 
-# --- Order 1 ---
-@inline build_basis(::Val{1}, d::SVector{1, Float64}) = SVector(d[1])
-@inline build_basis(::Val{1}, d::SVector{2, Float64}) = SVector(d[1], d[2])
-@inline build_basis(::Val{1}, d::SVector{3, Float64}) = SVector(d[1], d[2], d[3])
-
-# --- Order 2 ---
-@inline build_basis(::Val{2}, d::SVector{1, Float64}) = SVector(d[1], 0.5*d[1]^2)
-@inline build_basis(::Val{2}, d::SVector{2, Float64}) = SVector(d[1], d[2], 0.5*d[1]^2, 0.5*d[2]^2, d[1]*d[2])
-@inline build_basis(::Val{2}, d::SVector{3, Float64}) = SVector(
-    d[1], d[2], d[3], 
-    0.5*d[1]^2, 0.5*d[2]^2, 0.5*d[3]^2, d[1]*d[2], d[1]*d[3], d[2]*d[3]
-)
-
-# --- Order 3 ---
-@inline build_basis(::Val{3}, d::SVector{1, Float64}) = SVector(d[1], 0.5*d[1]^2, (1.0/6.0)*d[1]^3)
-@inline build_basis(::Val{3}, d::SVector{2, Float64}) = SVector(
-    d[1], d[2], 
-    0.5*d[1]^2, 0.5*d[2]^2, d[1]*d[2], 
-    (1.0/6.0)*d[1]^3, (1.0/6.0)*d[2]^3, 0.5*d[1]^2*d[2], 0.5*d[1]*d[2]^2
-)
-@inline build_basis(::Val{3}, d::SVector{3, Float64}) = SVector(
-    d[1], d[2], d[3], 
-    0.5*d[1]^2, 0.5*d[2]^2, 0.5*d[3]^2, d[1]*d[2], d[1]*d[3], d[2]*d[3],
-    (1.0/6.0)*d[1]^3, (1.0/6.0)*d[2]^3, (1.0/6.0)*d[3]^3, 
-    0.5*d[1]^2*d[2], 0.5*d[1]^2*d[3], 0.5*d[1]*d[2]^2, 0.5*d[2]^2*d[3], 0.5*d[1]*d[3]^2, 0.5*d[2]*d[3]^2, 
-    d[1]*d[2]*d[3]
-)
-
-# --- Order 4 ---
-@inline build_basis(::Val{4}, d::SVector{1, Float64}) = SVector(d[1], 0.5*d[1]^2, (1.0/6.0)*d[1]^3, (1.0/24.0)*d[1]^4)
-@inline build_basis(::Val{4}, d::SVector{2, Float64}) = SVector(
-    d[1], d[2], 
-    0.5*d[1]^2, 0.5*d[2]^2, d[1]*d[2], 
-    (1.0/6.0)*d[1]^3, (1.0/6.0)*d[2]^3, 0.5*d[1]^2*d[2], 0.5*d[1]*d[2]^2,
-    (1.0/24.0)*d[1]^4, (1.0/24.0)*d[2]^4, (1.0/6.0)*d[1]^3*d[2], (1.0/6.0)*d[1]*d[2]^3, 0.25*d[1]^2*d[2]^2
-)
-
-# --- Order 5 ---
-@inline build_basis(::Val{5}, d::SVector{1, Float64}) = SVector(d[1], 0.5*d[1]^2, (1.0/6.0)*d[1]^3, (1.0/24.0)*d[1]^4, (1.0/120.0)*d[1]^5)
-@inline build_basis(::Val{5}, d::SVector{2, Float64}) = SVector(
-    d[1], d[2], 
-    0.5*d[1]^2, 0.5*d[2]^2, d[1]*d[2], 
-    (1.0/6.0)*d[1]^3, (1.0/6.0)*d[2]^3, 0.5*d[1]^2*d[2], 0.5*d[1]*d[2]^2,
-    (1.0/24.0)*d[1]^4, (1.0/24.0)*d[2]^4, (1.0/6.0)*d[1]^3*d[2], (1.0/6.0)*d[1]*d[2]^3, 0.25*d[1]^2*d[2]^2,
-    (1.0/120.0)*d[1]^5, (1.0/120.0)*d[2]^5, (1.0/24.0)*d[1]^4*d[2], (1.0/24.0)*d[1]*d[2]^4, (1.0/12.0)*d[1]^3*d[2]^2, (1.0/12.0)*d[1]^2*d[2]^3
-)
-
+@generated function build_basis(::Val{IO}, d::SVector{D, T}) where {IO, D, T}
+    exps = _generate_exponents(D, IO)
+    B_LEN = length(exps)
+    
+    exprs = Any[] # Changed from Expr[] to Any[]
+    for t in exps
+        denom = _ct_multi_factorial(t)
+        
+        # Precompute the Taylor prefactor if it is not 1
+        term = denom == 1 ? nothing : :(T($(1.0 / denom)))
+        
+        # Append the polynomial terms
+        for i in 1:D
+            if t[i] == 1
+                term = isnothing(term) ? :(d[$i]) : :($term * d[$i])
+            elseif t[i] > 1
+                term = isnothing(term) ? :(d[$i]^$(t[i])) : :($term * d[$i]^$(t[i]))
+            end
+        end
+        
+        push!(exprs, term)
+    end
+    
+    return :(SVector{$B_LEN, T}($(exprs...)))
+end
 
 # =========================================================================
 # PHYSICAL SCALE FACTORS
 # =========================================================================
-# Matches the basis terms to convert the scaled c_s back into true physical derivatives
 
-# --- Order 1 ---
-@inline build_scale_factors(::Val{1}, ::Val{1}, invL) = SVector(invL)
-@inline build_scale_factors(::Val{2}, ::Val{1}, invL) = SVector(invL, invL)
-@inline build_scale_factors(::Val{3}, ::Val{1}, invL) = SVector(invL, invL, invL)
+@generated function build_scale_factors(::Val{D}, ::Val{IO}, invL::T) where {D, IO, T}
+    exps = _generate_exponents(D, IO)
+    B_LEN = length(exps)
+    
+    exprs = Any[] # Changed from Expr[] to Any[]
+    for t in exps
+        deg = sum(t)
+        push!(exprs, deg == 1 ? :(invL) : :(invL^$deg))
+    end
+    
+    return :(SVector{$B_LEN, T}($(exprs...)))
+end
 
-# --- Order 2 ---
-@inline build_scale_factors(::Val{1}, ::Val{2}, invL) = SVector(invL, invL^2)
-@inline build_scale_factors(::Val{2}, ::Val{2}, invL) = SVector(invL, invL, invL^2, invL^2, invL^2)
-@inline build_scale_factors(::Val{3}, ::Val{2}, invL) = SVector(invL, invL, invL, invL^2, invL^2, invL^2, invL^2, invL^2, invL^2)
+# =========================================================================
+# EPD_1 BASIS TRUNCATION
+# =========================================================================
 
-# --- Order 3 ---
-@inline build_scale_factors(::Val{1}, ::Val{3}, invL) = SVector(invL, invL^2, invL^3)
-@inline build_scale_factors(::Val{2}, ::Val{3}, invL) = SVector(invL, invL, invL^2, invL^2, invL^2, invL^3, invL^3, invL^3, invL^3)
-@inline build_scale_factors(::Val{3}, ::Val{3}, invL) = SVector(
-    invL, invL, invL, 
-    invL^2, invL^2, invL^2, invL^2, invL^2, invL^2, 
-    invL^3, invL^3, invL^3, invL^3, invL^3, invL^3, invL^3, invL^3, invL^3, invL^3
-)
+@generated function mask_basis(basis::SVector{B_LEN, T}, order::Int, ::Val{D}) where {B_LEN, D, T}
+    max_o = 1
+    while length(_generate_exponents(D, max_o)) < B_LEN
+        max_o += 1
+    end
+    
+    expr = :(zero(SVector{B_LEN, T}))
+    
+    # FIX: Shift max_o up by 1 to match the spatial `order` numbering
+    max_spatial_order = max_o + 1
+    
+    for o in max_spatial_order:-1:2 
+        len = length(_generate_exponents(D, o - 1))
+        
+        mask_tuple = ntuple(k -> k <= len ? :(basis[$k]) : :(zero(T)), B_LEN)
+        expr = :(order == $o ? SVector{B_LEN, T}($(mask_tuple...)) : $expr)
+    end
+    
+    return expr
+end
 
-# --- Order 4 ---
-@inline build_scale_factors(::Val{1}, ::Val{4}, invL) = SVector(invL, invL^2, invL^3, invL^4)
-@inline build_scale_factors(::Val{2}, ::Val{4}, invL) = SVector(
-    invL, invL, 
-    invL^2, invL^2, invL^2, 
-    invL^3, invL^3, invL^3, invL^3, 
-    invL^4, invL^4, invL^4, invL^4, invL^4
-)
-
-# --- Order 5 ---
-@inline build_scale_factors(::Val{1}, ::Val{5}, invL) = SVector(invL, invL^2, invL^3, invL^4, invL^5)
-@inline build_scale_factors(::Val{2}, ::Val{5}, invL) = SVector(
-    invL, invL, 
-    invL^2, invL^2, invL^2, 
-    invL^3, invL^3, invL^3, invL^3, 
-    invL^4, invL^4, invL^4, invL^4, invL^4,
-    invL^5, invL^5, invL^5, invL^5, invL^5, invL^5
-)
 # =========================================================================
 # UPWIND MATRIX-VECTORIZED DISPATCH (Stateless)
 # =========================================================================
 
 function (interp::Interpolator{D, IO, DO})(
-    nb_slice::UnitRange{Int}, dists::AbstractVector{Space{D}}, weights::AbstractVector{Float64},
-    dfFluxVec::AbstractVector{Flux{D, M}}, dfVec_workspace::AbstractVector{State{M}};
-    scale::Space{D}
-) where {D, IO, DO, M}
+    nb_slice::UnitRange{Int}, dists::AbstractVector{Space{D, T}}, weights::AbstractVector{T},
+    dfFluxVec::AbstractVector{Flux{D, M, T}}, dfVec_workspace::AbstractVector{State{M, T}};
+    scale::Space{D, T}
+) where {D, IO, DO, M, T}
     
     div_tuple = ntuple(Val(D)) do d
-        
-        # Pull the exact directional flux column natively from the global array
         @inbounds for global_idx in nb_slice
             dfVec_workspace[global_idx] = dfFluxVec[global_idx][d] 
         end
         
-        # Call the Universal Interpolator with the global slice
         res = interp(nb_slice, dists, weights, dfVec_workspace; scale = scale[d])
-        
-        # The first `D` elements of the basis are always the linear spatial slopes!
-        # E.g., for d=1 (X-direction), res[1] is exactly dFx/dx. 
         return res[d] 
     end
     
     return sum(div_tuple)
 end
+
 # =========================================================================
 # THE UNIVERSAL MLS INTERPOLATOR
 # =========================================================================
 
 function (interp::Interpolator{D, IO, 1})(
     nb_slice::UnitRange{Int},
-    distVec::AbstractVector{Space{D}}, 
-    wVec::AbstractVector{Float64},
-    dfVec::AbstractVector{State{M}};
-    scale::Float64=1.0
-) where {D, IO, M}
+    distVec::AbstractVector{Space{D, T}}, 
+    wVec::AbstractVector{T},
+    dfVec::AbstractVector{State{M, T}};
+    scale::T=one(T)
+) where {D, IO, M, T}
     
-    # Resolves the matrix sizes perfectly at compile time
     B_LEN_VAL = basis_length(Val(D), Val(IO))
-    
     return _mls_solve(nb_slice, distVec, wVec, dfVec, scale, B_LEN_VAL, Val(IO), Val(D))
 end
 
 @inline function _mls_solve(
     nb_slice::UnitRange{Int}, distVec::AbstractVector, wVec::AbstractVector,
-    dfVec::AbstractVector{State{M}}, scale::Float64,
+    dfVec::AbstractVector{State{M, T}}, scale::T,
     ::Val{B_LEN}, ::Val{IO}, ::Val{D}
-) where {B_LEN, IO, D, M}
+) where {B_LEN, IO, D, M, T}
     
-    invL = 1.0 / scale
-    N_s = zero(SMatrix{B_LEN, B_LEN, Float64, B_LEN * B_LEN})
-    b_s = zero(SMatrix{B_LEN, M, Float64, B_LEN * M})
+    invL = one(T) / scale
+    N_s = zero(SMatrix{B_LEN, B_LEN, T, B_LEN * B_LEN})
+    b_s = zero(SMatrix{B_LEN, M, T, B_LEN * M})
 
     @inbounds for i in nb_slice
         w = wVec[i]
@@ -193,49 +160,41 @@ end
         b_s += w * (p_s * dfVec[i]') 
     end
     
-    # 1. Perform a single, fast Cholesky factorization.
-    # check=false prevents it from throwing an error if the matrix is singular (e.g., starved particle)
     C = cholesky(Symmetric(N_s), check=false)
     
-    # 2. Check if the factorization succeeded (replaces the det() check)
     if !LinearAlgebra.issuccess(C)
-        return zero(SVector{B_LEN, State{M}})
+        return zero(SVector{B_LEN, State{M, T}})
     end
     
-    # 3. Solve the system using the already-factorized matrix!
     c_s = C \ b_s 
-    
     scales = build_scale_factors(Val(D), Val(IO), invL)
     
-    # (Optional: Use scalar indexing to guarantee zero allocations as discussed previously)
-    return SVector{B_LEN, State{M}}(ntuple(Val(B_LEN)) do k
-        row_val = State{M}(ntuple(m -> c_s[k, m], Val(M)))
+    return SVector{B_LEN, State{M, T}}(ntuple(Val(B_LEN)) do k
+        row_val = State{M, T}(ntuple(m -> c_s[k, m], Val(M)))
         row_val * scales[k]
     end)
 end
 
-# Inside InterpolationUtils.jl (below the standard Universal MLS Interpolator)
-
 function (interp::Interpolator{D, IO, 1})(
-    nb_slice::UnitRange{Int}, distVec::AbstractVector{Space{D}}, 
-    wVec::AbstractVector{Float64}, dfVec::AbstractVector{State{M}},
-    mask::AbstractVector{Bool}; scale::Float64=1.0
-) where {D, IO, M}
+    nb_slice::UnitRange{Int}, distVec::AbstractVector{Space{D, T}}, 
+    wVec::AbstractVector{T}, dfVec::AbstractVector{State{M, T}},
+    mask::AbstractVector{Bool}; scale::T=one(T)
+) where {D, IO, M, T}
     
     B_LEN_VAL = basis_length(Val(D), Val(IO))
     return _mls_solve_masked(nb_slice, distVec, wVec, dfVec, mask, scale, B_LEN_VAL, Val(IO), Val(D))
 end
 
 @inline function _mls_solve_masked(
-    nb_slice::UnitRange{Int}, distVec::AbstractVector{Space{D}}, 
-    wVec::AbstractVector{Float64}, dfVec::AbstractVector{State{M}},
-    mask::AbstractVector{Bool}, scale::Float64,
+    nb_slice::UnitRange{Int}, distVec::AbstractVector{Space{D, T}}, 
+    wVec::AbstractVector{T}, dfVec::AbstractVector{State{M, T}},
+    mask::AbstractVector{Bool}, scale::T,
     ::Val{B_LEN}, ::Val{IO}, ::Val{D}
-) where {B_LEN, IO, D, M}
+) where {B_LEN, IO, D, M, T}
     
-    invL = 1.0 / scale
-    N_s = zero(SMatrix{B_LEN, B_LEN, Float64, B_LEN * B_LEN})
-    b_s = zero(SMatrix{B_LEN, M, Float64, B_LEN * M})
+    invL = one(T) / scale
+    N_s = zero(SMatrix{B_LEN, B_LEN, T, B_LEN * B_LEN})
+    b_s = zero(SMatrix{B_LEN, M, T, B_LEN * M})
 
     @inbounds for i in nb_slice
         if !mask[i]; continue; end
@@ -246,23 +205,29 @@ end
         b_s += w * (p_s * dfVec[i]') 
     end
     
-        # 1. Perform a single, fast Cholesky factorization.
-    # check=false prevents it from throwing an error if the matrix is singular (e.g., starved particle)
     C = cholesky(Symmetric(N_s), check=false)
     
-    # 2. Check if the factorization succeeded (replaces the det() check)
     if !LinearAlgebra.issuccess(C)
-        return zero(SVector{B_LEN, State{M}})
+        return zero(SVector{B_LEN, State{M, T}})
     end
     
-    # 3. Solve the system using the already-factorized matrix!
     c_s = C \ b_s 
-    
     scales = build_scale_factors(Val(D), Val(IO), invL)
     
-    # (Optional: Use scalar indexing to guarantee zero allocations as discussed previously)
-    return SVector{B_LEN, State{M}}(ntuple(Val(B_LEN)) do k
-        row_val = State{M}(ntuple(m -> c_s[k, m], Val(M)))
+    return SVector{B_LEN, State{M, T}}(ntuple(Val(B_LEN)) do k
+        row_val = State{M, T}(ntuple(m -> c_s[k, m], Val(M)))
         row_val * scales[k]
     end)
 end
+
+include("FluxFunctions.jl")
+
+include("Central.jl")
+
+include("Limiter.jl")
+include("MOOD.jl")
+include("MUSCL.jl")
+
+include("Upwind.jl")
+
+include("WENO.jl")

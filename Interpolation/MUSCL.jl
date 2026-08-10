@@ -2,21 +2,18 @@
 # DYNAMIC DISPATCH ROUTER (Zero-Allocation)
 # =========================================================================
 
-# Helper to pad smaller gradients with zeros up to the MAX basis length
 @inline _pad_grad(g::SVector{L, T}, ::Val{MAX_L}) where {L, MAX_L, T} = SVector{MAX_L, T}(ntuple(i -> i <= L ? g[i] : zero(T), Val(MAX_L)))
 
-# Dispatch for Order 1 (Constant / Euler) -> Returns all zeros
-@inline _compute_raw_grad(::ConstantReconstruction, nb_slice, dist_all, w_all, df, scale, ::Val{MAX_B_LEN}, ::Type{State{M}}) where {MAX_B_LEN, M} = zero(SVector{MAX_B_LEN, State{M}})
+@inline _compute_raw_grad(::ConstantReconstruction, nb_slice, dist_all, w_all, df, scale, ::Val{MAX_B_LEN}, ::Type{State{M, T}}) where {MAX_B_LEN, M, T} = zero(SVector{MAX_B_LEN, State{M, T}})
 
-# Dispatch for Order > 1 (MLS Interpolator)
-@inline function _compute_raw_grad(interp::Interpolator, nb_slice, dist_all, w_all, df, scale, ::Val{MAX_B_LEN}, ::Type{State{M}}) where {MAX_B_LEN, M}
+@inline function _compute_raw_grad(interp::Interpolator, nb_slice, dist_all, w_all, df, scale, ::Val{MAX_B_LEN}, ::Type{State{M, T}}) where {MAX_B_LEN, M, T}
     raw = interp(nb_slice, dist_all, w_all, df; scale=scale)
     return _pad_grad(raw, Val(MAX_B_LEN))
 end
-@inline _get_interface_orders(::MOODStrategy, oi, oj) = (min(oi, oj), min(oi, oj)) # Default EPD1/EPD2 behavior
-@inline _get_interface_orders(::EPD0, oi, oj) = (oi, oj) # True EPD0 Asymmetric behavior
-# Generated function creates a highly optimized if-elseif chain at compile time 
-# so we can index a Tuple using a runtime variable (`order`) without type instability!
+
+@inline _get_interface_orders(::MOODStrategy, oi, oj) = (min(oi, oj), min(oi, oj)) 
+@inline _get_interface_orders(::EPD0, oi, oj) = (oi, oj) 
+
 @generated function dispatch_interpolator(interps::Tuple, order::Int, args...)
     N = length(interps.parameters)
     expr = :(error("Order out of bounds"))
@@ -26,19 +23,17 @@ end
     return expr
 end
 
-# Dynamically drops the MLS degree of the divergence operator to prevent Runge's Phenomenon
-@generated function compute_dynamic_divergence(interps::Tuple, div_idx::Int, nb_slice, dist_all, w_all, dfFlux, df_scratch, scale)
+@generated function compute_dynamic_divergence(interps::Tuple, div_idx::Int, nb_slice, dist_all, w_all, df_flux, df_scratch, scale)
     N = length(interps.parameters)
-    expr = :(interps[$N](nb_slice, dist_all, w_all, dfFlux, df_scratch; scale=scale))
-    # Build if/else chain from N-1 down to 2 (Since Index 1 is Constant/Zero, we stop at 2 for Linear/1st-Deriv)
+    expr = :(interps[$N](nb_slice, dist_all, w_all, df_flux, df_scratch; scale=scale))
     for i in (N-1):-1:2
-        expr = :(div_idx == $i ? interps[$i](nb_slice, dist_all, w_all, dfFlux, df_scratch; scale=scale) : $expr)
+        expr = :(div_idx == $i ? interps[$i](nb_slice, dist_all, w_all, df_flux, df_scratch; scale=scale) : $expr)
     end
     return expr
 end
 
 # =========================================================================
-# DIVERGENCE ORDER DISPATCH (Zero-Overhead Compile-Time Logic)
+# DIVERGENCE ORDER DISPATCH
 # =========================================================================
 @inline _resolve_div_idx(::Val{0}, p_order) = max(2, p_order)
 @inline _resolve_div_idx(::Val{DO}, p_order) where {DO} = max(2, DO)
@@ -47,24 +42,20 @@ end
 # CONSTRUCTOR & SIZING
 # =========================================================================
 
-# 1. Add the missing functor for ConstantReconstruction
 @inline function (::ConstantReconstruction)(
-    nb_slice, dist_all, w_all, dfFlux, df_scratch; scale
-)
-    return 0.0
+    nb_slice, dist_all, w_all, df_flux, df_scratch; scale::T
+) where {T}
+    return zero(T)
 end
 
-# 2. Update the MUSCL Constructor
 function MUSCL(
-    dimension::Int, M::Int, max_order::Int;
-    div_order::Int=0, limiter=NoLimiter(), numericalFlux=RusanovFlux(), mood=NoMOOD()
-)
+    ::Type{T}, dimension::Int, M::Int, max_order::Int;
+    div_order::Int=0, limiter=NoLimiter(), flux=RusanovFlux(), mood=NoMOOD()
+) where {T}
     @assert max_order >= 1 "MUSCL must have a maximum order of at least 1."
     @assert div_order >= 0 "Divergence order only supports 0 (adaptive) or positive values!"
     if div_order > max_order; div_order = max_order; end
     
-    # Fake the degree to at least 1 for the zero-padding type stability 
-    # (Order 1 gradients will just remain safely zeroed out)
     max_degree = max(1, max_order - 1) 
     B_LEN_VAL = basis_length(Val(dimension), Val(max_degree))
     B_LEN = typeof(B_LEN_VAL).parameters[1] 
@@ -73,12 +64,12 @@ function MUSCL(
         k == 1 ? ConstantReconstruction() : Interpolator{dimension, k - 1, 1}()
     end
     
-    return MUSCL{dimension, M, B_LEN, max_order, div_order, typeof(mood), typeof(interps), typeof(limiter), typeof(numericalFlux)}(
-        interps, limiter, numericalFlux, mood, SVector{B_LEN,State{M}}[], Int[], Bool[]
+    return MUSCL{dimension, M, T, B_LEN, max_order, div_order, typeof(mood), typeof(interps), typeof(limiter), typeof(flux)}(
+        interps, limiter, flux, mood, SVector{B_LEN,State{M, T}}[], Int[], Bool[]
     )
 end
 
-function update_size!(muscl::MUSCL{D, M, B_LEN, MAX_ORDER}, N_particles::Int) where {D, M, B_LEN, MAX_ORDER}
+function update_size!(muscl::MUSCL{D, M, T, B_LEN, MAX_ORDER}, N_particles::Int) where {D, M, T, B_LEN, MAX_ORDER}
     ensure_capacity!(muscl.gradients, N_particles)
     ensure_capacity!(muscl.particle_orders, N_particles)
     ensure_capacity!(muscl.mood_triggered, N_particles)
@@ -92,31 +83,29 @@ end
 # =========================================================================
 
 function update_content!(
-    muscl::MUSCL{D, M, B_LEN, MAX_ORDER}, i::Int, f_i::State{M}, nb_slice::UnitRange{Int},
-    pg::ParticleGrid{D}, ib::InteractionBuffer{D, M}
-) where {D, M, B_LEN, MAX_ORDER}
+    muscl::MUSCL{D, M, T, B_LEN, MAX_ORDER}, i::Int, f_i::State{M, T}, nb_slice::UnitRange{Int},
+    pg::ParticleGrid{D, M, T}, ib::InteractionBuffer{D, M, T}
+) where {D, M, T, B_LEN, MAX_ORDER}
     
     num_nb = length(nb_slice)
     p_order = muscl.particle_orders[i]
 
-    # Dynamically determine minimum neighbors based on current order
     req_deg = p_order - 1
     req_nb = req_deg == 0 ? 0 : typeof(basis_length(Val(D), Val(req_deg))).parameters[1]
     
     if i < 0 || num_nb < req_nb
-        muscl.particle_orders[i] = 1 # Force drop to Order 1 if physically starved
+        muscl.particle_orders[i] = 1 
         p_order = 1
     end
 
     dist_all = get_distances(pg)
     w_all = get_weights(pg)
 
-    # Clean, zero-allocation dispatch to the correct interpolator!
     scale_val = minimum(pg.meta.dx)
-    raw_grad = dispatch_interpolator(muscl.interpolators, p_order, nb_slice, dist_all, w_all, ib.df, scale_val, Val(B_LEN), State{M})
+    raw_grad = dispatch_interpolator(muscl.interpolators, p_order, nb_slice, dist_all, w_all, ib.df, scale_val, Val(B_LEN), State{M, T})
     
     if p_order == 1
-        muscl.gradients[i] = raw_grad # Order 1 is strictly 0.0, no limiters needed
+        muscl.gradients[i] = raw_grad 
     else
         muscl.gradients[i] = _limit_slopes(muscl.limiter, raw_grad, nb_slice, f_i, ib.f, pg, dist_all, Val(MAX_ORDER - 1))
     end
@@ -127,13 +116,13 @@ end
 # FLUX PASS: RECONSTRUCT INTERFACES AND COMPUTE DIVERGENCE
 # =========================================================================
 
-function (muscl::MUSCL{D, M, B_LEN, MAX_ORDER, DIV_ORDER})(
-    eq::HyperbolicPDE, i::Int, f_i::State{M}, nb_slice::UnitRange{Int},       
-    pg::ParticleGrid{D}, ib::InteractionBuffer{D, M}    
-) where {D, M, B_LEN, MAX_ORDER, DIV_ORDER}
+function (muscl::MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER})(
+    eq::HyperbolicPDE, i::Int, f_i::State{M, T}, nb_slice::UnitRange{Int},       
+    pg::ParticleGrid{D, M, T}, ib::InteractionBuffer{D, M, T}    
+) where {D, M, T, B_LEN, MAX_ORDER, DIV_ORDER}
 
     if isempty(nb_slice)
-        return zero(State{M})
+        return zero(State{M, T})
     end
 
     grad_i = muscl.gradients[i]
@@ -141,15 +130,11 @@ function (muscl::MUSCL{D, M, B_LEN, MAX_ORDER, DIV_ORDER})(
     dist_all = get_distances(pg)
     nb_indices = pg.neighbor.indices
     
-    nb_indices = pg.neighbor.indices
     strategy = muscl.mood.strategy
-    
     is_nomood = muscl.mood.criterion isa NoMOOD
     effective_orders = pg.shared.int_buffer
     
-    # Pre-evaluate the effective order for cell i ONCE
     eff_order_i = is_nomood ? MAX_ORDER : effective_orders[i]
-    
     
     @inbounds for global_idx in nb_slice
         dist_k = dist_all[global_idx]
@@ -157,11 +142,10 @@ function (muscl::MUSCL{D, M, B_LEN, MAX_ORDER, DIV_ORDER})(
         j_idx  = nb_indices[global_idx]
         
         grad_j = muscl.gradients[j_idx]
-        
         eff_order_j = is_nomood ? MAX_ORDER : effective_orders[j_idx]
         
-        p_interface_i_raw = build_basis(Val(MAX_ORDER-1),  0.5 * dist_k)
-        p_interface_j_raw = build_basis(Val(MAX_ORDER-1), -0.5 * dist_k)
+        p_interface_i_raw = build_basis(Val(MAX_ORDER-1),  T(0.5) * dist_k)
+        p_interface_j_raw = build_basis(Val(MAX_ORDER-1), -T(0.5) * dist_k)
 
         interface_order_i, interface_order_j = _get_interface_orders(strategy, eff_order_i, eff_order_j)
         
@@ -175,21 +159,20 @@ function (muscl::MUSCL{D, M, B_LEN, MAX_ORDER, DIV_ORDER})(
         F_ji = flux(eq, fji)
         
         f_L, f_R, F_L, F_R = sort_flux(fij, fji, F_ij, F_ji, dist_k)
-        F_num = muscl.numericalFlux(f_L, f_R, F_L, F_R, eq)
+        F_num = muscl.flux(f_L, f_R, F_L, F_R, eq)
         nc_jump = evaluate_nc_jump(eq, f_L, f_R, dist_k)
         
-        ib.dfFlux[global_idx] = F_num - F_i + nc_jump
+        ib.df_flux[global_idx] = F_num - F_i + nc_jump
     end
 
     p_order = muscl.particle_orders[i]
-    
     div_idx = _resolve_div_idx(Val(DIV_ORDER), p_order)
     
     div = compute_dynamic_divergence(
         muscl.interpolators, div_idx, 
         nb_slice, dist_all, get_weights(pg), 
-        ib.dfFlux, ib.df_scratch, pg.meta.dx
+        ib.df_flux, ib.df_scratch, pg.meta.dx
     )
     
-    return 2.0 * div
+    return T(2.0) * div
 end

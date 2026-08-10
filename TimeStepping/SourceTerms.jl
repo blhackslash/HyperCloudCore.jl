@@ -1,4 +1,4 @@
-function Kin2Macro(edges::Union{AbstractVector{Int},Tuple})
+function Kin2Macro(edges::Union{Vector{Int},Tuple})
     NM = length(edges) - 1
     NK = edges[end] - 1
     ranges = ntuple(i -> edges[i]:(edges[i+1]-1), NM)
@@ -24,50 +24,39 @@ end
 # =========================================================================
 # TYPE-STABLE FLUX DOT PRODUCT
 # =========================================================================
-
-# Natively handles the Flux{D, NM} (SVector{D, State{NM}}) structure without Tuples!
-@inline function flux_dot(F::Flux{D, NM}, m_idx::Int, scaled_inv_speed::Space{D}) where {D, NM}
+@inline function flux_dot(F::Flux{D, NM, T}, m_idx::Int, scaled_inv_speed::Space{D, T}) where {D, NM, T}
     return sum(ntuple(d -> F[d][m_idx] * scaled_inv_speed[d], Val(D)))
 end
 
-
-# =========================================================================
-# LOCAL RELAXATION SOURCE TERM
-# =========================================================================
-
-
-
 function RelaxationSourceTerm(
     km::Kin2Macro{NM, NK}, 
-    eps::Float64, 
-    coeffs::State{NM}, 
-    eq_kin::LinearAdvection{D, NK}, 
-    interior_factor::Float64 = Float64(D)
-) where {D, NM, NK}
+    eps::T, 
+    coeffs::State{NM, T}, 
+    eq_kin::LinearAdvection{D, NK, T}, 
+    interior_factor::T = T(D)
+) where {D, NM, NK, T}
     
-    # Pre-calculate (interior_factor / v) for every kinetic component
     scaled_inv_speeds = ntuple(Val(NK)) do k
-        Space{D}(ntuple(Val(D)) do d
+        Space{D, T}(ntuple(Val(D)) do d
             v = eq_kin.vel[d][k]
-            abs(v) > 1e-14 ? interior_factor / v : 0.0
+            abs(v) > T(1e-14) ? interior_factor / v : zero(T)
         end)
     end
     
-    return RelaxationSourceTerm{D, NM, NK}(km, 1.0 / eps, coeffs, SVector{NK, Space{D}}(scaled_inv_speeds))
+    return RelaxationSourceTerm{D, NM, NK, T}(km, one(T) / eps, coeffs, SVector{NK, Space{D, T}}(scaled_inv_speeds))
 end
 
-# LOCAL Source Term Functor
-@inline function (rs::RelaxationSourceTerm{D, NM, NK})(
-    U_kinetic::State{NK},
+@inline function (rs::RelaxationSourceTerm{D, NM, NK, T})(
+    U_kinetic::State{NK, T},
     p_idx::Int,
-    eq_macro::HyperbolicPDE{D},
+    eq_macro::HyperbolicPDE{D, NM, T},
     km::Kin2Macro{NM, NK}
-) where {D, NM, NK}
+) where {D, NM, NK, T}
     
     u_macro = km(U_kinetic)
     flux_vals = flux(eq_macro, u_macro)
     
-    return State{NK}(ntuple(Val(NK)) do k
+    return State{NK, T}(ntuple(Val(NK)) do k
         m_idx = km(k)
         f_dot_inv_lambda = flux_dot(flux_vals, m_idx, rs.scaled_inv_speeds[k])
         
@@ -76,43 +65,37 @@ end
     end)
 end
 
-# =========================================================================
-# NON-LOCAL RELAXATION SOURCE TERM
-# =========================================================================
-
-
-
 function NonLocalRelaxationSourceTerm(
     km::Kin2Macro{NM, NK}, 
-    eps::Float64, 
-    coeffs::State{NM}, 
-    eq_kin::LinearAdvection{D, NK}, 
-    interior_factor::Float64 = Float64(D)
-) where {D, NM, NK}
+    eps::T, 
+    coeffs::State{NM, T}, 
+    eq_kin::LinearAdvection{D, NK, T}, 
+    interior_factor::T = T(D)
+) where {D, NM, NK, T}
     
     scaled_inv_speeds = ntuple(Val(NK)) do k
-        Space{D}(ntuple(Val(D)) do d
+        Space{D, T}(ntuple(Val(D)) do d
             v = eq_kin.vel[d][k]
-            abs(v) > 1e-14 ? interior_factor / v : 0.0
+            abs(v) > T(1e-14) ? interior_factor / v : zero(T)
         end)
     end
     
-    T_pot = Matrix{Float64}(undef, 0, NM)
-    return NonLocalRelaxationSourceTerm{D, NM, NK}(km, 1.0 / eps, coeffs, SVector{NK, Space{D}}(scaled_inv_speeds), T_pot)
+    t_potential = Matrix{T}(undef, 0, NM)
+    return NonLocalRelaxationSourceTerm{D, NM, NK, T}(km, one(T) / eps, coeffs, SVector{NK, Space{D, T}}(scaled_inv_speeds), t_potential)
 end
 
-function ensure_buffer_size!(st::NonLocalRelaxationSourceTerm{D, NM, NK}, N_particles::Int) where {D, NM, NK}
-    if size(st.T_potential, 1) != N_particles
-        st.T_potential = Matrix{Float64}(undef, N_particles, NM)
+function ensure_buffer_size!(st::NonLocalRelaxationSourceTerm{D, NM, NK, T}, N_particles::Int) where {D, NM, NK, T}
+    if size(st.t_potential, 1) != N_particles
+        st.t_potential = Matrix{T}(undef, N_particles, NM)
     end
 end
 
 function update_nonlocal_potential!(
-    st::NonLocalRelaxationSourceTerm{D, NM, NK}, 
-    stage_data::AbstractMatrix{Float64},
+    st::NonLocalRelaxationSourceTerm{D, NM, NK, T}, 
+    stage_data::AbstractMatrix{T},
     pg::ParticleGrid,
-    eq::HyperbolicPDE{D}
-) where {D, NM, NK}
+    eq::HyperbolicPDE{D, NM, T}
+) where {D, NM, NK, T}
     
     N_particles = pg.meta.N
     ensure_buffer_size!(st, N_particles)
@@ -128,32 +111,31 @@ function update_nonlocal_potential!(
         jump = path_integral(eq, u_L, u_R)
         
         for m in 1:NM
-            st.T_potential[i, m] = jump[m]
+            st.t_potential[i, m] = jump[m]
         end
     end
     
-    for m in 1:NM; st.T_potential[1, m] = 0.0; end
+    for m in 1:NM; st.t_potential[1, m] = zero(T); end
     
     for i in 2:N_particles
         for m in 1:NM
-            st.T_potential[i, m] += st.T_potential[i-1, m]
+            st.t_potential[i, m] += st.t_potential[i-1, m]
         end
     end
 end
 
-# NON-LOCAL Source Term Functor
-@inline function (st::NonLocalRelaxationSourceTerm{D, NM, NK})(
-    V_kin::State{NK}, 
+@inline function (st::NonLocalRelaxationSourceTerm{D, NM, NK, T})(
+    V_kin::State{NK, T}, 
     p_idx::Int, 
-    eq::HyperbolicPDE{D},
+    eq::HyperbolicPDE{D, NM, T},
     km::Kin2Macro{NM, NK}
-) where {D, NM, NK}
+) where {D, NM, NK, T}
     
     u_macro = km(V_kin)
     
-    return State{NK}(ntuple(Val(NK)) do k
+    return State{NK, T}(ntuple(Val(NK)) do k
         m_idx = km(k)
-        T_val = st.T_potential[p_idx, m_idx]
+        T_val = st.t_potential[p_idx, m_idx]
         
         T_dot_inv_lambda = T_val * st.scaled_inv_speeds[k][1]
         Mk_val = st.coefficients[m_idx] * (u_macro[m_idx] + T_dot_inv_lambda)
