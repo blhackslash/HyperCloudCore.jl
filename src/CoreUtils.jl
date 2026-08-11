@@ -18,7 +18,7 @@ macro pebug(p_idx, msg, args...)
 end
 
 const _THREAD_THRESHOLD = Ref(50000)
-const _THREAD_TOLERANCE = Ref(80)
+const _THREAD_TOLERANCE = Ref(100)
 const _USE_THREADS      = Ref(false)
 
 _use_threads() = _USE_THREADS[]

@@ -160,7 +160,11 @@ end
         b_s += w * (p_s * dfVec[i]') 
     end
     
-    C = cholesky(Symmetric(N_s), check=false)
+    # REGULARIZATION: Add small eps to the diagonal to stabilize Cholesky
+    eps_reg = T(1e-10) * tr(N_s) / B_LEN
+    N_s_reg = N_s + eps_reg * I
+    
+    C = cholesky(Symmetric(N_s_reg), check=false)
     
     if !LinearAlgebra.issuccess(C)
         return zero(SVector{B_LEN, State{M, T}})

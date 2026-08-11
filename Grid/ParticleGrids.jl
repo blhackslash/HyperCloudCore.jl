@@ -510,7 +510,27 @@ end
 # =========================================================================
 # UNIFIED NEIGHBOR SEARCH (Branchless & Type-Stable)
 # =========================================================================
-function (nd::NeighborData{D, WF})(pg::ParticleGrid{D, M, WF, GM, BC, N_OFF}) where {D, M, WF, GM, BC, N_OFF}
+function (nd::NeighborData{D, T, WF})(pg::ParticleGrid{D, M, T, WF, GM, BC, N_OFF}) where {D, M, T, WF, GM, BC, N_OFF}
+    
+    # --- BONUS FIX: ENFORCE PERIODIC WRAPPING ---
+    # Prevents particles from drifting out of the hashed domain over long simulations!
+    if BC === :periodic
+        L_vec = pg.meta.L
+        mins_vec = pg.meta.mins
+        pos = pg.core.positions
+        
+        for i in 1:pg.meta.N
+            pos[i] = Space{D, T}(ntuple(Val(D)) do d
+                p = pos[i][d]
+                L_d = L_vec[d]
+                min_d = mins_vec[d]
+                
+                # Wraps the coordinate perfectly back into [mins, maxs)
+                min_d + mod(p - min_d, L_d)
+            end)
+        end
+    end
+
     build_global_bins!(pg) # (Ensures update_bin_neighbors! and dummy bin are configured)
 
     N = pg.meta.N
@@ -524,7 +544,7 @@ function (nd::NeighborData{D, WF})(pg::ParticleGrid{D, M, WF, GM, BC, N_OFF}) wh
     coarse_dims = bins.coarse_dims
     
     bin_neighbors = bins.bin_neighbors
-    bc_val = Val(BC) # Extracted for distance dispatch
+    bc_val = Val{BC}() # FIXED: Explicit type-stable extraction!
 
     # --- PASS 1: COUNTING ---
     counts = nd.counts
@@ -538,7 +558,6 @@ function (nd::NeighborData{D, WF})(pg::ParticleGrid{D, M, WF, GM, BC, N_OFF}) wh
             j = bins.head[nb_bin_idx]
             while j > 0
                 if i != j
-                    # Dispatch dynamically routes to periodic or euclidean natively
                     dist = _get_dist(pos, i, j, L, L_inv, bc_val)
                     d2 = sum(abs2, dist)
                     if d2 <= R_sq
@@ -723,7 +742,7 @@ end
 
 @inline _get_Lambda(eq, U_i, ::Val{D}) where {D} = Space{D}(ntuple(d -> max_eigenvalue(eq, U_i, d), Val(D)))
 
-@inline _extract_order(::MUSCL{D, M, B_LEN, MAX_ORDER}) where {D, M, B_LEN, MAX_ORDER} = MAX_ORDER
+@inline _extract_order(::MUSCL{D, M, T, B_LEN, MAX_ORDER}) where {D, M, T, B_LEN, MAX_ORDER} = MAX_ORDER
 @inline _extract_order(g::UpwindDivergence) = g.order
 @inline _extract_order(g::CentralDivergence) = g.order
 @inline _extract_order(g::WENO) = g.order
@@ -739,11 +758,18 @@ end
             N_s += w_vec[k] * (p_s * p_s')
         end
         
-        if abs(det(N_s)) < T(1e-14)
+        # 1. Scale-invariant Tikhonov Regularization
+        eps_reg = T(1e-10) * tr(N_s) / B_LEN
+        N_s_reg = N_s + eps_reg * I
+        
+        # 2. Fast Cholesky factorization to guarantee invertibility
+        C = cholesky(Symmetric(N_s_reg), check=false)
+        if !LinearAlgebra.issuccess(C)
             return zero(SVector{D, T})
         end
         
-        inv_N_s = inv(N_s)
+        # 3. Safely invert the regularized matrix
+        inv_N_s = inv(C)
         sum_c_local = zero(MVector{D, T})
         
         @inbounds for idx in 1:length(nb_slice)
@@ -751,6 +777,7 @@ end
             w = w_vec[k]
             p_s = build_basis(Val(IO), dist_vec[k] * invL)
             
+            # Extract the effective geometric coefficient for the linear spatial derivatives
             for d in 1:D
                 c_val = zero(T)
                 for j in 1:B_LEN
@@ -759,7 +786,6 @@ end
                 sum_c_local[d] += abs(c_val * w * invL)
             end
         end
-        
         return SVector{D, T}(sum_c_local)
     end
 end
