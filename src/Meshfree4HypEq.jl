@@ -44,7 +44,7 @@ export DifferentialOrder, Order0, Order1, DO0, DO1
 
 # Conversions
 export param2uvec, param2xvec, param2svec, param2fvec, prim2cons, cons2prim
-
+export set_threads!
 # 2. Physics Equations
 export HyperbolicPDE, EquationRepresentation, Primitive, Conservative, Lagrangian
 export LinePath, NaiveAveragePath, MappedPath
