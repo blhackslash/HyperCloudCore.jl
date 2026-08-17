@@ -23,7 +23,7 @@ const _USE_THREADS      = Ref(false)
 
 _use_threads() = _USE_THREADS[]
 set_threads!(N::Int) = _THREAD_THRESHOLD[] < N ? _USE_THREADS[] = true : nothing
-set_threads!(B::Bool) = (_THREAD_THRESHOLD[] = B)
+set_threads!(B::Bool) = (_USE_THREADS[] = B)
 set_thread_tolerance!(N::Int) = _THREAD_TOLERANCE[] = N/100
 
 macro smart_parallel(condition, loop)
