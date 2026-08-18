@@ -56,6 +56,8 @@ export saveData!, mainTimeIntegrator!
 
 # 4. Core Simulation Structs 
 export ParticleGrid, CustomGridMover, NoGridMover, PhysicalGridMover, createParticleGrid, getTimeStep
+export AbstractBoundaryCondition, OutflowBC, FixedDirichlet 
+export Domain, RectangularDomain, get_points
 export ExponentialWeightFunction, InverseWeightFunction
 
 # 5. Interpolation
