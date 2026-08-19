@@ -1,5 +1,20 @@
+export UpwindDivergence
+export TiwariAlgorithm, PraveenAlgorithm, NonLinearPraveenAlgorithm, ClassicAlgorithm
+ 
+abstract type TiwariAlgorithm <: UpwindAlgorithm end 
+abstract type PraveenAlgorithm <: UpwindAlgorithm end  
+abstract type NonLinearPraveenAlgorithm <: UpwindAlgorithm end  
+abstract type ClassicAlgorithm <: UpwindAlgorithm end 
+## ------------------------------- Upwind -------------------------------
+struct UpwindDivergence{D, M, T, I <: Interpolator, Algorithm <: UpwindAlgorithm} <: DivergenceInterpolator
+    order::Int
+    flux::NumericalFluxFunction
+    interpolator::I
+end
+
 @inline update_size!(::UpwindDivergence, ::Int) = nothing
 @inline update_content!(::UpwindDivergence, args...) = nothing
+@inline _extract_order(g::UpwindDivergence) = g.order
 
 # =========================================================================
 # UPWIND GRADIENT SETUP

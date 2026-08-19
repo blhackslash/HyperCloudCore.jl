@@ -1,9 +1,16 @@
+export CentralDivergence
+
+struct CentralDivergence{D, M, T, I <: Interpolator} <: DivergenceInterpolator
+    order::Int
+    interpolator::I
+end
 # =========================================================================
 # STATELESS CENTRAL DIVERGENCE API
 # =========================================================================
 
 @inline update_size!(::CentralDivergence, ::Int) = nothing
 @inline update_content!(::CentralDivergence, args...) = nothing
+@inline _extract_order(g::CentralDivergence) = g.order
 
 function CentralDivergence(::Type{T}, dimension::Int, M::Int, order::Int) where {T}
     @assert order >= 1 "Order must be 1 or greater."       

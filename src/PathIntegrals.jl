@@ -1,3 +1,35 @@
+export Primitive, Conservative, Lagrangian, DifferentialOrder, Order0, Order1
+export LinePath, NaiveAveragePath, MappedPath
+
+abstract type DifferentialOrder end
+struct Order0 <: DifferentialOrder end
+struct Order1 <: DifferentialOrder end
+
+const DO0 = Order0() 
+const DO1 = Order1()
+
+struct GaussLobatto5 <: PathIntegrator end
+struct Simpson3 <: PathIntegrator end
+
+struct LinePath <: AbstractPath end
+
+struct MappedPath{P <: AbstractPath} <: AbstractPath
+    base_path::P
+end
+MappedPath() = MappedPath(LinePath())
+
+struct NaiveAveragePath <: AbstractPath end
+
+struct Primitive{PI <: PathIntegral} <: NCRepresentation{PI}
+    integral::PI
+end
+Primitive() = Primitive(PathIntegral(MappedPath(), GaussLobatto5()))
+
+struct Lagrangian{PI <: PathIntegral} <: NCRepresentation{PI}
+    integral::PI
+end
+Lagrangian() = Lagrangian(PathIntegral(MappedPath(), GaussLobatto5()))
+
 # DO0 (The State): Returns a constant average regardless of 's'
 @inline function (::NaiveAveragePath)(eq::HyperbolicPDE, s::T, u_L::State{M, T}, u_R::State{M, T}, ::Order0) where {M, T}
     return T(0.5) * (u_L + u_R)
@@ -36,66 +68,22 @@ end
     return (V_s_plus - V_s) / eps_fd
 end
 
-function path_integral(eq::HyperbolicPDE, u_left::Tuple, u_right::Tuple)
-    error("path_integral not implemented for $(typeof(eq))")
-end
-
-function A_matrix_times_vector(eq::HyperbolicPDE, U::Tuple, v::Tuple)
-    error("A_matrix_times_vector not implemented for $(typeof(eq))")
-end
-
-# =========================================================================
-# NON-CONSERVATIVE MATVECS (1D)
-# =========================================================================
-
-# 1. LAGRANGIAN (Material Derivative Frame)
-@inline function A_matrix_times_vector(eq::EulerEquation{1, 3, T, LR}, V::State{3, T}, dV::State{3, T}) where {T, LR <: Lagrangian}
-    rho, u, p = V[1], V[2], V[3]
-    drho, du, dp = dV[1], dV[2], dV[3]
-    
-    return State{3, T}(rho * du, dp / rho, eq.gamma * p * du)
-end
-
-# 2. PRIMITIVE (Eulerian Frame)
-@inline function A_matrix_times_vector(eq::EulerEquation{1, 3, T, PR}, V::State{3, T}, dV::State{3, T}) where {T, PR <: Primitive}
-    rho, u, p = V[1], V[2], V[3]
-    drho, du, dp = dV[1], dV[2], dV[3]
-    
-    return State{3, T}(
-        u * drho + rho * du,
-        u * du + dp / rho,
-        eq.gamma * p * du + u * dp
-    )
-end
-
-@inline function gauss_lobatto_5(::Type{T}) where {T}
+@inline function get_nodes_weights(::GaussLobatto5, ::Type{T}) where {T}
     s2_offset = T(0.5) * sqrt(T(3)/T(7))
-    nodes = (
-        zero(T), 
-        T(0.5) - s2_offset, 
-        T(0.5), 
-        T(0.5) + s2_offset, 
-        one(T)
-    )
-    
-    weights = (
-        T(1/20),
-        T(49/180),
-        T(16/45),
-        T(49/180), 
-        T(1/20)
-    )
+    nodes = (zero(T), T(0.5) - s2_offset, T(0.5), T(0.5) + s2_offset, one(T))
+    weights = (T(1/20), T(49/180), T(16/45), T(49/180), T(1/20))
     return nodes, weights
 end
 
-@inline function simpson_3_point(::Type{T}) where {T}
+@inline function get_nodes_weights(::Simpson3, ::Type{T}) where {T}
     nodes = (zero(T), T(0.5), one(T))
     weights = (T(1/6), T(4/6), T(1/6))
     return nodes, weights
 end
 
-@inline function path_integral(eq::HyperbolicPDE{D, M, T}, path::AbstractPath, u_L::State{M, T}, u_R::State{M, T}) where {D, M, T}
-    nodes, weights = gauss_lobatto_5(T) 
+@inline function (pi::PathIntegral)(eq::HyperbolicPDE{D, M, T}, u_L::State{M, T}, u_R::State{M, T}, d::Int) where {D, M, T}
+    # Dispatch to get the correct rule based on the integrator
+    nodes, weights = get_nodes_weights(pi.integrator, T) 
     
     integral = zero(State{M, T})
 
@@ -103,10 +91,10 @@ end
         s = nodes[i]
         w = weights[i]
         
-        U_s  = path(eq, s, u_L, u_R, DO0)
-        dU_s = path(eq, s, u_L, u_R, DO1)
+        U_s  = pi.path(eq, s, u_L, u_R, DO0)
+        dU_s = pi.path(eq, s, u_L, u_R, DO1)
         
-        term = A_matrix_times_vector(eq, U_s, dU_s)
+        term = velocity(eq, U_s, d) * dU_s
         integral += w * term
     end
     
@@ -128,7 +116,8 @@ end
     eq::HyperbolicPDE{D, M, T, <:NCRepresentation}, f_L::Flux{D, M, T}, f_R::Flux{D, M, T}, dist_k::Space{D, T}
 ) where {D, M, T}    
     return Flux{D, M, T}(ntuple(Val(D)) do d
-        jump_d = path_integral(eq, eq.rep.path, f_L[d], f_R[d])
+        # Invoke the functor!
+        jump_d = eq.rep.integral(eq, f_L[d], f_R[d], d)
         sign_i = dist_k[d] >= zero(T) ? one(T) : -one(T)
         
         T(0.5) * jump_d * sign_i

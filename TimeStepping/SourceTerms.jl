@@ -1,3 +1,30 @@
+export NoSourceTerm, AbstractSourceTerm, RelaxationSourceTerm, NonLocalRelaxationSourceTerm, Kin2Macro
+
+struct NoSourceTerm <: AbstractSourceTerm end
+abstract type KineticSourceTerm <: AbstractSourceTerm end
+
+struct Kin2Macro{NM, NK}
+    ranges::NTuple{NM, UnitRange{Int}}
+    k_to_m::NTuple{NK, Int}
+end
+
+# Added <: KineticSourceTerm
+struct RelaxationSourceTerm{D, NM, NK, T} <: KineticSourceTerm
+    km::Kin2Macro{NM, NK}
+    inv_epsilon::T
+    coefficients::State{NM, T}
+    scaled_inv_speeds::SVector{NK, Space{D, T}}
+end
+
+# Added <: KineticSourceTerm
+struct NonLocalRelaxationSourceTerm{D, NM, NK, T} <: KineticSourceTerm
+    km::Kin2Macro{NM, NK}
+    inv_epsilon::T
+    coefficients::State{NM, T}
+    scaled_inv_speeds::SVector{NK, Space{D, T}}
+    t_potential::Matrix{T}
+end
+
 function Kin2Macro(edges::Union{Vector{Int},Tuple})
     NM = length(edges) - 1
     NK = edges[end] - 1

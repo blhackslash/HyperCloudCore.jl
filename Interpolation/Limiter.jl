@@ -1,3 +1,19 @@
+export BarthJespersenLimiter, VenkatakrishnanLimiter, SuperbeeLimiter, MinmodLimiter
+
+struct BarthJespersenLimiter{Mode} <: RealSlopeLimiter 
+    BarthJespersenLimiter(mode::Symbol=:soft) = new{mode}()
+end
+struct VenkatakrishnanLimiter{Mode} <: RealSlopeLimiter 
+    VenkatakrishnanLimiter(mode::Symbol=:soft) = new{mode}()
+end
+struct SuperbeeLimiter{Mode} <: RealSlopeLimiter 
+    SuperbeeLimiter(mode::Symbol=:soft) = new{mode}()
+end
+struct MinmodLimiter{Mode} <: RealSlopeLimiter 
+    MinmodLimiter(mode::Symbol=:soft) = new{mode}()
+end
+struct NoLimiter <: AbstractSlopeLimiter end
+
 # =========================================================================
 # BASE LIMITER FUNCTIONS (Dispatched on Strategy!)
 # =========================================================================

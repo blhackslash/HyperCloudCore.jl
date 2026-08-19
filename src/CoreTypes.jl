@@ -1,7 +1,46 @@
+export MLSWeightFunction, GridMover, AbstractBoundaryCondition, AbstractDomain, NumericalFluxFunction, MOODStrategy, MOODCriterion
+export RealMOOD, AbstractSlopeLimiter, RealSlopeLimiter, DivergenceInterpolator, AbstractPath, EquationRepresentation, NCRepresentation
+export HyperbolicPDE, UpwindAlgorithm, AbstractImplicitSolver
+export RKButcherTableau, IMEXButcherTableau, GeneralIMEXTimeStepper, GeneralRKTimeStepper
+
+abstract type MLSWeightFunction end
+abstract type GridMover end
+abstract type AbstractBoundaryCondition end
+abstract type AbstractDomain{D, T} end
+
+abstract type NumericalFluxFunction end
+
+abstract type MOODStrategy end
+abstract type MOODCriterion end
+abstract type RealMOOD <: MOODCriterion end
+struct MOOD{S <: MOODStrategy, C <: MOODCriterion}
+    strategy::S
+    criterion::C
+end
+
+abstract type AbstractSlopeLimiter end
+abstract type RealSlopeLimiter <: AbstractSlopeLimiter end
+
+abstract type DivergenceInterpolator end
+abstract type UpwindAlgorithm end 
+
+abstract type AbstractPath end
+abstract type PathIntegrator end
+struct PathIntegral{P <: AbstractPath, I <: PathIntegrator}
+    path::P
+    integrator::I
+end
+abstract type EquationRepresentation end
+struct Conservative <: EquationRepresentation end
+abstract type NCRepresentation{P <: AbstractPath} <: EquationRepresentation end
+
+abstract type HyperbolicPDE{D, M, T, R <: EquationRepresentation} end
+
 abstract type TimeStepper end
-abstract type MeshfreeTimeStepper <: TimeStepper end
-abstract type FixedGridTimeStepper <: TimeStepper end
-abstract type MeshfreeSystemTimeStepper <: MeshfreeTimeStepper end
+abstract type AbstractSourceTerm end
+abstract type AbstractImplicitSolver end
+
+## Time Steppers
 
 struct InteractionBuffer{D, M, T}
     f::Vector{State{M, T}}
@@ -14,8 +53,6 @@ struct InteractionBuffer{D, M, T}
         State{M, T}[], State{M, T}[], Flux{D, M, T}[], State{M, T}[], Bool[]
     )
 end
-
-## ------------------------------- Butcher Tableaus -------------------------------
 
 struct RKButcherTableau{T}
     a::Matrix{T}
@@ -46,69 +83,8 @@ struct IMEXButcherTableau{T}
     end
 end
 
-## ------------------------------- Meshfree Direct Steppers -------------------------------
 
-struct GeneralRKTimeStepper{D, M, T, PDE <: HyperbolicPDE, G <: DivergenceInterpolator} <: MeshfreeTimeStepper
-    pde::PDE
-    divergence_interpolator::G
-    tableau::RKButcherTableau{T}
-    
-    rho_n::Vector{State{M, T}}
-    rho_stage::Vector{State{M, T}}
-    K_stages::Vector{Vector{State{M, T}}} 
-    int_buffer::InteractionBuffer{D, M, T}
-
-    function GeneralRKTimeStepper(pde::HyperbolicPDE{D, M, T}, div_interp::G, tableau::RKButcherTableau{T}) where {G, D, M, T}
-        s = size(tableau.a, 1)
-        new{D, M, T, typeof(pde), G}(
-            pde, div_interp, tableau, 
-            State{M, T}[], State{M, T}[], 
-            [State{M, T}[] for _ in 1:s],
-            InteractionBuffer{D, M, T}()
-        )
-    end
-end
-
-## ------------------------------- Source Terms -------------------------------
-abstract type AbstractSourceTerm end
-struct NoSourceTerm <: AbstractSourceTerm end
-abstract type KineticSourceTerm <: AbstractSourceTerm end
-
-struct Kin2Macro{NM, NK}
-    ranges::NTuple{NM, UnitRange{Int}}
-    k_to_m::NTuple{NK, Int}
-end
-
-# Added <: KineticSourceTerm
-struct RelaxationSourceTerm{D, NM, NK, T} <: KineticSourceTerm
-    km::Kin2Macro{NM, NK}
-    inv_epsilon::T
-    coefficients::State{NM, T}
-    scaled_inv_speeds::SVector{NK, Space{D, T}}
-end
-
-# Added <: KineticSourceTerm
-struct NonLocalRelaxationSourceTerm{D, NM, NK, T} <: KineticSourceTerm
-    km::Kin2Macro{NM, NK}
-    inv_epsilon::T
-    coefficients::State{NM, T}
-    scaled_inv_speeds::SVector{NK, Space{D, T}}
-    t_potential::Matrix{T}
-end
-
-abstract type AbstractImplicitSolver end
-
-# Added <: AbstractImplicitSolver just in case you use it later!
-struct PicardIterationSolver{T} <: AbstractImplicitSolver
-    max_iters::Int
-    tol::T
-    s_buffers::Vector{Vector{T}}
-    y_buffers::Vector{Vector{T}}
-end
-
-struct LinearizedRelaxationImplicitSolver <: AbstractImplicitSolver end
-
-struct GeneralIMEXTimeStepper{D, M, T, PDE <: HyperbolicPDE, G <: DivergenceInterpolator, IS <: AbstractImplicitSolver, ST <: AbstractSourceTerm} <: MeshfreeSystemTimeStepper
+struct GeneralIMEXTimeStepper{D, M, T, PDE <: HyperbolicPDE, G <: DivergenceInterpolator, IS <: AbstractImplicitSolver, ST <: AbstractSourceTerm} <: TimeStepper
     pde::PDE
     divergence_interpolator::G
     implicit_solver::IS
@@ -142,6 +118,27 @@ struct GeneralIMEXTimeStepper{D, M, T, PDE <: HyperbolicPDE, G <: DivergenceInte
             [State{M, T}[] for _ in 1:s], 
             InteractionBuffer{D, M, T}(), 
             s
+        )
+    end
+end
+
+struct GeneralRKTimeStepper{D, M, T, PDE <: HyperbolicPDE, G <: DivergenceInterpolator} <: TimeStepper
+    pde::PDE
+    divergence_interpolator::G
+    tableau::RKButcherTableau{T}
+    
+    rho_n::Vector{State{M, T}}
+    rho_stage::Vector{State{M, T}}
+    K_stages::Vector{Vector{State{M, T}}} 
+    int_buffer::InteractionBuffer{D, M, T}
+
+    function GeneralRKTimeStepper(pde::HyperbolicPDE{D, M, T}, div_interp::G, tableau::RKButcherTableau{T}) where {G, D, M, T}
+        s = size(tableau.a, 1)
+        new{D, M, T, typeof(pde), G}(
+            pde, div_interp, tableau, 
+            State{M, T}[], State{M, T}[], 
+            [State{M, T}[] for _ in 1:s],
+            InteractionBuffer{D, M, T}()
         )
     end
 end

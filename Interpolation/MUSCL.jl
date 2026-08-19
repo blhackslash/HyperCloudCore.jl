@@ -1,3 +1,16 @@
+struct ConstantReconstruction end
+
+struct MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER, MOOD, INTERPS, L, NF} <: DivergenceInterpolator
+    interpolators::INTERPS
+    limiter::L
+    flux::NF
+    mood::MOOD
+    gradients::Vector{SVector{B_LEN, State{M, T}}} 
+    particle_orders::Vector{Int} 
+    mood_triggered::Vector{Bool} 
+end
+
+@inline _extract_order(::MUSCL{D, M, T, B_LEN, MAX_ORDER}) where {D, M, T, B_LEN, MAX_ORDER} = MAX_ORDER
 # =========================================================================
 # DYNAMIC DISPATCH ROUTER (Zero-Allocation)
 # =========================================================================
@@ -10,9 +23,6 @@
     raw = interp(nb_slice, dist_all, w_all, df; scale=scale)
     return _pad_grad(raw, Val(MAX_B_LEN))
 end
-
-@inline _get_interface_orders(::MOODStrategy, oi, oj) = (min(oi, oj), min(oi, oj)) 
-@inline _get_interface_orders(::EPD0, oi, oj) = (oi, oj) 
 
 @generated function dispatch_interpolator(interps::Tuple, order::Int, args...)
     N = length(interps.parameters)

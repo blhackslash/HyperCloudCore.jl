@@ -1,17 +1,35 @@
+export FixedDirichlet, OutflowBC
 
+struct FixedDirichlet <: AbstractBoundaryCondition end
+struct OutflowBC <: AbstractBoundaryCondition end
 
-# 1. Fixed Dirichlet: Resets boundaries to their initial states
-function (::FixedDirichlet)(pg::ParticleGrid{D, M, T}, rhos_buffer::AbstractVector{State{M, T}}, tag::Int) where {D, M, T}
+# =========================================================================
+# BOUNDARY CONDITION DISPATCHER
+# =========================================================================
+
+function apply_boundary_conditions!(pg::ParticleGrid{D, M, T}, rhos_buffer::AbstractVector{State{M, T}}, eq::HyperbolicPDE, t::Real) where {D, M, T}
+    for (tag, bc_functor) in pg.domain.bc_map
+        bc_functor(pg, rhos_buffer, tag, eq, t)
+    end
+    return nothing
+end
+
+# =========================================================================
+# CONCRETE BOUNDARY CONDITIONS
+# =========================================================================
+
+# 1. Fixed Dirichlet
+function (::FixedDirichlet)(pg::ParticleGrid{D, M, T}, rhos_buffer::AbstractVector{State{M, T}}, tag::Int, eq::HyperbolicPDE, t::Real) where {D, M, T}
     @inbounds for i in 1:pg.meta.N
         if pg.core.tags[i] == tag && pg.core.is_boundary[i]
-            rhos_buffer[i] = pg.rhos[i] 
+            rhos_buffer[i] = pg.rhos[i] # Just uses initial state
         end
     end
     return nothing
 end
 
-# 2. Outflow: Adopts the state of the closest interior neighbor
-function (::OutflowBC)(pg::ParticleGrid{D, M, T}, rhos_buffer::AbstractVector{State{M, T}}, tag::Int) where {D, M, T}
+# 2. Outflow (Zero-Divergence)
+function (::OutflowBC)(pg::ParticleGrid{D, M, T}, rhos_buffer::AbstractVector{State{M, T}}, tag::Int, eq::HyperbolicPDE, t::Real) where {D, M, T}
     dist_vec = get_distances(pg)
     status = pg.shared.int_buffer 
     fill!(status, -1) # Default to ignored
@@ -66,18 +84,5 @@ function (::OutflowBC)(pg::ParticleGrid{D, M, T}, rhos_buffer::AbstractVector{St
             rhos_buffer[i] = pg.rhos[i]
         end
     end
-    return nothing
-end
-
-# =========================================================================
-# BOUNDARY CONDITION DISPATCHER
-# =========================================================================
-
-function apply_boundary_conditions!(pg::ParticleGrid{D, M, T}, rhos_buffer::AbstractVector{State{M, T}}) where {D, M, T}
-    # Iterate over all unique boundary tags present in the domain's dictionary
-    for (tag, bc_functor) in pg.domain.bc_map
-        bc_functor(pg, rhos_buffer, tag)
-    end
-    
     return nothing
 end

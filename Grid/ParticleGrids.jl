@@ -1,10 +1,98 @@
+export createParticleGrid, ParticleGrid, getTimeStep
+# ---------------------------------------------------------
+# 1. Grid Metadata
+# ---------------------------------------------------------
+mutable struct GridMetadata{D, T}
+    N::Int
+    N_interior::Int
+    N_ghost::Int
+    
+    R::T
+    max_dx::T
+    dx::Space{D, T}
+    
+    interp_range_factor::T
+    max_nb::Int
+end
+
+# ---------------------------------------------------------
+# 2. Shared Workspace Buffers
+# ---------------------------------------------------------
+mutable struct SharedBuffers{D, M, T}
+    rho_buffer::Vector{State{M, T}}      
+    pos_buffer::Vector{Space{D, T}}
+    float_buffer::Vector{T}
+    bit_buffer::Vector{Bool}
+    int_buffer::Vector{Int}
+end
+
+# ---------------------------------------------------------
+# 3. Neighbor Search Context
+# ---------------------------------------------------------
+mutable struct NeighborData{D, T, WF}    
+    weight_func::WF
+    ranges::Vector{UnitRange{Int}}
+    indices::Vector{Int}
+    weights::Vector{T}
+    distances::Vector{Space{D, T}} 
+    counts::Vector{Int}
+    offsets::Vector{Int}
+end
+
+# ---------------------------------------------------------
+# 4. Reordering / Sorting Context
+# ---------------------------------------------------------
+struct ReorderData{D}
+    permutation::Vector{Int}          
+    inv_permutation::Vector{Int}      
+    new_permutation_buffer::Vector{Int} 
+    seen_buffer::Vector{Bool}            
+end
+
+struct GlobalBins{D, T, N_OFF}
+    mins::Space{D, T}
+    maxs::Space{D, T}
+    coarse_size::Space{D, T}
+    coarse_dims::NTuple{D, Int}
+    head::Vector{Int}
+    next::Vector{Int}
+    bin_neighbors::Vector{SVector{N_OFF, Int}} 
+end
+
+# ---------------------------------------------------------
+# 6. Particle Grid Core (Geometry & Topology)
+# ---------------------------------------------------------
+mutable struct ParticleGridCore{D, T}
+    positions::Vector{Space{D, T}}
+    is_boundary::Vector{Bool}
+    volumes::Vector{T}
+    tags::Vector{Int}
+end
+
+struct ParticleGrid{D, M, T, WF, GM, N_OFF, Dom <: AbstractDomain{D, T}}
+    meta::GridMetadata{D, T}
+    domain::Dom                  # <--- NEW FIELD
+    core::ParticleGridCore{D, T}
+    shared::SharedBuffers{D, M, T}
+    neighbor::NeighborData{D, T, WF}
+    reorder::ReorderData{D}
+    bins::GlobalBins{D, T, N_OFF} # (Note: GlobalBins might also need its BC parameter removed)
+    mover::GM
+    
+    rhos::Vector{State{M, T}}
+    mood_events::Vector{SVector{M, Bool}}
+    curvatures::Vector{State{M, T}}
+end
+
 include("MLSWeightFunctions.jl")
+include("NeighborLogic.jl")
 include("GridMovement.jl")
 include("Domains.jl")
 include("BoundaryConditions.jl")
+include("Reordering.jl")
 #include("ParticleManagement.jl")
 
-# --- 1. Unified Position Accessors (No more reinterpret hacks!) ---
+# --- 1. Unified Position Accesso rs (No more reinterpret hacks!) ---
 @inline get_positions(pg::ParticleGrid) = pg.core.positions
 @inline get_positions(sb::SharedBuffers) = sb.pos_buffer
 
@@ -28,27 +116,6 @@ include("BoundaryConditions.jl")
     end
 end
 
-# =========================================================================
-# FAST SPATIAL HASHING (Coordinates -> 1D Bin Index)
-# =========================================================================
-
-@inline function get_flat_bin_index(pos::Space{1, T}, mins::Space{1, T}, bin_size::Space{1, T}, dims::NTuple{1, Int}) where {T}
-    idx = floor(Int, (pos[1] - mins[1]) / bin_size[1]) + 1
-    return clamp(idx, 1, dims[1])
-end
-
-@inline function get_flat_bin_index(pos::Space{2, T}, mins::Space{2, T}, bin_size::Space{2, T}, dims::NTuple{2, Int}) where {T}
-    idx_x = floor(Int, (pos[1] - mins[1]) / bin_size[1]) + 1
-    idx_y = floor(Int, (pos[2] - mins[2]) / bin_size[2]) + 1
-    return clamp(idx_x, 1, dims[1]) + (clamp(idx_y, 1, dims[2]) - 1) * dims[1]
-end
-
-@inline function get_flat_bin_index(pos::Space{D, T}, mins::Space{D, T}, bin_size::Space{D, T}, dims::NTuple{D, Int}) where {D, T}
-    cartesian = ntuple(Val(D)) do d
-        clamp(floor(Int, (pos[d] - mins[d]) / bin_size[d]) + 1, 1, dims[d])
-    end
-    return LinearIndices(dims)[cartesian...]
-end
 
 # =========================================================================
 # METHOD 1: PURE ARRAY CONSTRUCTOR (Bring Your Own Particles)
@@ -102,310 +169,7 @@ end
 @inline function getNBSlice(pg::ParticleGrid, p_idx::Int)
     return pg.neighbor.ranges[p_idx]
 end
-
-sort_particles!(pg::ParticleGrid) = pg.reorder(pg) 
-
-# function (rd::ReorderData{D})(pg::ParticleGrid{D, M, WF}) where {D, M, WF}
-#     N = pg.meta.N
-    
-#     # 1. Lexicographical Spatial Sort (e.g., sort by X, then by Y)
-#     # This guarantees particles physically next to each other are adjacent in memory
-#     pos = pg.core.positions
-#     p = sortperm(view(pos, 1:N), by = p -> D == 1 ? p[1] : (p[1], p[2]))
-    
-#     # Check if already mostly sorted to save time
-#     if issorted(p); return nothing; end
-    
-#     # 2. Native Julia In-Place Permutations
-#     Base.permute!(pg.core.positions, p)
-#     Base.permute!(pg.core.is_boundary, p)
-#     Base.permute!(pg.rhos, p)          
-#     Base.permute!(pg.curvatures, p)    
-#     Base.permute!(pg.mood_events, p)   
-    
-#     return nothing
-# end
-# =========================================================================
-# MORTON Z-ORDER CURVE GENERATORS (For 2D and 3D Spatial Hashing)
-# =========================================================================
-
-# Expands a 16-bit integer by inserting a 0 bit after every bit
-@inline function expand_bits_2D(w::UInt32)
-    w &= 0x0000ffff
-    w = (w | (w << 8)) & 0x00FF00FF
-    w = (w | (w << 4)) & 0x0F0F0F0F
-    w = (w | (w << 2)) & 0x33333333
-    w = (w | (w << 1)) & 0x55555555
-    return w
-end
-
-@inline morton_2D(x::UInt32, y::UInt32) = expand_bits_2D(x) | (expand_bits_2D(y) << 1)
-
-# Expands a 10-bit integer by inserting two 0 bits after every bit
-@inline function expand_bits_3D(w::UInt32)
-    w &= 0x000003ff
-    w = (w | (w << 16)) & 0xFF0000FF
-    w = (w | (w <<  8)) & 0x0300F00F
-    w = (w | (w <<  4)) & 0x030C30C3
-    w = (w | (w <<  2)) & 0x09249249
-    return w
-end
-
-@inline morton_3D(x::UInt32, y::UInt32, z::UInt32) = expand_bits_3D(x) | (expand_bits_3D(y) << 1) | (expand_bits_3D(z) << 2)
-
-
-# =========================================================================
-# PROXIMITY-OPTIMIZED SPATIAL REORDERING
-# =========================================================================
-
-function (rd::ReorderData{D})(pg::ParticleGrid{D, M, WF}) where {D, M, WF}
-    return
-    N = pg.meta.N
-    if N <= 1; return nothing; end
-    
-    pos = pg.core.positions
-    p = rd.permutation # Alias the existing pre-allocated buffer
-    
-    # 1. Update permutation buffer to current range
-    for i in 1:N
-        p[i] = i
-    end
-    
-    # 2. Extract domain boundaries for normalization
-    mins = pg.meta.mins
-    extents = pg.meta.maxs .- mins
-    
-    # 3. Sort using the Morton Curve
-    if D == 1
-        # 1D is naturally perfectly local
-        sort!(view(p, 1:N), by = i -> pos[i][1], alg=QuickSort)
-        
-    elseif D == 2
-        sort!(view(p, 1:N), by = i -> begin
-            # Normalize to 16-bit integers
-            nx = UInt32(clamp(floor(((pos[i][1] - mins[1]) / extents[1]) * 65535.0), 0, 65535))
-            ny = UInt32(clamp(floor(((pos[i][2] - mins[2]) / extents[2]) * 65535.0), 0, 65535))
-            morton_2D(nx, ny)
-        end, alg=QuickSort)
-        
-    else # D == 3
-        sort!(view(p, 1:N), by = i -> begin
-            # Normalize to 10-bit integers
-            nx = UInt32(clamp(floor(((pos[i][1] - mins[1]) / extents[1]) * 1023.0), 0, 1023))
-            ny = UInt32(clamp(floor(((pos[i][2] - mins[2]) / extents[2]) * 1023.0), 0, 1023))
-            nz = UInt32(clamp(floor(((pos[i][3] - mins[3]) / extents[3]) * 1023.0), 0, 1023))
-            morton_3D(nx, ny, nz)
-        end, alg=QuickSort)
-    end
-    
-    # Check if already mostly sorted to prevent unnecessary memory writes
-    if issorted(view(p, 1:N)); return nothing; end
-    
-    # 4. Native Julia In-Place Permutations
-    Base.permute!(pg.core.positions, p)
-    Base.permute!(pg.core.is_boundary, p)
-    Base.permute!(pg.rhos, p)          
-    Base.permute!(pg.curvatures, p)    
-    Base.permute!(pg.mood_events, p)   
-    
-    # 5. Optional: Update volumes if they exist
-    if length(pg.core.volumes) >= N
-        Base.permute!(pg.core.volumes, p)
-    end
-    
-    return nothing
-end
 updateNeighbors!(pg::ParticleGrid) = pg.neighbor(pg)
-
-# =========================================================================
-# GLOBAL BIN BUILDING
-# =========================================================================
-function build_global_bins!(pg::ParticleGrid)
-    N = pg.meta.N
-    pos = get_positions(pg)
-    bins = pg.bins
-    
-    update_bin_neighbors!(bins, pg.domain) # Passes the domain for per-axis logic
-    
-    fill!(bins.head, 0)
-    
-    @inbounds for i in 1:N
-        # Link particle into the coarse spatial bin
-        coarse_idx = get_flat_bin_index(pos[i], bins.mins, bins.coarse_size, bins.coarse_dims)
-        bins.next[i] = bins.head[coarse_idx]
-        bins.head[coarse_idx] = i
-    end
-    return nothing
-end
-
-function update_bin_neighbors!(bins::GlobalBins{D, T, N_OFF}, domain::AbstractDomain{D, T}) where {D, T, N_OFF}
-    coarse_dims = bins.coarse_dims
-    ci = CartesianIndices(coarse_dims)
-    li = LinearIndices(coarse_dims)
-    window = CartesianIndices(ntuple(_ -> -1:1, Val(D)))
-    
-    num_bins = prod(coarse_dims)
-    dummy_bin = num_bins + 1 
-
-    # Resize vectors to include the dummy bin
-    if length(bins.bin_neighbors) != num_bins
-        resize!(bins.bin_neighbors, num_bins)
-        if length(bins.head) < dummy_bin
-            resize!(bins.head, dummy_bin)
-        end
-    end
-
-    is_per = domain.is_periodic
-
-    for b in 1:num_bins
-        cart_idx = ci[b]
-        
-        bins.bin_neighbors[b] = SVector{N_OFF, Int}(ntuple(Val(N_OFF)) do idx
-            offset = window[idx]
-            nb_cart = cart_idx + offset
-            
-            # Resolve wrapping per axis
-            valid_bin = true
-            final_cart = ntuple(Val(D)) do d
-                nc = nb_cart[d]
-                cd = coarse_dims[d]
-                
-                if nc < 1 || nc > cd
-                    if is_per[d]
-                        return mod1(nc, cd)
-                    else
-                        valid_bin = false
-                        return 1 # Junk value, will be caught by valid_bin
-                    end
-                end
-                return nc
-            end
-            
-            if valid_bin
-                return li[CartesianIndex(final_cart)]
-            else
-                return dummy_bin
-            end
-        end)
-    end
-    
-    return nothing
-end
-# =========================================================================
-# UNIFIED NEIGHBOR SEARCH (Branchless & Type-Stable)
-# =========================================================================
-function (nd::NeighborData{D, T, WF})(pg::ParticleGrid{D, M, T, WF, GM, N_OFF, Dom}) where {D, M, T, WF, GM, N_OFF, Dom}
-    
-    # --- ENFORCE PER-AXIS PERIODIC WRAPPING ---
-    is_per = pg.domain.is_periodic
-    L_vec = pg.domain.L
-    mins_vec = pg.domain.canvas_mins
-    pos = pg.core.positions
-    
-    for i in 1:pg.meta.N
-        pos[i] = Space{D, T}(ntuple(Val(D)) do d
-            p = pos[i][d]
-            if is_per[d]
-                L_d = L_vec[d]
-                min_d = mins_vec[d]
-                return min_d + mod(p - min_d, L_d)
-            end
-            return p
-        end)
-    end
-
-    build_global_bins!(pg)
-
-    N = pg.meta.N
-    pos = get_positions(pg)
-    R_sq = pg.meta.R^2
-    weightFunc = nd.weight_func
-    
-    bins = pg.bins
-    L = pg.domain.L_wrap
-    L_inv = pg.domain.invL_wrap
-    coarse_dims = bins.coarse_dims
-    
-    bin_neighbors = bins.bin_neighbors
-
-    # --- PASS 1: COUNTING ---
-    counts = nd.counts
-    fill!(counts, 0)
-    
-    @batch for i in 1:N
-        bin_idx = get_flat_bin_index(pos[i], bins.mins, bins.coarse_size, coarse_dims)
-        
-        c = 0
-        @inbounds for nb_bin_idx in bin_neighbors[bin_idx]
-            j = bins.head[nb_bin_idx]
-            while j > 0
-                if i != j
-                    dist = get_distance(pos, i, j, L, L_inv)
-                    d2 = sum(abs2, dist)
-                    if d2 <= R_sq
-                        c += 1
-                    end
-                end
-                j = bins.next[j]
-            end
-        end
-        counts[i] = c
-    end
-
-    # --- SEQUENTIAL PREFIX SUM ---
-    starts = pg.shared.int_buffer 
-    max_so_far = 0 
-    current_ptr = 1
-    
-    @inbounds for i in 1:N
-        c = counts[i]
-        pg.neighbor.ranges[i] = current_ptr:(current_ptr + c - 1)
-        starts[i] = current_ptr
-        current_ptr += c
-        if c > max_so_far; max_so_far = c; end
-    end
-    
-    pg.meta.max_nb = max_so_far
-    pg.neighbor.ranges[N + 1] = current_ptr:(current_ptr - 1)
-
-    total_neighbors = current_ptr - 1
-    ensure_capacity!(nd, total_neighbors) 
-
-    # --- PASS 2: WRITING ---
-    indices = pg.neighbor.indices
-    weights = pg.neighbor.weights
-    distances = pg.neighbor.distances
-    
-    offsets = nd.offsets
-    fill!(offsets, 0)
-
-    @batch for i in 1:N
-        bin_idx = get_flat_bin_index(pos[i], bins.mins, bins.coarse_size, coarse_dims)
-        
-        @inbounds for nb_bin_idx in bin_neighbors[bin_idx]
-            j = bins.head[nb_bin_idx]
-            while j > 0
-                if i != j
-                    dist = get_distance(pos, i, j, L, L_inv)
-                    d2 = sum(abs2, dist)
-                    
-                    if d2 <= R_sq
-                        write_idx = starts[i] + offsets[i]
-                        offsets[i] += 1
-                        
-                        indices[write_idx]   = j
-                        weights[write_idx]   = weightFunc(d2) 
-                        distances[write_idx] = dist
-                    end
-                end
-                j = bins.next[j]
-            end
-        end
-    end
-    return nothing
-end
-
-reorder_particles!(pg::ParticleGrid) = pg.reorder(pg)
 
 determineVolumes!(pg) = return
 
@@ -440,12 +204,6 @@ end
 # =========================================================================
 
 @inline _get_Lambda(eq, U_i, ::Val{D}) where {D} = Space{D}(ntuple(d -> max_eigenvalue(eq, U_i, d), Val(D)))
-
-@inline _extract_order(::MUSCL{D, M, T, B_LEN, MAX_ORDER}) where {D, M, T, B_LEN, MAX_ORDER} = MAX_ORDER
-@inline _extract_order(g::UpwindDivergence) = g.order
-@inline _extract_order(g::CentralDivergence) = g.order
-@inline _extract_order(g::WENO) = g.order
-@inline _extract_order(::Any) = 2 # Fallback to Linear
 
 @generated function _compute_cfl_coeffs(::Val{D}, ::Val{IO}, ::Val{B_LEN}, nb_slice, dist_vec, w_vec, invL, ::Type{T}) where {D, IO, B_LEN, T}
     quote
@@ -504,8 +262,15 @@ end
 end
 
 @inline function getTimeStep(pg::ParticleGrid{D, M, T}, eq::HyperbolicPDE, main_grad) where {D, M, T}
+    # 1. Graceful exit for empty grids
+    if pg.meta.N == 0
+        return T(Inf)
+    end
+    
     dt_buffer = pg.shared.float_buffer
-    fill!(dt_buffer, T(Inf))
+    
+    # Only fill the active view to avoid touching dead memory
+    fill!(view(dt_buffer, 1:pg.meta.N), T(Inf))
 
     w_vec = get_weights(pg)
     dist_vec = get_distances(pg)
@@ -537,7 +302,8 @@ end
         end
     end
     
-    return minimum(view(dt_buffer, 1:pg.meta.N))
+    # 2. Provide init=T(Inf) to prevent any future reduction errors
+    return minimum(view(dt_buffer, 1:pg.meta.N); init=T(Inf))
 end
 # =========================================================================
 # OVERLOADED CAPACITY MANAGERS

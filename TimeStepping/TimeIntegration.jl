@@ -1,3 +1,5 @@
+export mainTimeIntegrator!
+
 function (method::TimeStepper)(kwargs...)
     error("Each `TimeStepper` must override the ()-operator.")
 end

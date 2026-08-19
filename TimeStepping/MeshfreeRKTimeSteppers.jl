@@ -138,7 +138,8 @@ function (rk::GeneralRKTimeStepper{D, M, T})(
                 end
                 rho_stage[p_idx] = u_stage
             end
-            apply_boundary_conditions!(pg, rho_stage)
+            stage_time = time + c[stage] * dt
+            apply_boundary_conditions!(pg, rho_stage, eq, stage_time)
         end
         
         evaluate_stage_derivatives!(main_grad, eq, pg, rk, stage, dt, rho_stage)
@@ -162,5 +163,5 @@ function (rk::GeneralRKTimeStepper{D, M, T})(
         rhos[p_idx] = rho_final
     end
     
-    apply_boundary_conditions!(pg, rhos)
+    apply_boundary_conditions!(pg, rhos, eq, time + dt)
 end

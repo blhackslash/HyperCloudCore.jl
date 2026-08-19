@@ -1,4 +1,8 @@
-export @pebug, DEBUG_TARGET_PARTICLE, set_thread_tolerance!
+
+# Conversions
+export param2uvec, param2xvec, param2svec, param2fvec, prim2cons, cons2prim
+export set_threads!, @pebug, DEBUG_TARGET_PARTICLE, set_thread_tolerance!
+
 
 const IS_DEBUG = Ref(false)
 const DEBUG_TARGET_PARTICLE = Ref(-1)
@@ -39,30 +43,30 @@ macro smart_parallel(condition, loop)
     end)
 end
 
-function calculate_thread_threshold(
-    pg::ParticleGrid{D, M, T}, 
-    main_grad::MUSCL{D, M, T, B_LEN}
-) where {D, M, T, B_LEN}
+# function calculate_thread_threshold(
+#     pg::ParticleGrid{D, M, T}, 
+#     main_grad::MUSCL{D, M, T, B_LEN}
+# ) where {D, M, T, B_LEN}
     
-    l3_cache_bytes = Int(CPUSummary.cache_size(Val(3))) * CPUSummary.num_cores()
-    N_nb = length(pg.neighbor.indices) / max(1, pg.meta.N)
+#     l3_cache_bytes = Int(CPUSummary.cache_size(Val(3))) * CPUSummary.num_cores()
+#     N_nb = length(pg.neighbor.indices) / max(1, pg.meta.N)
     
-    base_bytes = 3 * sizeof(T) * M
-    grad_bytes = sizeof(T) * B_LEN * M
-    nb_bytes = N_nb * sizeof(T) * (1 + 1 + D)
+#     base_bytes = 3 * sizeof(T) * M
+#     grad_bytes = sizeof(T) * B_LEN * M
+#     nb_bytes = N_nb * sizeof(T) * (1 + 1 + D)
     
-    bytes_per_particle = base_bytes + grad_bytes + nb_bytes
-    return floor(Int, l3_cache_bytes / bytes_per_particle * _THREAD_TOLERANCE[])
-end
+#     bytes_per_particle = base_bytes + grad_bytes + nb_bytes
+#     return floor(Int, l3_cache_bytes / bytes_per_particle * _THREAD_TOLERANCE[])
+# end
 
-function calculate_thread_threshold(pg::ParticleGrid{D, M, T}, ::Any; l3_cache_mb::Real=24.0) where {D, M, T}
-    l3_cache_bytes = Int(CPUSummary.cache_size(Val(3))) * CPUSummary.num_cores()
-    N_nb = length(pg.neighbor.indices) / max(1, pg.meta.N)
+# function calculate_thread_threshold(pg::ParticleGrid{D, M, T}, ::Any; l3_cache_mb::Real=24.0) where {D, M, T}
+#     l3_cache_bytes = Int(CPUSummary.cache_size(Val(3))) * CPUSummary.num_cores()
+#     N_nb = length(pg.neighbor.indices) / max(1, pg.meta.N)
     
-    base_bytes = 3 * sizeof(T) * M
-    nb_bytes = N_nb * sizeof(T) * (1 + 1 + D)
-    return floor(Int, l3_cache_bytes / (base_bytes + nb_bytes))
-end
+#     base_bytes = 3 * sizeof(T) * M
+#     nb_bytes = N_nb * sizeof(T) * (1 + 1 + D)
+#     return floor(Int, l3_cache_bytes / (base_bytes + nb_bytes))
+# end
 
 function safe_resize!(vec::AbstractVector, N::Int)
     if length(vec) < N
@@ -124,3 +128,13 @@ end
 
 @inline prim2cons(eq, U) = U
 @inline cons2prim(eq, U) = U
+
+@inline function sort_flux(f_i::State{M, T}, f_j::State{M, T}, F_i::Flux{D, M, T}, F_j::Flux{D, M, T}, dist_k::Space{D, T}) where {D, M, T}
+    f_L = Flux{D, M, T}(ntuple(d -> dist_k[d] > zero(T) ? f_i : f_j, Val(D)))
+    f_R = Flux{D, M, T}(ntuple(d -> dist_k[d] > zero(T) ? f_j : f_i, Val(D)))
+    
+    F_L = Flux{D, M, T}(ntuple(d -> dist_k[d] > zero(T) ? F_i[d] : F_j[d], Val(D)))
+    F_R = Flux{D, M, T}(ntuple(d -> dist_k[d] > zero(T) ? F_j[d] : F_i[d], Val(D)))
+    
+    return f_L, f_R, F_L, F_R
+end

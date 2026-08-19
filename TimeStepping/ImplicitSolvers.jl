@@ -1,3 +1,14 @@
+export LinearizedRelaxationImplicitSolver, PicardIterationSolver
+# Added <: AbstractImplicitSolver just in case you use it later!
+struct PicardIterationSolver{T} <: AbstractImplicitSolver
+    max_iters::Int
+    tol::T
+    s_buffers::Vector{Vector{T}}
+    y_buffers::Vector{Vector{T}}
+end
+
+struct LinearizedRelaxationImplicitSolver <: AbstractImplicitSolver end
+
 function PicardIterationSolver(::Type{T}, max_components::Int = 100; max_iters::Int = 20, tol::T = T(1e-8)) where {T}
     n_threads = Threads.nthreads()
     s_buffers = [zeros(T, max_components) for _ in 1:n_threads]

@@ -1,3 +1,11 @@
+
+export Interpolator
+
+struct Interpolator{D, IO, DO}
+    function Interpolator{D, IO, DO}() where {D, IO, DO}
+        new{D, IO, DO}()
+    end
+end
 # =========================================================================
 # COMPILE-TIME METADATA HELPERS
 # =========================================================================
@@ -228,9 +236,9 @@ include("FluxFunctions.jl")
 
 include("Central.jl")
 
+include("MUSCL.jl")
 include("Limiter.jl")
 include("MOOD.jl")
-include("MUSCL.jl")
 
 include("Upwind.jl")
 

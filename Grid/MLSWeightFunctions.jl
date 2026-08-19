@@ -1,3 +1,22 @@
+export ExponentialWeightFunction, InverseWeightFunction
+
+"""
+    ExponentialWeightFunction(alpha::Real, range::Real)
+"""
+struct ExponentialWeightFunction{T} <: MLSWeightFunction
+    alpha::T
+    range::T
+    inv_range_sq::T
+end
+
+"""
+    InverseWeightFunction(alpha::Real=0.0, range::Real=0.0)
+"""
+struct InverseWeightFunction{T} <: MLSWeightFunction
+    alpha::T
+    range::T
+end
+
 function ExponentialWeightFunction(alpha::T, range::T) where {T}
     inv_range_sq = one(T) / (range^2)
     ExponentialWeightFunction{T}(alpha, range, inv_range_sq)

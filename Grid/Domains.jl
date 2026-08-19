@@ -1,3 +1,30 @@
+export RectangularDomain, SphericalDomain
+
+# 2. General Custom/Rectangular Domain Struct
+struct Domain{Shape, D, T, F_Valid, F_Interior, F_Tag} <: AbstractDomain{D, T}
+    canvas_mins::Space{D, T}
+    canvas_maxs::Space{D, T}
+    
+    interior_mins::Space{D, T}
+    interior_maxs::Space{D, T}
+    
+    is_periodic::SVector{D, Bool}
+    L::Space{D, T}
+    L_inv::Space{D, T}
+    L_wrap::Space{D, T}
+    invL_wrap::Space{D, T}
+    
+    # Geometry Closures
+    is_valid::F_Valid        # True if inside canvas (interior + ghosts)
+    is_interior::F_Interior  # NEW: True if strictly inside the physical fluid domain
+    get_tag::F_Tag           # Returns >0 for specific walls
+    
+    bc_map::Dict{Int, AbstractBoundaryCondition}
+end
+
+const RectangularDomain{D, T, F_Valid, F_Interior, F_Tag} = Domain{Val{:rectangular}, D, T, F_Valid, F_Interior, F_Tag}
+const SphericalDomain{D, T, F_Valid, F_Interior, F_Tag} = Domain{Val{:spherical}, D, T, F_Valid, F_Interior, F_Tag}
+
 function RectangularDomain(
     ::Type{T}, 
     interior_mins::NTuple{D, Real}, 
@@ -126,5 +153,104 @@ function get_points(
     
     volumes = fill(prod(dxs_f), N)
     
+    return positions, is_boundary, tags, volumes, Tuple(dxs_f)
+end
+
+function SphericalDomain(
+    ::Type{T}, 
+    center::NTuple{D, Real}, 
+    radius::Real, 
+    nominal_dx::NTuple{D, Real};
+    interp_range_factor::Real = 2.0,
+    bc_map::Dict{Int, AbstractBoundaryCondition} = Dict{Int, AbstractBoundaryCondition}(),
+    tag_func = nothing
+) where {D, T}
+    
+    # Spheres are implicitly non-periodic
+    is_per_svec = SVector{D, Bool}(ntuple(_ -> false, Val(D)))
+    
+    c_svec = Space{D, T}(center...)
+    r_T = T(radius)
+    dxs_f = Space{D, T}(nominal_dx...)
+    
+    mins_f = c_svec .- r_T
+    maxs_f = c_svec .+ r_T
+    
+    # Pad the bounding box to accommodate ghost particles
+    N_ghost = ceil(Int, interp_range_factor)
+    max_dx = maximum(dxs_f)
+    ghost_padding = N_ghost * max_dx
+    
+    canvas_mins = mins_f .- ghost_padding
+    canvas_maxs = maxs_f .+ ghost_padding
+    
+    L_physical = maxs_f - mins_f
+    L_wrap = Space{D, T}(ntuple(_ -> zero(T), Val(D)))
+    invL_wrap = Space{D, T}(ntuple(_ -> zero(T), Val(D)))
+    L_inv = one(T) ./ max.(L_physical, T(1e-12))
+
+    # --- GEOMETRIC CLOSURES ---
+    
+    # 1. Interior: strictly inside the physical radius
+    is_interior_func = (pos) -> sum(abs2, pos - c_svec) <= r_T^2
+    
+    # 2. Valid: inside the physical radius PLUS the ghost layer
+    is_valid_func = (pos) -> sum(abs2, pos - c_svec) <= (r_T + ghost_padding)^2
+    
+    # 3. Tagger: Assign tag 1 to the spherical outer wall
+    actual_tag_func = if isnothing(tag_func)
+        (pos) -> is_interior_func(pos) ? 0 : 1 
+    else
+        tag_func
+    end
+
+    return Domain{Val{:spherical}, D, T, typeof(is_valid_func), typeof(is_interior_func), typeof(actual_tag_func)}(
+        canvas_mins, canvas_maxs, mins_f, maxs_f, 
+        is_per_svec, L_physical, L_inv, L_wrap, invL_wrap, 
+        is_valid_func, is_interior_func, actual_tag_func, bc_map
+    )
+end
+
+function get_points(
+    domain::Domain{Val{:spherical}, D, T},
+    nominal_dx::NTuple{D, Real};
+    interp_range_factor::Real = 2.0,
+    randomness::Tuple = ntuple(i -> zero(T), D),
+    rng = Random.default_rng()
+) where {D, T}
+    
+    canvas_mins = domain.canvas_mins
+    canvas_maxs = domain.canvas_maxs
+    dxs_f = Space{D, T}(nominal_dx...)
+    rand_f = Space{D, T}(randomness...)
+    
+    # EXACT node-centered calculation matching RectangularDomain
+    Ns_total = ntuple(Val(D)) do d
+        max(1, round(Int, (canvas_maxs[d] - canvas_mins[d]) / dxs_f[d])) + 1
+    end
+    
+    positions = Space{D, T}[]
+    is_boundary = Bool[]
+    tags = Int[]
+    
+    for I in CartesianIndices(Ns_total)
+        pos_tuple = ntuple(Val(D)) do d
+            # Start exactly on canvas_mins without the cell-centered offset
+            canvas_mins[d] + (I[d] - 1) * dxs_f[d] + rand_f[d] * (rand(rng, T) * 2 - 1)
+        end
+        
+        pos_svec = Space{D, T}(pos_tuple)
+        
+        # Cookie-cutter extraction
+        if domain.is_valid(pos_svec)
+            push!(positions, pos_svec)
+            tag = domain.get_tag(pos_svec)
+            push!(tags, tag)
+            push!(is_boundary, tag != 0)
+        end
+    end
+    
+    N = length(positions)
+    volumes = fill(prod(dxs_f), N)
     return positions, is_boundary, tags, volumes, Tuple(dxs_f)
 end

@@ -97,7 +97,7 @@ end
 end
 
 function (imex_ts::GeneralIMEXTimeStepper{D, M, T})(
-    eq_kin::HyperbolicPDE{D, M, T, R}, pg::ParticleGrid{D, M, T}, time_n::Real, dt::Real
+    eq_kin::HyperbolicPDE{D, M, T, R}, pg::ParticleGrid{D, M, T}, time::Real, dt::Real
 ) where {M, D, T, R}
     
     s = imex_ts.num_stages
@@ -158,8 +158,8 @@ function (imex_ts::GeneralIMEXTimeStepper{D, M, T})(
                 current_Y_i[p_idx], p_idx, imex_ts.pde, imex_ts.source_term_object.km
             )
         end
-
-        apply_boundary_conditions!(pg, current_Y_i)
+        stage_time = time + bt.c_t[stage] * dt
+        apply_boundary_conditions!(pg, current_Y_i, imex_ts.pde, stage_time)
         evaluate_stage_derivatives_imex!(imex_ts.divergence_interpolator, eq_kin, pg, imex_ts, i, dt, current_Y_i)
     end 
     
@@ -178,5 +178,5 @@ function (imex_ts::GeneralIMEXTimeStepper{D, M, T})(
         pg.rhos[p_idx] = rho_final
     end
 
-    apply_boundary_conditions!(pg, pg.rhos)
+    apply_boundary_conditions!(pg, pg.rhos, imex_ts.pde, time + dt)
 end

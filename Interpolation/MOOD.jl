@@ -1,8 +1,31 @@
+export MOODu1, MOODu2, NoMOOD, OnlyMOOD, MOOD, EPD1, EPD2, EPD0, StrictEPD0
+
+struct EPD1 <: MOODStrategy end
+struct EPD2 <: MOODStrategy end
+struct EPD0 <: MOODStrategy end
+struct StrictEPD0 <: MOODStrategy end
+
+struct MOODu1{T} <: RealMOOD 
+    d::T
+end
+struct MOODu2{T} <: RealMOOD 
+    d::T
+end
+
+struct NoMOOD <: MOODCriterion end
+struct OnlyMOOD <: RealMOOD end
+
+MOOD(criterion::MOODCriterion) = MOOD(EPD1(), criterion)
+MOOD() = MOOD(EPD1(), NoMOOD())
+
 @inline function evaluate_mood_and_halo!(
     main_grad, pg, rk, stage, dt, rho_stage
 )
     return false
 end
+
+@inline _get_interface_orders(::MOODStrategy, oi, oj) = (min(oi, oj), min(oi, oj)) 
+@inline _get_interface_orders(::EPD0, oi, oj) = (oi, oj) 
 
 @inline function evaluate_mood_and_halo!(
     main_grad::MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER, MOOD{S, C}, INTERPS, L, NF}, 

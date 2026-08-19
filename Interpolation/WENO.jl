@@ -1,9 +1,16 @@
+export WENO
+
+struct WENO{D, M, T, I <: Interpolator} <: DivergenceInterpolator
+    order::Int
+    interpolator::I
+end
 # =========================================================================
 # STATELESS WENO API
 # =========================================================================
 
 @inline update_size!(::WENO, ::Int) = nothing
 @inline update_content!(::WENO, args...) = nothing
+@inline _extract_order(g::WENO) = g.order
 
 function WENO(::Type{T}, dimension::Int, M::Int, order::Int; flux::NumericalFluxFunction = RusanovFlux()) where {T}
     @assert order >= 2 "WENO requires order >= 2 for second derivatives."
