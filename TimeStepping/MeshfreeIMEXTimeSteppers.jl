@@ -1,12 +1,12 @@
 @inline function evaluate_stage_derivatives_imex!(
-    main_grad::DivergenceInterpolator, eq_kin, pg, imex_ts, i, dt, current_Y_i
+    main_grad::DivergenceInterpolator, eq_kin, pg, imex, i, dt, current_Y_i
 )
     N_particles = pg.meta.N
     nb_slices = pg.neighbor.ranges
     nb_indices = pg.neighbor.indices
     is_boundary = pg.core.is_boundary
-    int_buffer = imex_ts.int_buffer
-    K_E_stage = imex_ts.K_E_stages[i]
+    int_buffer = imex.int_buffer
+    K_E_stage = imex.K_E_stages[i]
 
     update_size!(main_grad, N_particles)
     use_threads = _use_threads()
@@ -36,15 +36,15 @@ end
 
 @inline function evaluate_stage_derivatives_imex!(
     main_grad::MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER, MOOD{S, C}, INTERPS, L, NF}, 
-    eq_kin, pg, imex_ts, i, dt, current_Y_i
+    eq_kin, pg, imex, i, dt, current_Y_i
 ) where {D, M, T, B_LEN, MAX_ORDER, DIV_ORDER, S <: MOODStrategy, C <: RealMOOD, INTERPS, L, NF}
     
     N_particles = pg.meta.N
     nb_slices = pg.neighbor.ranges
     nb_indices = pg.neighbor.indices
     is_boundary = pg.core.is_boundary
-    int_buffer = imex_ts.int_buffer
-    K_E_stage = imex_ts.K_E_stages[i]
+    int_buffer = imex.int_buffer
+    K_E_stage = imex.K_E_stages[i]
     
     orders = main_grad.particle_orders
     needs_recalc = pg.shared.bit_buffer
@@ -88,7 +88,7 @@ end
             K_E_stage[p_idx] = -main_grad(eq_kin, p_idx, fi, nb_slice, pg, int_buffer)
         end
 
-        needs_another_pass = evaluate_mood_and_halo!(main_grad, pg, imex_ts, i, dt, current_Y_i)
+        needs_another_pass = evaluate_mood_and_halo!(main_grad, pg, imex, i, dt, current_Y_i)
         
         if !needs_another_pass || iteration >= MAX_ORDER
             break
@@ -96,18 +96,18 @@ end
     end
 end
 
-function (imex_ts::GeneralIMEXTimeStepper{D, M, T})(
+function (imex::GeneralIMEXTimeStepper{D, M, T})(
     eq_kin::HyperbolicPDE{D, M, T, R}, pg::ParticleGrid{D, M, T}, time::Real, dt::Real
 ) where {M, D, T, R}
     
-    s = imex_ts.num_stages
-    bt = imex_ts.tableau
+    s = imex.num_stages
+    bt = imex.tableau
     N_particles = pg.meta.N
     M_neighbors = length(pg.neighbor.indices)
 
-    update_size!(imex_ts, N_particles, M_neighbors)
+    update_size!(imex, N_particles, M_neighbors)
     
-    U_n = imex_ts.rho_n
+    U_n = imex.rho_n
     U_n[1:N_particles] .= view(pg.rhos, 1:N_particles)
 
     for i in 1:s
@@ -116,7 +116,7 @@ function (imex_ts::GeneralIMEXTimeStepper{D, M, T})(
             pg.mover(pg, delta_t)           
         end
         
-        current_Y_i = imex_ts.Y_stages[i]
+        current_Y_i = imex.Y_stages[i]
 
         @batch for p_idx in 1:N_particles
             if pg.core.is_boundary[p_idx]; current_Y_i[p_idx] = pg.rhos[p_idx]; continue; end
@@ -124,17 +124,17 @@ function (imex_ts::GeneralIMEXTimeStepper{D, M, T})(
             Y_local = U_n[p_idx]
             for j in 1:(i-1)
                 if bt.a_t[i,j] != zero(T)
-                    Y_local += (dt * bt.a_t[i,j]) * imex_ts.K_E_stages[j][p_idx]
+                    Y_local += (dt * bt.a_t[i,j]) * imex.K_E_stages[j][p_idx]
                 end
                 if bt.a[i,j] != zero(T)
-                    Y_local += (dt * bt.a[i,j]) * imex_ts.K_I_stages[j][p_idx]
+                    Y_local += (dt * bt.a[i,j]) * imex.K_I_stages[j][p_idx]
                 end
             end
             current_Y_i[p_idx] = Y_local
         end
 
-        if imex_ts.source_term_object isa NonLocalRelaxationSourceTerm
-            update_nonlocal_potential!(imex_ts.source_term_object, current_Y_i, pg, imex_ts.pde)  
+        if imex.source_term_object isa NonLocalRelaxationSourceTerm
+            update_nonlocal_potential!(imex.source_term_object, current_Y_i, pg, imex.pde)  
         end
         
         if abs(bt.a[i,i]) > T(1e-14)
@@ -142,25 +142,25 @@ function (imex_ts::GeneralIMEXTimeStepper{D, M, T})(
                 if pg.core.is_boundary[p_idx]; continue; end
                 
                 current_Y_i[p_idx] = solve(
-                    imex_ts.implicit_solver, current_Y_i[p_idx], dt * bt.a[i,i],
-                    imex_ts.source_term_object, p_idx, imex_ts.pde, imex_ts.source_term_object.km
+                    imex.implicit_solver, current_Y_i[p_idx], dt * bt.a[i,i],
+                    imex.source_term_object, p_idx, imex.pde, imex.source_term_object.km
                 )
             end
         end
         
         @batch for p_idx in 1:N_particles
             if pg.core.is_boundary[p_idx]
-                imex_ts.K_I_stages[i][p_idx] = zero(State{M, T})
+                imex.K_I_stages[i][p_idx] = zero(State{M, T})
                 continue
             end
             
-            imex_ts.K_I_stages[i][p_idx] = imex_ts.source_term_object(
-                current_Y_i[p_idx], p_idx, imex_ts.pde, imex_ts.source_term_object.km
+            imex.K_I_stages[i][p_idx] = imex.source_term_object(
+                current_Y_i[p_idx], p_idx, imex.pde, imex.source_term_object.km
             )
         end
-        stage_time = time + bt.c_t[stage] * dt
-        apply_boundary_conditions!(pg, current_Y_i, imex_ts.pde, stage_time)
-        evaluate_stage_derivatives_imex!(imex_ts.divergence_interpolator, eq_kin, pg, imex_ts, i, dt, current_Y_i)
+        stage_time = time + bt.c_t[s] * dt
+        apply_boundary_conditions!(pg, current_Y_i, imex, imex.pde, stage_time)
+        evaluate_stage_derivatives_imex!(imex.divergence_interpolator, eq_kin, pg, imex, i, dt, current_Y_i)
     end 
     
     @batch for p_idx in 1:N_particles
@@ -169,14 +169,14 @@ function (imex_ts::GeneralIMEXTimeStepper{D, M, T})(
         rho_final = U_n[p_idx]
         for i in 1:s
             if bt.b_t[i] != zero(T)
-                rho_final += (dt * bt.b_t[i]) * imex_ts.K_E_stages[i][p_idx]
+                rho_final += (dt * bt.b_t[i]) * imex.K_E_stages[i][p_idx]
             end
             if bt.b[i] != zero(T)
-                rho_final += (dt * bt.b[i]) * imex_ts.K_I_stages[i][p_idx]
+                rho_final += (dt * bt.b[i]) * imex.K_I_stages[i][p_idx]
             end
         end
         pg.rhos[p_idx] = rho_final
     end
 
-    apply_boundary_conditions!(pg, pg.rhos, imex_ts.pde, time + dt)
+    apply_boundary_conditions!(pg, pg.rhos, imex, imex.pde, time + dt)
 end

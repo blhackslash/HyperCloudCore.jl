@@ -1,3 +1,5 @@
+export MUSCL
+
 struct ConstantReconstruction end
 
 struct MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER, MOOD, INTERPS, L, NF} <: DivergenceInterpolator

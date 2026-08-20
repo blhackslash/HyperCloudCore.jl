@@ -1,4 +1,14 @@
 export UpwindFlux, RusanovFlux
+
+@inline function max_eigenvalues(eq::HyperbolicPDE{D, M, T, R}, f_L::Flux{D, M, T}, f_R::Flux{D, M, T}) where {D, M, T, R}
+    return SVector{D, T}(ntuple(Val(D)) do d
+        lamL = max_eigenvalue(eq, f_L[d], d)
+        lamR = max_eigenvalue(eq, f_R[d], d)
+        max(lamL, lamR)
+    end)
+end
+
+
 # =========================================================================
 # NUMERICAL FLUXES (Fully Unified)
 # =========================================================================

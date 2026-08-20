@@ -7,9 +7,9 @@ struct OutflowBC <: AbstractBoundaryCondition end
 # BOUNDARY CONDITION DISPATCHER
 # =========================================================================
 
-function apply_boundary_conditions!(pg::ParticleGrid{D, M, T}, rhos_buffer::AbstractVector{State{M, T}}, eq::HyperbolicPDE, t::Real) where {D, M, T}
+function apply_boundary_conditions!(pg::ParticleGrid{D, M, T}, rhos_buffer::AbstractVector{State{M, T}}, ts::TimeStepper, eq::HyperbolicPDE, t::Real) where {D, M, T}
     for (tag, bc_functor) in pg.domain.bc_map
-        bc_functor(pg, rhos_buffer, tag, eq, t)
+        bc_functor(pg, rhos_buffer, tag, ts, eq, t)
     end
     return nothing
 end
@@ -19,7 +19,7 @@ end
 # =========================================================================
 
 # 1. Fixed Dirichlet
-function (::FixedDirichlet)(pg::ParticleGrid{D, M, T}, rhos_buffer::AbstractVector{State{M, T}}, tag::Int, eq::HyperbolicPDE, t::Real) where {D, M, T}
+function (::FixedDirichlet)(pg::ParticleGrid{D, M, T}, rhos_buffer::AbstractVector{State{M, T}}, tag::Int, ts, eq::HyperbolicPDE, t::Real) where {D, M, T}
     @inbounds for i in 1:pg.meta.N
         if pg.core.tags[i] == tag && pg.core.is_boundary[i]
             rhos_buffer[i] = pg.rhos[i] # Just uses initial state
@@ -29,7 +29,7 @@ function (::FixedDirichlet)(pg::ParticleGrid{D, M, T}, rhos_buffer::AbstractVect
 end
 
 # 2. Outflow (Zero-Divergence)
-function (::OutflowBC)(pg::ParticleGrid{D, M, T}, rhos_buffer::AbstractVector{State{M, T}}, tag::Int, eq::HyperbolicPDE, t::Real) where {D, M, T}
+function (::OutflowBC)(pg::ParticleGrid{D, M, T}, rhos_buffer::AbstractVector{State{M, T}}, tag::Int, ts, eq::HyperbolicPDE, t::Real) where {D, M, T}
     dist_vec = get_distances(pg)
     status = pg.shared.int_buffer 
     fill!(status, -1) # Default to ignored

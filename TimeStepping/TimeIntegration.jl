@@ -120,8 +120,6 @@ function mainTimeIntegrator!(
     saveData!(xs, us, ts, snap_counter, pg, t, remove_ghosts)
     snap_counter += 1 
     
-    threshold = calculate_thread_threshold(pg, div_interp)
-    #set_threads!(threshold)
     @info "Using $(_USE_THREADS[] ? "@threads" : "@batch") for parallel runs!"
 
     p = Progress(10000, desc="Running Simulation...")

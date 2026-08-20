@@ -1,3 +1,5 @@
+export NoGridMover, PhysicalGridMover, CustomGridMover
+
 struct NoGridMover <: GridMover end
 struct CustomGridMover{F, P} <: GridMover
     vel_func::F

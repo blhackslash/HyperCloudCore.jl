@@ -1,4 +1,4 @@
-export BarthJespersenLimiter, VenkatakrishnanLimiter, SuperbeeLimiter, MinmodLimiter
+export BarthJespersenLimiter, VenkatakrishnanLimiter, SuperbeeLimiter, MinmodLimiter, NoLimiter
 
 struct BarthJespersenLimiter{Mode} <: RealSlopeLimiter 
     BarthJespersenLimiter(mode::Symbol=:soft) = new{mode}()
