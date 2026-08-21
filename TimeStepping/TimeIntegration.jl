@@ -101,7 +101,9 @@ function mainTimeIntegrator!(
     dt::Real;
     is_cfl::Bool = false,
     snapshots::Integer = 10,
-    remove_ghosts::Bool = false
+    remove_ghosts::Bool = false,
+    show_progress::Bool = true,
+    progress_interval::Real = 1.0
 ) where {D, M, T}
     
     xs = Vector{Vector{Space{D, T}}}(undef, snapshots + 1)
@@ -122,7 +124,11 @@ function mainTimeIntegrator!(
     
     @info "Using $(_USE_THREADS[] ? "@threads" : "@batch") for parallel runs!"
 
-    p = Progress(10000, desc="Running Simulation...")
+    p = Progress(10000, desc="Running Simulation...", dt=progress_interval, enabled=show_progress)
+    
+    # Initialize trackers for the interval-based ETA
+    last_log_time = time()
+    last_sim_time = t
 
     elapsed_time = @elapsed while t < tmax_val
         dt_val = is_cfl ? dt_inp * getTimeStep(pg, eq, div_interp) : dt_inp
@@ -139,10 +145,41 @@ function mainTimeIntegrator!(
             snap_counter += 1
         end
 
-        current_progress = ceil(Int, (t / tmax_val) * 10000)
-        update!(p, min(current_progress, 10000))
+        if show_progress
+            current_progress = ceil(Int, (t / tmax_val) * 10000)
+            update!(p, min(current_progress, 10000))
+        else
+            current_time = time()
+            wall_dt = current_time - last_log_time
+            
+            if wall_dt > progress_interval
+                sim_dt = t - last_sim_time
+                pct = round((t / tmax_val) * 100, digits=1)
+                
+                # Calculate ETA only if simulation has advanced
+                if sim_dt > 0
+                    eta_seconds = (tmax_val - t) * (wall_dt / sim_dt)
+                    eta_secs_int = round(Int, eta_seconds)
+                    
+                    # Format as HH:MM:SS
+                    h = eta_secs_int ÷ 3600
+                    m = (eta_secs_int % 3600) ÷ 60
+                    s = eta_secs_int % 60
+                    eta_str = string(lpad(h, 2, '0'), ":", lpad(m, 2, '0'), ":", lpad(s, 2, '0'))
+                    
+                    @info "Simulation Progress: $pct% | ETA: $eta_str"
+                else
+                    @info "Simulation Progress: $pct% | ETA: Calculating..."
+                end
+                
+                # Reset interval trackers
+                last_log_time = current_time
+                last_sim_time = t
+            end
+        end
     end
-    finish!(p)
+    
+    show_progress && finish!(p)
 
     if snap_counter <= snapshots + 1
         saveData!(xs, us, ts, snapshots + 1, pg, t, remove_ghosts)
