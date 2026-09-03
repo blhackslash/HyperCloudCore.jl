@@ -8,7 +8,7 @@ struct OutflowBC <: AbstractBoundaryCondition end
 # =========================================================================
 
 function apply_boundary_conditions!(pg::ParticleGrid{D, M, T}, rhos_buffer::AbstractVector{State{M, T}}, ts::TimeStepper, eq::HyperbolicPDE, t::Real) where {D, M, T}
-    for (tag, bc_functor) in pg.domain.bc_map
+    for (tag, bc_functor) in pg.geometry.bc_map
         bc_functor(pg, rhos_buffer, tag, ts, eq, t)
     end
     return nothing

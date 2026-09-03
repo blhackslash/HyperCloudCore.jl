@@ -1,4 +1,4 @@
-export MLSWeightFunction, GridMover, AbstractBoundaryCondition, AbstractDomain, NumericalFluxFunction, MOODStrategy, MOODCriterion
+export MLSWeightFunction, GridMover, AbstractBoundaryCondition, NumericalFluxFunction, MOODStrategy, MOODCriterion
 export RealMOOD, AbstractSlopeLimiter, RealSlopeLimiter, DivergenceInterpolator, AbstractPath, EquationRepresentation, NCRepresentation
 export HyperbolicPDE, UpwindAlgorithm, AbstractImplicitSolver
 export RKButcherTableau, IMEXButcherTableau, GeneralIMEXTimeStepper, GeneralRKTimeStepper
@@ -6,7 +6,6 @@ export RKButcherTableau, IMEXButcherTableau, GeneralIMEXTimeStepper, GeneralRKTi
 abstract type MLSWeightFunction end
 abstract type GridMover end
 abstract type AbstractBoundaryCondition end
-abstract type AbstractDomain{D, T} end
 
 abstract type NumericalFluxFunction end
 

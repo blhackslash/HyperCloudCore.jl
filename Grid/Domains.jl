@@ -1,252 +1,179 @@
-export RectangularDomain, SphericalDomain, get_points, Domain
+export GeometricDomain
 
-# 2. General Custom/Rectangular Domain Struct
-struct Domain{Shape, D, T, F_Valid, F_Interior, F_Tag} <: AbstractDomain{D, T}
-    canvas_mins::Space{D, T}
-    canvas_maxs::Space{D, T}
-    
-    interior_mins::Space{D, T}
-    interior_maxs::Space{D, T}
-    
-    is_periodic::SVector{D, Bool}
-    L::Space{D, T}
-    L_inv::Space{D, T}
-    L_wrap::Space{D, T}
-    invL_wrap::Space{D, T}
-    
-    # Geometry Closures
-    is_valid::F_Valid        # True if inside canvas (interior + ghosts)
-    is_interior::F_Interior  # NEW: True if strictly inside the physical fluid domain
-    get_tag::F_Tag           # Returns >0 for specific walls
-    
+# =========================================================================
+# 1. THE PURE GEOMETRY LAYER
+# =========================================================================
+struct GeometricDomain{GEO, D, T, F_Interior, F_Tag}
+    label::GEO
+    mins::Space{D, T}
+    maxs::Space{D, T}
+    is_interior::F_Interior
+    get_tag::F_Tag
     bc_map::Dict{Int, AbstractBoundaryCondition}
 end
 
-const RectangularDomain{D, T, F_Valid, F_Interior, F_Tag} = Domain{Val{:rectangular}, D, T, F_Valid, F_Interior, F_Tag}
-const SphericalDomain{D, T, F_Valid, F_Interior, F_Tag} = Domain{Val{:spherical}, D, T, F_Valid, F_Interior, F_Tag}
-
-function RectangularDomain(
+function get_rectangular_domain(
     ::Type{T}, 
-    interior_mins::NTuple{D, Real}, 
-    interior_maxs::NTuple{D, Real}, 
-    nominal_dx::NTuple{D, Real};
-    is_periodic_input::Union{Bool, NTuple{D, Bool}} = false,
-    interp_range_factor::Real = 2.0,
-    bc_map::Dict{Int, AbstractBoundaryCondition} = Dict{Int, AbstractBoundaryCondition}(),
-    tag_func = nothing
+    mins::NTuple{D, Real}, 
+    maxs::NTuple{D, Real};
+    bc_map::Dict{Int, AbstractBoundaryCondition} = Dict{Int, AbstractBoundaryCondition}()
 ) where {D, T}
     
-    is_per_svec = isa(is_periodic_input, Bool) ? SVector{D, Bool}(ntuple(_ -> is_periodic_input, Val(D))) : SVector{D, Bool}(is_periodic_input)
+    mins_f = Space{D, T}(mins...)
+    maxs_f = Space{D, T}(maxs...)
     
-    mins_f = Space{D, T}(interior_mins...)
-    maxs_f = Space{D, T}(interior_maxs...)
-    dxs_f  = Space{D, T}(nominal_dx...)
-    
-    N_ghost = ceil(Int, interp_range_factor)
-    canvas_mins = Space{D, T}(ntuple(d -> is_per_svec[d] ? mins_f[d] : mins_f[d] - N_ghost * dxs_f[d], Val(D)))
-    canvas_maxs = Space{D, T}(ntuple(d -> is_per_svec[d] ? maxs_f[d] : maxs_f[d] + N_ghost * dxs_f[d], Val(D)))
-    
-    L_physical = maxs_f - mins_f
-    L_wrap = Space{D, T}(ntuple(d -> is_per_svec[d] ? L_physical[d] : zero(T), Val(D)))
-    invL_wrap = Space{D, T}(ntuple(d -> is_per_svec[d] ? one(T) / L_physical[d] : zero(T), Val(D)))
-    L_inv = one(T) ./ max.(L_physical, T(1e-12))
-
-    # --- NEW: is_interior logic ---
     is_interior_func = (pos) -> begin
         for d in 1:D
-            # Periodic axes don't have a strict physical boundary to cross
-            if !is_per_svec[d]
-                if pos[d] < mins_f[d] || pos[d] > maxs_f[d]
-                    return false
-                end
+            if pos[d] < mins_f[d] || pos[d] > maxs_f[d]
+                return false
             end
         end
         return true
     end
 
-    actual_tag_func = if isnothing(tag_func)
-        eps_tol = maximum(dxs_f) * T(1e-3)
-        (pos) -> begin
-            # We can now reuse is_interior_func to simplify the tagger!
-            if !is_interior_func(pos)
-                if D == 2
-                    if pos[1] < mins_f[1] - eps_tol; return 1
-                    elseif pos[1] > maxs_f[1] + eps_tol; return 2
-                    elseif pos[2] < mins_f[2] - eps_tol; return 3
-                    elseif pos[2] > maxs_f[2] + eps_tol; return 4
-                    else; return 5
-                    end
-                else
-                    return 1
-                end
-            else
-                return 0 
-            end
-        end
-    else
-        tag_func
-    end
-
-    is_valid_func = (pos) -> true 
-
-    return Domain{Val{:rectangular}, D, T, typeof(is_valid_func), typeof(is_interior_func), typeof(actual_tag_func)}(
-        canvas_mins, canvas_maxs, mins_f, maxs_f, 
-        is_per_svec, L_physical, L_inv, L_wrap, invL_wrap, 
-        is_valid_func, is_interior_func, actual_tag_func, bc_map
-    )
-end
-
-function get_points(
-    domain::Domain{Val{:rectangular}, D, T};
-    Ns::NTuple{D, Integer}, # Extracted from kwargs
-    interp_range_factor::Real = 2.0,
-    randomness::Tuple = ntuple(i -> zero(T), D),
-    rng = Random.default_rng(),
-    kwargs... # Absorbs unused kwargs like `nominal_dx`
-) where {D, T}
-    
-    is_per_svec = domain.is_periodic
-    any_periodic = any(is_per_svec)
-    N_ghost = any_periodic ? 0 : ceil(Int, interp_range_factor)
-    
-    mins_f = domain.interior_mins
-    maxs_f = domain.interior_maxs
-    rand_f = Space{D, T}(randomness...)
-    
-    # Recalculate exact dx based on the integer Ns provided
-    if any_periodic
-        Ns_total = Ns
-        dxs_f = (maxs_f .- mins_f) ./ max.(Space{D, T}(Ns...), T(1.0))
-    else
-        Ns_total = Ns .+ 2 * N_ghost
-        dxs_f = (maxs_f .- mins_f) ./ max.(Space{D, T}((Ns .- 1)...), T(1.0))
-    end
-    
-N = prod(Ns_total)
-    positions = Vector{Space{D, T}}(undef, N)
-    is_boundary = zeros(Bool, N)
-    tags = Vector{Int}(undef, N)
-    
-    for (i, I) in enumerate(CartesianIndices(Ns_total))
-        pos_tuple = ntuple(Val(D)) do d
-            idx = I[d]
-            if is_per_svec[d]
-                return mins_f[d] + dxs_f[d] * (idx - T(0.5)) + rand_f[d] * (rand(rng, T) * 2 - 1)
-            else
-                if idx <= N_ghost
-                    return mins_f[d] - (N_ghost - idx + 1) * dxs_f[d]
-                elseif idx > Ns[d] + N_ghost
-                    return maxs_f[d] + (idx - (Ns[d] + N_ghost)) * dxs_f[d]
-                else
-                    base = Ns[d] == 1 ? (mins_f[d] + maxs_f[d]) / T(2.0) : mins_f[d] + (idx - N_ghost - 1) * dxs_f[d]
-                    return base + rand_f[d] * (rand(rng, T) * 2 - 1)
-                end
-            end
-        end
+    tag_func = (pos) -> begin
+        if is_interior_func(pos); return 0; end
         
-        pos_svec = Space{D, T}(pos_tuple)
-        positions[i] = pos_svec
-        tags[i] = domain.get_tag(pos_svec)
-        is_boundary[i] = tags[i] != 0
+        if D == 2
+            d_left   = abs(pos[1] - mins_f[1])
+            d_right  = abs(pos[1] - maxs_f[1])
+            d_bottom = abs(pos[2] - mins_f[2])
+            d_top    = abs(pos[2] - maxs_f[2])
+            
+            min_d = min(d_left, d_right, d_bottom, d_top)
+            
+            if min_d == d_left; return 1
+            elseif min_d == d_right; return 2
+            elseif min_d == d_bottom; return 3
+            else; return 4
+            end
+        else
+            return 1
+        end
     end
-    
-    volumes = fill(prod(dxs_f), N)
-    return positions, is_boundary, tags, volumes, Tuple(dxs_f)
+
+    return GeometricDomain(Val(:rectangular),mins_f, maxs_f, is_interior_func, tag_func, bc_map)
 end
 
-function SphericalDomain(
+function get_spherical_domain(
     ::Type{T}, 
     center::NTuple{D, Real}, 
-    radius::Real, 
-    nominal_dx::NTuple{D, Real};
-    interp_range_factor::Real = 2.0,
-    bc_map::Dict{Int, AbstractBoundaryCondition} = Dict{Int, AbstractBoundaryCondition}(),
-    tag_func = nothing
+    radius::Real;
+    bc_map::Dict{Int, AbstractBoundaryCondition} = Dict{Int, AbstractBoundaryCondition}()
 ) where {D, T}
-    
-    # Spheres are implicitly non-periodic
-    is_per_svec = SVector{D, Bool}(ntuple(_ -> false, Val(D)))
     
     c_svec = Space{D, T}(center...)
     r_T = T(radius)
-    dxs_f = Space{D, T}(nominal_dx...)
     
     mins_f = c_svec .- r_T
     maxs_f = c_svec .+ r_T
     
-    # Pad the bounding box to accommodate ghost particles
-    N_ghost = ceil(Int, interp_range_factor)
-    max_dx = maximum(dxs_f)
-    ghost_padding = N_ghost * max_dx
+    is_interior_func = (pos) -> sum(abs2, pos - c_svec) <= r_T^2
+    tag_func = (pos) -> is_interior_func(pos) ? 0 : 1 
     
-    canvas_mins = mins_f .- ghost_padding
-    canvas_maxs = maxs_f .+ ghost_padding
+    return GeometricDomain(Val(:spherical), mins_f, maxs_f, is_interior_func, tag_func, bc_map)
+end
+
+# =========================================================================
+# 2. THE NUMERICAL WRAPPER (COMPUTATIONAL DOMAIN)
+# =========================================================================
+struct ComputationalDomain{D, T}
+    canvas_mins::Space{D, T}
+    canvas_maxs::Space{D, T}
+    is_periodic::SVector{D, Bool}
+    L::Space{D, T}
+    L_inv::Space{D, T}
+    L_wrap::Space{D, T}
+    invL_wrap::Space{D, T}
+end
+
+function ComputationalDomain(
+    geom::GeometricDomain{GEO, D, T, FI, FT}, 
+    nominal_dx::NTuple{D, Real}, 
+    interp_range_factor::Real;
+    is_periodic_input::Union{Bool, NTuple{D, Bool}} = false
+) where {D, T, FI, FT, GEO}
     
-    L_physical = maxs_f - mins_f
-    L_wrap = Space{D, T}(ntuple(_ -> zero(T), Val(D)))
-    invL_wrap = Space{D, T}(ntuple(_ -> zero(T), Val(D)))
+    is_per_svec = isa(is_periodic_input, Bool) ? SVector{D, Bool}(ntuple(_ -> is_periodic_input, Val(D))) : SVector{D, Bool}(is_periodic_input)
+    
+    dxs_f = Space{D, T}(nominal_dx...)
+    N_ghost = any(is_per_svec) ? 0 : ceil(Int, interp_range_factor)
+    
+    canvas_mins = Space{D, T}(ntuple(d -> is_per_svec[d] ? geom.mins[d] : geom.mins[d] - N_ghost * dxs_f[d], Val(D)))
+    canvas_maxs = Space{D, T}(ntuple(d -> is_per_svec[d] ? geom.maxs[d] : geom.maxs[d] + N_ghost * dxs_f[d], Val(D)))
+    
+    L_physical = geom.maxs - geom.mins
+    L_wrap = Space{D, T}(ntuple(d -> is_per_svec[d] ? L_physical[d] : zero(T), Val(D)))
+    invL_wrap = Space{D, T}(ntuple(d -> is_per_svec[d] ? one(T) / L_physical[d] : zero(T), Val(D)))
     L_inv = one(T) ./ max.(L_physical, T(1e-12))
 
-    # --- GEOMETRIC CLOSURES ---
-    
-    # 1. Interior: strictly inside the physical radius
-    is_interior_func = (pos) -> sum(abs2, pos - c_svec) <= r_T^2
-    
-    # 2. Valid: inside the physical radius PLUS the ghost layer
-    is_valid_func = (pos) -> sum(abs2, pos - c_svec) <= (r_T + ghost_padding)^2
-    
-    # 3. Tagger: Assign tag 1 to the spherical outer wall
-    actual_tag_func = if isnothing(tag_func)
-        (pos) -> is_interior_func(pos) ? 0 : 1 
-    else
-        tag_func
-    end
-
-    return Domain{Val{:spherical}, D, T, typeof(is_valid_func), typeof(is_interior_func), typeof(actual_tag_func)}(
-        canvas_mins, canvas_maxs, mins_f, maxs_f, 
-        is_per_svec, L_physical, L_inv, L_wrap, invL_wrap, 
-        is_valid_func, is_interior_func, actual_tag_func, bc_map
+    return ComputationalDomain{D, T}(
+        canvas_mins, canvas_maxs, is_per_svec, L_physical, L_inv, L_wrap, invL_wrap
     )
 end
 
-
+# =========================================================================
+# 3. UNIVERSAL NARROW-BAND POINT GENERATOR
+# =========================================================================
 function get_points(
-    domain::Domain{Shape, D, T};
-    nominal_dx::NTuple{D, Real}, # Extracted from kwargs
-    interp_range_factor::Real = 2.0,
+    cd::ComputationalDomain{D, T},
+    geom::GeometricDomain{GEO, D, T, FI, FT};
+    nominal_dx::NTuple{D, Real}, 
+    interp_range_factor::Real,
     randomness::Tuple = ntuple(i -> zero(T), D),
     rng = Random.default_rng(),
-    kwargs... # Absorbs unused kwargs like `Ns`
-) where {Shape, D, T}
+    kwargs... 
+) where {D, T, FI, FT, GEO}
     
-    canvas_mins = domain.canvas_mins
-    canvas_maxs = domain.canvas_maxs
     dxs_f = Space{D, T}(nominal_dx...)
     rand_f = Space{D, T}(randomness...)
     
     Ns_total = ntuple(Val(D)) do d
-        max(1, round(Int, (canvas_maxs[d] - canvas_mins[d]) / dxs_f[d])) + 1
+        max(1, round(Int, (cd.canvas_maxs[d] - cd.canvas_mins[d]) / dxs_f[d])) + 1
     end
     
-    positions = Space{D, T}[]
-    is_boundary = Bool[]
-    tags = Int[]
+    inner_points = Space{D, T}[]
+    ghost_candidates = Space{D, T}[]
     
     for I in CartesianIndices(Ns_total)
         pos_tuple = ntuple(Val(D)) do d
-            canvas_mins[d] + (I[d] - 1) * dxs_f[d] + rand_f[d] * (rand(rng, T) * 2 - 1)
+            cd.canvas_mins[d] + (I[d] - 1) * dxs_f[d] + rand_f[d] * (rand(rng, T) * 2 - 1)
         end
         
-        pos_svec = Space{D, T}(pos_tuple)
-        if domain.is_valid(pos_svec)
-            push!(positions, pos_svec)
-            tag = domain.get_tag(pos_svec)
-            push!(tags, tag)
-            push!(is_boundary, tag != 0)
+        pos = Space{D, T}(pos_tuple)
+        if geom.is_interior(pos)
+            push!(inner_points, pos)
+        else
+            push!(ghost_candidates, pos)
         end
     end
     
+    surviving_ghosts = Space{D, T}[]
+    max_dx = maximum(dxs_f)
+    cutoff_dist_sq = (T(interp_range_factor) * max_dx + max_dx)^2
+    
+    for ghost in ghost_candidates
+        for inner in inner_points
+            if sum(abs2, ghost - inner) <= cutoff_dist_sq
+                push!(surviving_ghosts, ghost)
+                break 
+            end
+        end
+    end
+    
+    positions = vcat(inner_points, surviving_ghosts)
     N = length(positions)
+    
+    is_boundary = zeros(Bool, N)
+    tags = zeros(Int, N)
     volumes = fill(prod(dxs_f), N)
+    
+    for i in 1:N
+        pos = positions[i]
+        tag = geom.get_tag(pos)
+        tags[i] = tag
+        is_boundary[i] = (tag != 0)
+    end
+    
     return positions, is_boundary, tags, volumes, Tuple(dxs_f)
 end

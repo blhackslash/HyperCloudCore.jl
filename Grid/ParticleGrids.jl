@@ -1,4 +1,7 @@
 export createParticleGrid, ParticleGrid, getTimeStep
+
+include("Domains.jl")
+
 # ---------------------------------------------------------
 # 1. Grid Metadata
 # ---------------------------------------------------------
@@ -69,14 +72,15 @@ mutable struct ParticleGridCore{D, T}
     tags::Vector{Int}
 end
 
-struct ParticleGrid{D, M, T, WF, GM, N_OFF, Dom <: AbstractDomain{D, T}}
+struct ParticleGrid{D, M, T, WF, GM, N_OFF, Geom}
     meta::GridMetadata{D, T}
-    domain::Dom                  # <--- NEW FIELD
+    geometry::Geom                             # The continuous physics definition
+    domain::ComputationalDomain{D, T}          # The numerical canvas logic
     core::ParticleGridCore{D, T}
     shared::SharedBuffers{D, M, T}
     neighbor::NeighborData{D, T, WF}
     reorder::ReorderData{D}
-    bins::GlobalBins{D, T, N_OFF} # (Note: GlobalBins might also need its BC parameter removed)
+    bins::GlobalBins{D, T, N_OFF} 
     mover::GM
     
     rhos::Vector{State{M, T}}
@@ -87,7 +91,6 @@ end
 include("MLSWeightFunctions.jl")
 include("NeighborLogic.jl")
 include("GridMovement.jl")
-include("Domains.jl")
 include("BoundaryConditions.jl")
 include("Reordering.jl")
 #include("ParticleManagement.jl")
@@ -116,45 +119,53 @@ include("Reordering.jl")
     end
 end
 
-
-# =========================================================================
-# METHOD 1: PURE ARRAY CONSTRUCTOR (Bring Your Own Particles)
-# =========================================================================
-function createParticleGrid(
-    positions::Vector{Space{D, T}},
-    is_boundary::Vector{Bool},
-    tags::Vector{Int},
-    volumes::Vector{T},
+function ParticleGrid(
+    geom::GeometricDomain{GEO, D, T, FI, FT},
     nominal_dx::NTuple{D, Real},
-    domain::AbstractDomain{D, T};
-    interp_range_factor::Real = 2.0,
+    interp_range_factor::Real;
+    is_periodic::Union{Bool, NTuple{D, Bool}} = false,
+    randomness::Tuple = ntuple(i -> zero(T), D),
+    rng = Random.default_rng(),
     M::Int = 1,
     weight_func = ExponentialWeightFunction(one(T), one(T)), 
     mover = NoGridMover()
-) where {D, T}
+) where {D, T, FI, FT, GEO}
+    
+    comp_domain = ComputationalDomain(
+        geom, nominal_dx, interp_range_factor; 
+        is_periodic_input = is_periodic
+    )
+    
+    positions, is_boundary, tags, volumes, dxs_f = get_points(
+        comp_domain, geom;
+        nominal_dx = nominal_dx,
+        interp_range_factor = interp_range_factor,
+        randomness = randomness,
+        rng = rng
+    )
     
     N = length(positions)
     N_interior = count(!, is_boundary)
     N_ghost = N - N_interior
     
-    dxs_f = Space{D, T}(nominal_dx...)
     max_dx = maximum(dxs_f)
     R = T(interp_range_factor) * max_dx
     
-    meta = GridMetadata{D, T}(N, N_interior, N_ghost, R, max_dx, dxs_f, T(interp_range_factor), 0)
+    meta = GridMetadata{D, T}(N, N_interior, N_ghost, R, max_dx, Space{D, T}(dxs_f), T(interp_range_factor), 0)
     core = ParticleGridCore{D, T}(positions, is_boundary, volumes, tags)
     
     shared = SharedBuffers{D, M, T}(zeros(State{M, T}, N), similar(positions), zeros(T, N), zeros(Bool, N), zeros(Int, N))
     reorder = ReorderData{D}(collect(1:N), collect(1:N), zeros(Int, N), zeros(Bool, N))
     
-    bins = GlobalBins(T, domain.canvas_mins, domain.canvas_maxs, R, N)
+    bins = GlobalBins(T, comp_domain.canvas_mins, comp_domain.canvas_maxs, R, N)
     neighbors = NeighborData{D, T, typeof(weight_func)}(
         weight_func, fill(1:0, N + 1), Int[], Vector{T}(undef, 0), Vector{Space{D, T}}(undef, 0), zeros(Int, N), zeros(Int, N)
     )
 
     N_OFF = get_n_offsets(Val(D))
-    pg = ParticleGrid{D, M, T, typeof(weight_func), typeof(mover), N_OFF, typeof(domain)}(
-        meta, domain, core, shared, neighbors, reorder, bins, mover,
+    
+    pg = ParticleGrid{D, M, T, typeof(weight_func), typeof(mover), N_OFF, typeof(geom)}(
+        meta, geom, comp_domain, core, shared, neighbors, reorder, bins, mover,
         zeros(State{M, T}, N), zeros(SVector{M, Bool}, N), zeros(State{M, T}, N)
     )
 

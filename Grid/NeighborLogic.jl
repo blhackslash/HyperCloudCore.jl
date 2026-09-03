@@ -73,7 +73,7 @@ function build_global_bins!(pg::ParticleGrid)
     return nothing
 end
 
-function update_bin_neighbors!(bins::GlobalBins{D, T, N_OFF}, domain::AbstractDomain{D, T}) where {D, T, N_OFF}
+function update_bin_neighbors!(bins::GlobalBins{D, T, N_OFF}, domain::ComputationalDomain{D, T}) where {D, T, N_OFF}
     coarse_dims = bins.coarse_dims
     ci = CartesianIndices(coarse_dims)
     li = LinearIndices(coarse_dims)
