@@ -1,4 +1,4 @@
-export GeometricDomain
+export GeometricDomain, get_rectangular_domain, get_spherical_domain
 
 # =========================================================================
 # 1. THE PURE GEOMETRY LAYER
