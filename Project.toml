@@ -1,7 +1,7 @@
 name = "Meshfree4HypEq"
 uuid = "61b85536-db47-4754-9d50-4ccb1001a5ed"
-version = "0.5.0"
-authors = ["Pascal Jung <pajung@rptu.de>"]
+version = "0.1.0"
+authors = ["Pascal Jung <julia@blackslash.win>"]
 
 [deps]
 CPUSummary = "2a0fbf3d-bb9c-48f3-b0a9-814d99fd7ab9"
