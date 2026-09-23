@@ -28,7 +28,7 @@ function (weno::WENO{D, M, T, I})(
     pg::ParticleGrid{D, M, T}, ib::InteractionBuffer{D, M, T}    
 ) where {D, M, T, I}
 
-    vel = velocity(eq, f_i)
+    vel = velocity(eq, f_i, D)
     interp = weno.interpolator
     dist_all = get_distances(pg)
     w_all = get_weights(pg)

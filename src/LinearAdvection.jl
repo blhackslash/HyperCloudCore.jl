@@ -27,17 +27,17 @@ end
 @inline prim2cons(::LinearAdvection, U::State) = U
 @inline cons2prim(::LinearAdvection, W::State) = W
 
-@inline function flux(eq::LinearAdvection{D, M, T}, U::State{M, T}) where {D, M, T}
+@inline function flux(eq::LinearAdvection{D, M, T, R}, U::State{M, T}) where {D, M, T, R}
     # Element-wise multiplication for diagonal advection
     return Flux{D, M, T}(ntuple(d -> eq.vel[d] .* U, Val(D)))
 end
 
-@inline function max_eigenvalue(eq::LinearAdvection{D, M, T}, U::State{M, T}, d::Int) where {D, M, T}
+@inline function max_eigenvalue(eq::LinearAdvection{D, M, T, R}, U::State{M, T}, d::Int) where {D, M, T, R}
     # The maximum absolute diagonal entry
     return maximum(abs.(eq.vel[d]))
 end
 
-@inline function velocity(eq::LinearAdvection{D, M, T}, U::State{M, T}, d::Int) where {D, M, T}
+@inline function velocity(eq::LinearAdvection{D, M, T, R}, U::State{M, T}, d::Int) where {D, M, T, R}
     # Dynamically build the M x M SMatrix required by the path integrals
     return SMatrix{M, M, T, M*M}(ntuple(idx -> begin
         i = (idx - 1) % M + 1

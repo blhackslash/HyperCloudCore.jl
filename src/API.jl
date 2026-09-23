@@ -13,7 +13,7 @@ export flux, max_eigenvalue, prim2cons, cons2prim, velocity, update_size!, updat
 @inline cons2prim(eq::HyperbolicPDE, u::State) = u
 
 # Used by the Upwind Flux (for M=1) or Custom Grid Movers
-@inline velocity(eq::HyperbolicPDE, u::State) = error("velocity not implemented for $(typeof(eq))")
+@inline velocity(eq::HyperbolicPDE, u::State, d::Int) = error("velocity not implemented for $(typeof(eq))")
 
 # =========================================================================
 # INTERPOLATOR API -> Must be set for every DivergenceInterpolator

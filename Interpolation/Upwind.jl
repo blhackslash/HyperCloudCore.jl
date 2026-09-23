@@ -85,18 +85,15 @@ function (upwind::UpwindDivergence{D, M, T, <:Any, ClassicAlgorithm})(
     
     return T(2.0) * div
 end
-
 """
 Functor for TiwariAlgorithm. (Restricted to Scalar PDEs)
 """
 function (upwind::UpwindDivergence{D, 1, T, <:Any, TiwariAlgorithm})(
-    eq::HyperbolicPDE, i::Int, f_i::State{1, T}, nb_slice::UnitRange{Int},       
-    pg::ParticleGrid{D, 1, T}, ib::InteractionBuffer{D, 1, T}    
+    eq::HyperbolicPDE, i::Int, f_i::State{1, T}, nb_slice::UnitRange{Int}, 
+    pg::ParticleGrid{D, 1, T}, ib::InteractionBuffer{D, 1, T} 
 ) where {D, T}
-    
-    vel = velocity(eq, f_i)
-    interp = upwind.interpolator
 
+    interp = upwind.interpolator
     dist_all = get_distances(pg)
     w_all = get_weights(pg) 
 
@@ -106,11 +103,13 @@ function (upwind::UpwindDivergence{D, 1, T, <:Any, TiwariAlgorithm})(
     scale = pg.meta.dx
     
     div_tuple = ntuple(Val(D)) do d
-        stencil_size = 0 
+        # FIX: Fetch the velocity matrix for this specific direction and extract the scalar
+        vel_d = velocity(eq, f_i, d)[1, 1] 
         
+        stencil_size = 0 
         @inbounds for global_idx in nb_slice
             dist_k = dist_all[global_idx]
-            if (vel[d] * dist_k[d] <= zero(T)) 
+            if (vel_d * dist_k[d] <= zero(T)) 
                 ib.mask[global_idx] = true
                 stencil_size += 1
             else
@@ -127,7 +126,7 @@ function (upwind::UpwindDivergence{D, 1, T, <:Any, TiwariAlgorithm})(
                 res_tuple = interp(nb_slice, dist_all, w_all, ib.df, ib.mask; scale = scale_d)
                 dF_dx = State{1, T}(res_tuple[1][d, 1])
             end
-            return dF_dx * vel[d]
+            return dF_dx * vel_d
         else
             return zero(State{1, T})
         end
@@ -140,11 +139,14 @@ end
 Functor for PraveenAlgorithm. (Restricted to Scalar PDEs in 2D)
 """
 function (upwind::UpwindDivergence{2, 1, T, <:Any, PraveenAlgorithm})(
-    eq::HyperbolicPDE, i::Int, f_i::State{1, T}, nb_slice::UnitRange{Int},       
-    pg::ParticleGrid{2, 1, T}, ib::InteractionBuffer{2, 1, T}    
+    eq::HyperbolicPDE, i::Int, f_i::State{1, T}, nb_slice::UnitRange{Int}, 
+    pg::ParticleGrid{2, 1, T}, ib::InteractionBuffer{2, 1, T} 
 ) where {T}
 
-    vel = Space{2, T}(velocity(eq, f_i))
+    # FIX: Assemble the 2D velocity vector by evaluating both directions
+    vel_x = velocity(eq, f_i, 1)[1, 1]
+    vel_y = velocity(eq, f_i, 2)[1, 1]
+    vel = Space{2, T}(vel_x, vel_y)
 
     dist_all = get_distances(pg)
     w_all = get_weights(pg)
@@ -154,10 +156,10 @@ function (upwind::UpwindDivergence{2, 1, T, <:Any, PraveenAlgorithm})(
     
     scale = min(pg.meta.dx[1], pg.meta.dx[2])
     if scale < T(1e-14); return zero(State{1, T}); end
+    
     invL = one(T) / scale
 
     N_s = zero(SMatrix{2, 2, T, 4})
-    
     @inbounds for global_idx in nb_slice
         w_k = w_all[global_idx]
         dist_s = dist_all[global_idx] * invL
@@ -169,24 +171,20 @@ function (upwind::UpwindDivergence{2, 1, T, <:Any, PraveenAlgorithm})(
     div = zero(State{1, T})
 
     @inbounds for global_idx in nb_slice
-        w_k    = w_all[global_idx] 
+        w_k = w_all[global_idx] 
         dist_k = dist_all[global_idx] 
-       
         b_s = w_k * dist_k * invL
         c_s = N_s \ b_s
         coeff = c_s * invL
 
         hyp = norm(dist_k)
-    
         if hyp < T(1e-14)
             nx, ny = one(T), zero(T)
         else
             nx, ny = dist_k[1]/hyp, dist_k[2]/hyp
         end
-    
         sx = -ny 
-        sy = nx  
-        
+        sy = nx 
         alfaBar = dot(SVector{2, T}(nx, ny), coeff)
         betaBar = dot(SVector{2, T}(sx, sy), coeff)
 
@@ -195,11 +193,9 @@ function (upwind::UpwindDivergence{2, 1, T, <:Any, PraveenAlgorithm})(
 
         bracketMinus1 = min(vel_n, zero(T))
         bracketMinus2 = min(betaBar * vel_s, zero(T))
-    
         cij = alfaBar * bracketMinus1 + bracketMinus2
         
         div += cij * ib.df[global_idx] 
     end
-    
     return T(2.0) * div
 end
