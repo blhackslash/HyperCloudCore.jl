@@ -1,5 +1,17 @@
 export BarthJespersenLimiter, VenkatakrishnanLimiter, SuperbeeLimiter, MinmodLimiter, NoLimiter
+"""
+    BarthJespersenLimiter{Mode}
+    VenkatakrishnanLimiter{Mode}
+    SuperbeeLimiter{Mode}
+    MinmodLimiter{Mode}
 
+Slope limiters used to enforce monotonicity during MUSCL interface reconstruction.
+- `BarthJespersenLimiter`: Applies a standard strict minimum/maximum bounding.
+- `VenkatakrishnanLimiter`: Applies a differentiable, smooth relaxation of the Barth-Jespersen limiter bounds.
+- `SuperbeeLimiter`: A 1D-focused limiter applying the Superbee bounding function.
+- `MinmodLimiter`: A 1D-focused limiter returning the minimum modulus of the local slopes.
+- All limiters can be instantiated with a specific `Mode` (such as `:soft` or `:hard`).
+"""
 struct BarthJespersenLimiter{Mode} <: RealSlopeLimiter 
     BarthJespersenLimiter(mode::Symbol=:soft) = new{mode}()
 end
@@ -38,6 +50,16 @@ end
     return math_max(zero(T), min1)
 end
 
+"""
+    _limit_slopes(strategy, raw_grad, nb_slice, f_i, f_neighbors, pg, distVec, ::Val{DEGREE})
+
+Applies the specified slope limiter strategy to the raw gradient of a target particle.
+
+# Details
+- For `BarthJespersen` and `Venkatakrishnan`, it evaluates local maxima and minima, reconstructs the interface state using the raw gradient, and computes a limiting coefficient `phi` for each target equation.
+- For `Minmod` and `Superbee`, it computes left and right finite difference slopes based on neighbor distances and limits the gradient strictly along a 1D stencil.
+- Returns a limited gradient vector where specific polynomial basis terms are scaled by the bounding coefficient `phi`.
+"""
 function _limit_slopes(
     strategy::Union{BarthJespersenLimiter{Mode}, VenkatakrishnanLimiter{Mode}},
     raw_grad::SVector{B_LEN, State{M, T}},

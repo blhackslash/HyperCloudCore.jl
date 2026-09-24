@@ -32,7 +32,11 @@ end
 # =========================================================================
 # FAST SPATIAL HASHING (Coordinates -> 1D Bin Index)
 # =========================================================================
+"""
+    get_flat_bin_index(pos, mins, bin_size, dims)
 
+Converts 1D, 2D, or 3D physical coordinates into a flattened, 1D array index corresponding to a specific spatial coarse bin.
+"""
 @inline function get_flat_bin_index(pos::Space{1, T}, mins::Space{1, T}, bin_size::Space{1, T}, dims::NTuple{1, Int}) where {T}
     idx = floor(Int, (pos[1] - mins[1]) / bin_size[1]) + 1
     return clamp(idx, 1, dims[1])
@@ -55,6 +59,15 @@ end
 # =========================================================================
 # GLOBAL BIN BUILDING
 # =========================================================================
+"""
+    build_global_bins!(pg::ParticleGrid)
+
+Constructs the spatial hashing linked list for the current particle configuration.
+
+# Details
+- Resolves valid neighbor bins for each spatial cell, accounting for per-axis periodic wrapping.
+- Iterates over all particles, inserting them into their respective spatial bins using a highly efficient `head` and `next` linked-list methodology.
+"""
 function build_global_bins!(pg::ParticleGrid)
     N = pg.meta.N
     pos = get_positions(pg)
@@ -130,6 +143,17 @@ end
 # =========================================================================
 # UNIFIED NEIGHBOR SEARCH (Branchless & Type-Stable)
 # =========================================================================
+"""
+    (nd::NeighborData)(pg::ParticleGrid)
+
+The universal, branchless neighbor search functor managing topology updates.
+
+# Details
+- Forces physical coordinates back into the primary periodic domain limits if periodicity is active.
+- Rebuilds the coarse global bins (`build_global_bins!`).
+- **Pass 1 (Counting):** Scans adjacent spatial bins to count the valid neighbors falling within the interaction radius `R_sq` for each particle. Computes a sequential prefix sum to establish writing ranges and resizes the target buffers.
+- **Pass 2 (Writing):** Rescans the valid particles, accurately writing their indices, computed weights, and computed distances directly into the pre-allocated neighbor buffers.
+"""
 function (nd::NeighborData{D, T, WF})(pg::ParticleGrid{D, M, T, WF, GM, N_OFF, Dom}) where {D, M, T, WF, GM, N_OFF, Dom}
     
     # --- ENFORCE PER-AXIS PERIODIC WRAPPING ---

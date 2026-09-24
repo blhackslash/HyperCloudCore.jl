@@ -3,6 +3,18 @@ export GeometricDomain, get_rectangular_domain, get_spherical_domain
 # =========================================================================
 # 1. THE PURE GEOMETRY LAYER
 # =========================================================================
+"""
+    GeometricDomain{GEO, D, T, F_Interior, F_Tag}
+
+A pure mathematical abstraction representing the physical shape of the problem space.
+
+# Fields
+- `label::GEO`: The geometric identifier.
+- `mins::Space{D, T}`, `maxs::Space{D, T}`: The minimal and maximal bounding box coordinates.
+- `is_interior::F_Interior`: A function evaluating whether a given coordinate resides strictly within the geometry.
+- `get_tag::F_Tag`: A function generating integer boundary tags based on spatial location.
+- `bc_map::Dict{Int, AbstractBoundaryCondition}`: A mapping of integer tags to specific boundary condition evaluators.
+"""
 struct GeometricDomain{GEO, D, T, F_Interior, F_Tag}
     label::GEO
     mins::Space{D, T}
@@ -12,6 +24,13 @@ struct GeometricDomain{GEO, D, T, F_Interior, F_Tag}
     bc_map::Dict{Int, AbstractBoundaryCondition}
 end
 
+"""
+    get_rectangular_domain(::Type{T}, mins, maxs; bc_map)
+
+Generates a rectangular `GeometricDomain` instance. 
+- Constructs an interior evaluation function enforcing strict Cartesian bounding box constraints.
+- Automatically handles edge tagging in 2D by assigning 1 to Left, 2 to Right, 3 to Bottom, and 4 to Top based on nearest-distance evaluations.
+"""
 function get_rectangular_domain(
     ::Type{T}, 
     mins::NTuple{D, Real}, 
@@ -55,6 +74,13 @@ function get_rectangular_domain(
     return GeometricDomain(Val(:rectangular),mins_f, maxs_f, is_interior_func, tag_func, bc_map)
 end
 
+"""
+    get_spherical_domain(::Type{T}, center, radius; bc_map)
+
+Generates a spherical (or circular) `GeometricDomain` instance.
+- Employs a squared-distance interior evaluation against the defined center point and radius.
+- Assigns a uniform boundary tag of 1 to all exterior points.
+"""
 function get_spherical_domain(
     ::Type{T}, 
     center::NTuple{D, Real}, 
@@ -87,6 +113,15 @@ struct ComputationalDomain{D, T}
     invL_wrap::Space{D, T}
 end
 
+"""
+    ComputationalDomain{D, T}
+
+A numerical wrapper surrounding the `GeometricDomain` that manages computational padding, canvas expansion, and periodic limits.
+
+# Details
+- Extends the baseline mathematical boundaries out by a specified ghost layer width unless periodicity is explicitly activated.
+- Calculates and stores inverse lengths (`L_inv`, `invL_wrap`) to assist with rapid periodic distance computations downstream.
+"""
 function ComputationalDomain(
     geom::GeometricDomain{GEO, D, T, FI, FT}, 
     nominal_dx::NTuple{D, Real}, 
@@ -115,6 +150,17 @@ end
 # =========================================================================
 # 3. UNIVERSAL NARROW-BAND POINT GENERATOR
 # =========================================================================
+"""
+    get_points(cd::ComputationalDomain, geom::GeometricDomain; nominal_dx, interp_range_factor, randomness, rng)
+
+Generates a universal narrow-band particle grid utilizing the spatial canvas defined by the computational domain.
+
+# Details
+- Generates a baseline Cartesian point cloud separated by `nominal_dx`, applying optional random positional offsets.
+- Sorts generated points into interior candidates and ghost candidates using the underlying geometry's `is_interior` functor.
+- Filters exterior ghosts aggressively using a cutoff distance dictated by the `interp_range_factor`, yielding an optimized narrow-band boundary layer rather than filling the entire canvas.
+- Outputs the filtered particle positions alongside their respective boundary booleans, tags, volumes, and effective spacing.
+"""
 function get_points(
     cd::ComputationalDomain{D, T},
     geom::GeometricDomain{GEO, D, T, FI, FT};

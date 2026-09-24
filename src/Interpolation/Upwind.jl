@@ -1,6 +1,15 @@
 export UpwindDivergence
-export TiwariAlgorithm, PraveenAlgorithm, NonLinearPraveenAlgorithm, ClassicAlgorithm
- 
+export TiwariAlgorithm, PraveenAlgorithm, ClassicAlgorithm
+"""
+    TiwariAlgorithm
+    PraveenAlgorithm
+    ClassicAlgorithm
+
+Abstract types representing various upwind divergence algorithms. 
+- `TiwariAlgorithm`: Restricted to scalar PDEs.
+- `PraveenAlgorithm`: Restricted to 1st-order scalar PDEs.
+- `ClassicAlgorithm`: Natively supports both scalars and systems via state structures.
+"""
 abstract type TiwariAlgorithm <: UpwindAlgorithm end 
 abstract type PraveenAlgorithm <: UpwindAlgorithm end  
 abstract type NonLinearPraveenAlgorithm <: UpwindAlgorithm end  
@@ -19,7 +28,25 @@ end
 # =========================================================================
 # UPWIND GRADIENT SETUP
 # =========================================================================
+"""
+    UpwindDivergence(::Type{T}, dimension::Int, M::Int, order::Int; flux=UpwindFlux(), algType="Classic")
 
+Constructs an `UpwindDivergence` evaluator, instantiating the appropriate algorithm and interpolator types.
+
+# Arguments
+- `::Type{T}`: The numeric type used for evaluations.
+- `dimension::Int`: The spatial dimension.
+- `M::Int`: The number of equations (M=1 for scalars).
+- `order::Int`: The numerical order, which must be greater than or equal to 1.
+
+# Keyword Arguments
+- `flux::NumericalFluxFunction`: Defaults to `UpwindFlux()`.
+- `algType::String`: Specifies the algorithm type. Valid options are "Classic", "Tiwari", or "Praveen[span_37](start_span)"[span_37](end_span). 
+
+# Details
+- If "Tiwari" is selected, it asserts that the system is scalar (`M == 1`).
+- If "Praveen" is selected, it asserts that the system is scalar (`M == 1`) and strictly 1st order (`order == 1`).
+"""
 function UpwindDivergence(
     ::Type{T}, dimension::Int, M::Int, order::Int; 
     flux::NumericalFluxFunction=UpwindFlux(), algType::String="Classic"
@@ -52,8 +79,12 @@ end
 ==============================================================================#
 
 """
-Functor for UpwindDivergence (ClassicAlgorithm).
-Works for 1D, 2D, 3D, and natively supports both Scalars and Systems via `State{M, T}`.
+    (upwind::UpwindDivergence{D, M, T, <:Any, ClassicAlgorithm})(...)
+
+Functor execution for `ClassicAlgorithm`. This algorithm works natively across 1D, 2D, and 3D geometries, and naturally handles both scalar problems and systems of equations.
+
+# Returns
+- A `State{M, T}` representing the divergence multiplied by 2.0. It returns a zero state if the neighborhood slice is smaller than the requested interpolation order.
 """
 function (upwind::UpwindDivergence{D, M, T, <:Any, ClassicAlgorithm})(
     eq::HyperbolicPDE, i::Int, f_i::State{M, T}, nb_slice::UnitRange{Int},       
@@ -86,7 +117,13 @@ function (upwind::UpwindDivergence{D, M, T, <:Any, ClassicAlgorithm})(
     return T(2.0) * div
 end
 """
-Functor for TiwariAlgorithm. (Restricted to Scalar PDEs)
+    (upwind::UpwindDivergence{D, 1, T, <:Any, TiwariAlgorithm})(...)
+
+Functor execution for `TiwariAlgorithm`. This evaluation is exclusively restricted to scalar PDEs.
+
+# Details
+- Constructs a stencil mask by evaluating whether the velocity multiplied by the particle distance is less than or equal to zero.
+- Returns a zeroed state if the valid stencil size falls below the interpolator's order.
 """
 function (upwind::UpwindDivergence{D, 1, T, <:Any, TiwariAlgorithm})(
     eq::HyperbolicPDE, i::Int, f_i::State{1, T}, nb_slice::UnitRange{Int}, 
@@ -134,9 +171,14 @@ function (upwind::UpwindDivergence{D, 1, T, <:Any, TiwariAlgorithm})(
 
     return sum(div_tuple) 
 end
-
 """
-Functor for PraveenAlgorithm. (Restricted to Scalar PDEs in 2D)
+    (upwind::UpwindDivergence{2, 1, T, <:Any, PraveenAlgorithm})(...)
+
+Functor execution for `PraveenAlgorithm`. This execution path is restricted to scalar PDEs exclusively in 2D space.
+
+# Details
+- Assembles a 2D velocity vector by explicitly evaluating the velocity in both principal directions.
+- Evaluates moving least squares normal and shear components using specialized thresholding (e.g., `min(vel_n, zero(T))`).
 """
 function (upwind::UpwindDivergence{2, 1, T, <:Any, PraveenAlgorithm})(
     eq::HyperbolicPDE, i::Int, f_i::State{1, T}, nb_slice::UnitRange{Int}, 

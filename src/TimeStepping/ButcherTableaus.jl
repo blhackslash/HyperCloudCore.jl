@@ -4,7 +4,18 @@ export IMEX_Euler_Tableau, IMEX_ARS233_Tableau, IMEX_ARS222_Tableau, IMEX_PRSSP3
 # =========================================================================
 # EXPLICIT RUNGE-KUTTA TABLEAUS
 # =========================================================================
+"""
+    RK1_Euler_Tableau(::Type{T})
+    RK2_Ralston_Tableau(::Type{T})
+    RK3_SSP_Tableau(::Type{T})
+    RK4_Classical_Tableau(::Type{T})
 
+Constructs standard explicit Runge-Kutta Butcher tableaus of various temporal orders. 
+- `RK1_Euler_Tableau`: 1st-order forward Euler scheme.
+- `RK2_Ralston_Tableau`: 2nd-order Ralston method.
+- `RK3_SSP_Tableau`: 3rd-order Strong Stability Preserving (SSP) scheme.
+- `RK4_Classical_Tableau`: 4th-order classical RK scheme.
+"""
 function RK1_Euler_Tableau(::Type{T})::RKButcherTableau{T} where {T}
     return RKButcherTableau(zeros(T, 1, 1), T[1], T[1])
 end
@@ -33,7 +44,18 @@ end
 # =========================================================================
 # IMEX RUNGE-KUTTA TABLEAUS
 # =========================================================================
+"""
+    IMEX_Euler_Tableau(::Type{T})
+    IMEX_ARS233_Tableau(::Type{T}, gamma_val)
+    IMEX_ARS222_Tableau(::Type{T}, gamma_val)
+    IMEX_PRSSP3_Tableau(::Type{T})
+    IMEX_SSP2332_Tableau(::Type{T})
 
+Constructs Implicit-Explicit (IMEX) Runge-Kutta Butcher tableaus designed to handle stiff source terms implicitly while treating advection explicitly.
+- Contains basic explicit-implicit definitions like `IMEX_Euler`.
+- Includes Ascher-Ruuth-Spiteri (ARS) schemes such as `ARS233` and `ARS222`, which allow optional parameterization of `gamma_val`.
+- Includes Strong Stability Preserving (SSP) IMEX configurations like `PRSSP3` and `SSP2332`. 
+"""
 function IMEX_Euler_Tableau(::Type{T})::IMEXButcherTableau{T} where {T}
     At = T[0.0 0.0; 1.0 0.0]
     A  = T[0.0 0.0; 0.0 1.0]

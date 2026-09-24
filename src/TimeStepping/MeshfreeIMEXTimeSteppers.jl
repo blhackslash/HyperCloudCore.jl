@@ -1,3 +1,12 @@
+"""
+    evaluate_stage_derivatives_imex!(main_grad, eq_kin, pg, imex, i, dt, current_Y_i)
+
+Evaluates the explicit kinematic spatial derivatives for a specified IMEX sub-stage. 
+
+# Details
+- Calculates the explicit negative divergence using the provided interpolator, storing the result in the corresponding explicit RK buffer `K_E_stage`. 
+- **MUSCL Dispatch:** Similar to the standard explicit RK solver, if a `MUSCL` divergence evaluator is attached, this engages an iterative MOOD loop. It recursively evaluates effective orders and drops polynomial degrees where interface monotonicity fails, iterating up to a maximum of `MAX_ORDER` times.
+"""
 @inline function evaluate_stage_derivatives_imex!(
     main_grad::DivergenceInterpolator, eq_kin, pg, imex, i, dt, current_Y_i
 )
@@ -96,6 +105,18 @@ end
     end
 end
 
+"""
+    (imex::GeneralIMEXTimeStepper)(eq_kin::HyperbolicPDE, pg::ParticleGrid, time::Real, dt::Real)
+
+Executes a comprehensive IMEX Runge-Kutta time step, integrating explicit advective spatial operators with implicit stiff source operators.
+
+# Details
+- Translates coordinates using `pg.mover` according to the explicit stage weights `c_t`.
+- Assembles the intermediate stage candidates (`Y_local`) using both prior explicit flux evaluations (`K_E_stages`) and prior implicit evaluations (`K_I_stages`).
+- Detects non-local relaxation source terms, dynamically updating the non-local potentials across the grid prior to the implicit solve.
+- Evaluates the implicit solver directly on the candidate state to resolve stiff interactions defined by `source_term_object` scaled by the diagonal implicit Butcher weight `dt * bt.a[i,i]`.
+- Finalizes particle states by combining both the explicit evaluations mapped via `b_t` weights and implicit evaluations mapped via `b` weights, followed by boundary condition application.
+"""
 function (imex::GeneralIMEXTimeStepper{D, M, T})(
     eq_kin::HyperbolicPDE{D, M, T, R}, pg::ParticleGrid{D, M, T}, time::Real, dt::Real
 ) where {M, D, T, R}

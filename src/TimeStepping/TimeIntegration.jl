@@ -1,9 +1,20 @@
-export mainTimeIntegrator!
+export solve_equation
 
 function (method::TimeStepper)(kwargs...)
     error("Each `TimeStepper` must override the ()-operator.")
 end
 
+"""
+    update_size!(ib::InteractionBuffer, num_interactions)
+    update_size!(ts::GeneralIMEXTimeStepper, N_particles, M_neighbors)
+    update_size!(ts::GeneralRKTimeStepper, N_particles, M_neighbors)
+
+Dynamically resizes internal buffers and state arrays to accommodate the current number of particles and neighbor interactions.
+
+# Details
+- For `InteractionBuffer`, it ensures sufficient capacity for fields like `f`, `df`, `df_flux`, and `mask`.
+- For time steppers, it resizes the target RK/IMEX stage arrays (e.g., `Y_stages`, `K_stages`) and automatically cascades the update to the internal neighbor `InteractionBuffer`.
+"""
 function update_size!(ib::InteractionBuffer, num_interactions::Int)
     ensure_capacity!(ib.f, num_interactions)
     ensure_capacity!(ib.df, num_interactions)
@@ -38,6 +49,15 @@ function update_size!(ts::GeneralRKTimeStepper, N_particles::Int, M_neighbors::I
     return nothing
 end
 
+"""
+    update_content!(ib::InteractionBuffer, nb_indices, f_i, nb_slice, fVec)
+
+Populates the interaction buffer for a given target particle.
+
+# Details
+- Retrieves neighbor states from `fVec` using the provided `nb_indices`.
+- Directly stores the neighbor state into `ib.f` and computes the raw difference (`f_j - f_i`) into `ib.df` for immediate access during flux evaluation.
+"""
 @inline function update_content!(
     ib::InteractionBuffer{D, M, T},
     nb_indices::AbstractVector{Int}, 
@@ -56,6 +76,16 @@ end
     return nothing
 end
 
+"""
+    saveData!(xs_storage, us_storage, ts_storage, snap_idx, pg, current_t, remove_ghosts)
+
+Extracts and archives the simulation state at a specific snapshot index.
+
+# Details
+- Records the current time into `ts_storage`.
+- If `remove_ghosts` is true, it filters out boundary particles and saves only the active domain core. Otherwise, it copies the entire grid.
+- Allocates new state and position vectors for the targeted snapshot and copies the corresponding views from the particle grid.
+"""
 function saveData!(
     xs_storage::AbstractVector, 
     us_storage::AbstractVector, 
@@ -93,9 +123,31 @@ function saveData!(
     end
 end
 
-function mainTimeIntegrator!(
+"""
+    solve_equation(timestepper, eq, pg, tmax, dt; kwargs...)
+
+The primary simulation orchestrator governing the main time-stepping loop. 
+
+# Arguments
+- `timestepper::TimeStepper`: The selected Runge-Kutta or IMEX time integrator.
+- `eq::HyperbolicPDE`: The physical equation system.
+- `pg::ParticleGrid`: The active mesh-free domain configuration.
+- `tmax::Real`: The final simulation time.
+- `dt::Real`: The baseline time step.
+
+# Keyword Arguments
+- `is_cfl::Bool`: If true, `dt` is treated as a CFL number, and the physical time step is dynamically computed at each iteration using the grid and interpolator properties.
+- `snapshots::Integer`: The number of discrete data dumps to record evenly across the simulation timeline.
+- `remove_ghosts::Bool`: Strips boundary/ghost particles from the returned snapshot data if true.
+- `show_progress::Bool`: Toggles visual progress tracking.
+- `progress_interval::Real`: Sets the refresh rate (in seconds) for logging the simulation's progress and calculating the ETA.
+
+# Returns
+- A tuple containing: `(position_history, state_history, time_history, total_steps, elapsed_wall_time)`.
+"""
+function solve_equation(
     timestepper::TimeStepper, 
-    eq, 
+    eq::HyperbolicPDE{D, M, T, R}, 
     pg::ParticleGrid{D, M, T},
     tmax::Real,
     dt::Real;
@@ -104,7 +156,7 @@ function mainTimeIntegrator!(
     remove_ghosts::Bool = false,
     show_progress::Bool = true,
     progress_interval::Real = 1.0
-) where {D, M, T}
+) where {D, M, T, R}
     
     xs = Vector{Vector{Space{D, T}}}(undef, snapshots + 1)
     us = Vector{Vector{State{M, T}}}(undef, snapshots + 1)
@@ -131,7 +183,7 @@ function mainTimeIntegrator!(
     last_sim_time = t
 
     elapsed_time = @elapsed while t < tmax_val
-        dt_val = is_cfl ? dt_inp * getTimeStep(pg, eq, div_interp) : dt_inp
+        dt_val = is_cfl ? dt_inp * get_time_step(pg, eq, div_interp) : dt_inp
         dt_val = min(dt_val, tmax_val - t)
         if dt_val <= T(1e-12); break; end
 

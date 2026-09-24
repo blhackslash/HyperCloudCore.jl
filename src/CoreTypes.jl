@@ -3,6 +3,23 @@ export RealMOOD, AbstractSlopeLimiter, RealSlopeLimiter, DivergenceInterpolator,
 export HyperbolicPDE, UpwindAlgorithm, AbstractImplicitSolver
 export RKButcherTableau, IMEXButcherTableau, GeneralIMEXTimeStepper, GeneralRKTimeStepper
 
+"""
+    MLSWeightFunction
+    GridMover
+    AbstractBoundaryCondition
+    NumericalFluxFunction
+    MOODStrategy
+    MOODCriterion
+    AbstractSlopeLimiter
+    DivergenceInterpolator
+    UpwindAlgorithm
+    HyperbolicPDE
+    TimeStepper
+    AbstractSourceTerm
+    AbstractImplicitSolver
+
+Core abstract types defining the extensible architecture of the mesh-free solver.
+"""
 abstract type MLSWeightFunction end
 abstract type GridMover end
 abstract type AbstractBoundaryCondition end
@@ -12,6 +29,12 @@ abstract type NumericalFluxFunction end
 abstract type MOODStrategy end
 abstract type MOODCriterion end
 abstract type RealMOOD <: MOODCriterion end
+
+"""
+    MOOD{S <: MOODStrategy, C <: MOODCriterion}
+
+A concrete structure pairing a `MOODStrategy` (which dictates how order reduction propagates) with a `MOODCriterion` (which dictates when order reduction is triggered).
+"""
 struct MOOD{S <: MOODStrategy, C <: MOODCriterion}
     strategy::S
     criterion::C
@@ -29,6 +52,14 @@ struct PathIntegral{P <: AbstractPath, I <: PathIntegrator}
     path::P
     integrator::I
 end
+"""
+    Conservative
+    NCRepresentation{P <: AbstractPath}
+
+Representations of the governing equations. 
+- `Conservative` indicates a standard divergence form. 
+- `NCRepresentation` designates systems containing non-conservative products evaluated along a specific path.
+"""
 abstract type EquationRepresentation end
 struct Conservative <: EquationRepresentation end
 abstract type NCRepresentation{P <: AbstractPath} <: EquationRepresentation end
@@ -40,7 +71,18 @@ abstract type AbstractSourceTerm end
 abstract type AbstractImplicitSolver end
 
 ## Time Steppers
+"""
+    InteractionBuffer{D, M, T}
 
+A thread-safe, pre-allocated workspace designed to hold neighbor interaction data during flux evaluations.
+
+# Fields
+- `f::Vector{State{M, T}}`: Stores the direct state of neighboring particles.
+- `df::Vector{State{M, T}}`: Stores the raw state differences between neighbors and the target particle.
+- `df_flux::Vector{Flux{D, M, T}}`: Stores computed numerical flux differences or non-conservative jumps.
+- `df_scratch::Vector{State{M, T}}`: An auxiliary buffer for intermediate moving least squares operations.
+- `mask::Vector{Bool}`: A boolean array used to filter specific neighbors dynamically during directional stencil building.
+"""
 struct InteractionBuffer{D, M, T}
     f::Vector{State{M, T}}
     df::Vector{State{M, T}}
@@ -52,13 +94,27 @@ struct InteractionBuffer{D, M, T}
         State{M, T}[], State{M, T}[], Flux{D, M, T}[], State{M, T}[], Bool[]
     )
 end
+"""
+    RKButcherTableau{T}
 
+A structure storing the coefficients for explicit Runge-Kutta time integration.
+- Contains the explicit step weights `a`, the final combination weights `b`, and the fractional time steps `c`.
+"""
 struct RKButcherTableau{T}
     a::Matrix{T}
     b::Vector{T}
     c::Vector{T}
 end
 
+"""
+    IMEXButcherTableau{T}
+
+A structure storing the paired coefficients for Implicit-Explicit (IMEX) Runge-Kutta time integration.
+
+# Details
+- Validates upon construction that the implicit matrix `a` is strictly lower triangular (diagonal allowed) and the explicit matrix `a_t` is strictly lower triangular (no diagonal).
+- Ensures all matrix dimensions and coefficient vectors correctly match the target number of stages.
+"""
 struct IMEXButcherTableau{T} 
     a::Matrix{T}  
     a_t::Matrix{T} 
@@ -82,7 +138,16 @@ struct IMEXButcherTableau{T}
     end
 end
 
+"""
+    GeneralIMEXTimeStepper
 
+A comprehensive IMEX time integration orchestrator.
+
+# Details
+- Manages the physical PDE, spatial divergence interpolator, implicit solver, and stiff source term evaluations.
+- Automatically resolves the system dimensions (`M` and `D`) natively from the provided relaxation source term.
+- Allocates and maintains explicit (`K_E_stages`) and implicit (`K_I_stages`) evaluation buffers for all intermediate sub-steps.
+"""
 struct GeneralIMEXTimeStepper{D, M, T, PDE <: HyperbolicPDE, G <: DivergenceInterpolator, IS <: AbstractImplicitSolver, ST <: AbstractSourceTerm} <: TimeStepper
     pde::PDE
     divergence_interpolator::G
@@ -121,6 +186,15 @@ struct GeneralIMEXTimeStepper{D, M, T, PDE <: HyperbolicPDE, G <: DivergenceInte
     end
 end
 
+"""
+    GeneralRKTimeStepper
+
+A standard explicit Runge-Kutta time integration orchestrator.
+
+# Details
+- Couples the physical PDE with the spatial divergence interpolator and explicit Butcher tableau.
+- Pre-allocates a primary `K_stages` buffer matrix for intermediate derivative evaluations and manages the internal `InteractionBuffer` for neighbor loops.
+"""
 struct GeneralRKTimeStepper{D, M, T, PDE <: HyperbolicPDE, G <: DivergenceInterpolator} <: TimeStepper
     pde::PDE
     divergence_interpolator::G

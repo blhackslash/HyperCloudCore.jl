@@ -1,10 +1,25 @@
 export MOODu1, MOODu2, NoMOOD, OnlyMOOD, MOOD, EPD1, EPD2, EPD0, StrictEPD0
+"""
+    EPD1, EPD2, EPD0, StrictEPD0
 
+Abstract strategies defining how the Effective Particle Degree (EPD) is reduced and propagated when a MOOD criterion is triggered.
+- `EPD1`: Triggers a halo reduction restricted to immediate neighbors.
+- `EPD2`: Triggers a wider halo reduction cascading to the neighbors of neighbors.
+- `EPD0` / `StrictEPD0`: Variants for zero-halo or strict order limiting without broader cascading.
+"""
 struct EPD1 <: MOODStrategy end
 struct EPD2 <: MOODStrategy end
 struct EPD0 <: MOODStrategy end
 struct StrictEPD0 <: MOODStrategy end
 
+"""
+    MOODu1{T}
+    MOODu2{T}
+
+Real-valued MOOD (Multidimensional Optimal Order Detection) criteria used to validate state updates.
+- `MOODu1`: Evaluates a standard Discrete Maximum Principle (DMP). It checks if the candidate state exceeds the local extrema relaxed by a parameter `d`.
+- `MOODu2`: An N-dimensional MUSCL optimization criterion. It applies the DMP check and, if failed, evaluates secondary extrema and gradient ratios to safely preserve valid higher-order states.
+"""
 struct MOODu1{T} <: RealMOOD 
     d::T
 end
@@ -27,6 +42,26 @@ end
 @inline _get_interface_orders(::MOODStrategy, oi, oj) = (min(oi, oj), min(oi, oj)) 
 @inline _get_interface_orders(::EPD0, oi, oj) = (oi, oj) 
 
+
+"""
+    evaluate_mood_and_halo!(main_grad, pg, rk, stage, dt, rho_stage)
+    evaluate_mood_and_halo!(main_grad, pg, imex_ts, i, dt, current_Y_i)
+
+Evaluates the configured MOOD criterion across the domain for either Runge-Kutta or IMEX time steppers and propagates order reduction halos.
+
+# Arguments
+- `main_grad`: The MUSCL divergence evaluator containing the active MOOD configuration.
+- `pg`: The particle grid structure.
+- `dt`: The physical time step size.
+
+# Returns
+- Returns a boolean indicating whether any particle triggered the MOOD limiter during the sweep.
+
+# Details
+- Calculates the candidate state locally by resolving the specific Runge-Kutta or IMEX tableau.
+- If the MOOD criterion fails, the particle's spatial order is decremented.
+- Invokes `trigger_halo!` to force a reduction in neighbor orders according to the selected `MOODStrategy`.
+"""
 @inline function evaluate_mood_and_halo!(
     main_grad::MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER, MOOD{S, C}, INTERPS, L, NF}, 
     pg, rk, stage, dt, rho_stage

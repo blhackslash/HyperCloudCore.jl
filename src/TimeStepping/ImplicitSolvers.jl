@@ -1,12 +1,30 @@
 export LinearizedRelaxationImplicitSolver, PicardIterationSolver
 # Added <: AbstractImplicitSolver just in case you use it later!
+"""
+    PicardIterationSolver{T}(max_components=100; max_iters=20, tol=1e-8)
+
+An implicit solver utilizing Picard iteration to resolve general stiff source terms.
+
+# Fields
+- `max_iters::Int`: The maximum allowed iterations before issuing a convergence warning.
+- `tol::T`: The tolerance threshold used to evaluate convergence against the maximum difference between iterations.
+- `s_buffers::Vector{Vector{T}}` and `y_buffers::Vector{Vector{T}}`: Pre-allocated evaluation buffers initialized per available thread to ensure thread-safe execution.
+"""
 struct PicardIterationSolver{T} <: AbstractImplicitSolver
     max_iters::Int
     tol::T
     s_buffers::Vector{Vector{T}}
     y_buffers::Vector{Vector{T}}
 end
+"""
+    LinearizedRelaxationImplicitSolver()
 
+An optimized, non-iterative implicit solver specifically designed to resolve linearized relaxation source terms analytically. 
+
+# Details
+- Computes an exact update using a scalar denominator defined as `1 / (1 + dt / eps)`.
+- Dispatches custom analytical solutions for both standard `RelaxationSourceTerm` and `NonLocalRelaxationSourceTerm` configurations by utilizing the flux and macroscopic state definitions.
+"""
 struct LinearizedRelaxationImplicitSolver <: AbstractImplicitSolver end
 
 function PicardIterationSolver(::Type{T}, max_components::Int = 100; max_iters::Int = 20, tol::T = T(1e-8)) where {T}
@@ -16,6 +34,14 @@ function PicardIterationSolver(::Type{T}, max_components::Int = 100; max_iters::
     return PicardIterationSolver{T}(max_iters, tol, s_buffers, y_buffers)
 end
 
+"""
+    solve!(solver::PicardIterationSolver, Y_out_particle, RHS_const_particle, dt_coefficient_for_S, source_term_object, particle_pos, time_for_S_eval, N_components)
+
+Executes the Picard iteration to implicitly solve the source term update for a single particle.
+
+# Returns
+- A `Bool` indicating whether the iteration converged within the solver's defined tolerance. If convergence fails, it logs a warning containing the position, time, and maximum observed difference.
+"""
 function solve!(
     solver::PicardIterationSolver{T},
     Y_out_particle::AbstractVector{T}, 

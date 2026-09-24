@@ -1,6 +1,15 @@
 
 export Interpolator
+"""
+    Interpolator{D, IO, DO}()
 
+A generalized moving least squares (MLS) interpolator struct parameterized for arbitrary dimensions and orders. 
+
+# Type Parameters
+- `D`: The spatial dimension of the problem.
+- `IO`: The interpolation order.
+- `DO`: The derivative order.
+"""
 struct Interpolator{D, IO, DO}
     function Interpolator{D, IO, DO}() where {D, IO, DO}
         new{D, IO, DO}()
@@ -15,6 +24,18 @@ _ct_factorial(n::Int) = n <= 1 ? 1 : n * _ct_factorial(n - 1)
 _ct_multi_factorial(t::Tuple) = prod(_ct_factorial.(t))
 
 # 2. Generates exponents (a_1, a_2, ..., a_D) summing to the required orders
+"""
+    _generate_exponents(D::Int, max_order::Int)
+
+Generates combinations of exponents for polynomial basis terms up to a specified maximum order.
+
+# Arguments
+- `D::Int`: The spatial dimension.
+- `max_order::Int`: The maximum polynomial order.
+
+# Returns
+- Returns a sorted array of `NTuple{D, Int}` where the sum of each tuple equals the respective polynomial order. The sorting guarantees that index 1 corresponds to X, index 2 to Y, and index 3 to Z.
+"""
 function _generate_exponents(D::Int, max_order::Int)
     res = NTuple{D, Int}[]
     for order in 1:max_order
@@ -27,7 +48,7 @@ function _generate_exponents(D::Int, max_order::Int)
         end
         
         # FIX: Using `reverse(x)` ensures (1, 0) comes before (0, 1).
-        # This guarantees that index 1 is X, index 2 is Y, index 3 is Z!
+        # This guarantees that index 1 is X, index 2 is Y, index 3 is Z
         sort!(current_order_tuples, by = x -> (-maximum(x), reverse(x)))
         append!(res, current_order_tuples)
     end
@@ -43,7 +64,18 @@ end
 # =========================================================================
 # BASIS VECTOR EVALUATORS (Fully Generalized & Type-Stable)
 # =========================================================================
+"""
+    build_basis(::Val{IO}, d::SVector{D, T})
 
+Generates a fully generalized, type-stable polynomial basis vector for moving least squares interpolation.
+
+# Arguments
+- `::Val{IO}`: A value type specifying the interpolation order.
+- `d::SVector{D, T}`: The scaled distance vector.
+
+# Returns
+- An `SVector` containing the computed basis terms, including precomputed Taylor prefactors.
+"""
 @generated function build_basis(::Val{IO}, d::SVector{D, T}) where {IO, D, T}
     exps = _generate_exponents(D, IO)
     B_LEN = length(exps)
@@ -73,7 +105,19 @@ end
 # =========================================================================
 # PHYSICAL SCALE FACTORS
 # =========================================================================
+"""
+    build_scale_factors(::Val{D}, ::Val{IO}, invL::T)
 
+Constructs the physical scale factors for the interpolator based on the inverse length scale.
+
+# Arguments
+- `::Val{D}`: The spatial dimension.
+- `::Val{IO}`: The interpolation order.
+- `invL::T`: The inverse of the characteristic length scale.
+
+# Returns
+- An `SVector` of scale factors corresponding to each polynomial degree in the basis.
+"""
 @generated function build_scale_factors(::Val{D}, ::Val{IO}, invL::T) where {D, IO, T}
     exps = _generate_exponents(D, IO)
     B_LEN = length(exps)
@@ -90,7 +134,19 @@ end
 # =========================================================================
 # EPD_1 BASIS TRUNCATION
 # =========================================================================
+"""
+    mask_basis(basis::SVector{B_LEN, T}, order::Int, ::Val{D})
 
+Truncates the basis vector down to a specific spatial order at compile-time.
+
+# Arguments
+- `basis::SVector{B_LEN, T}`: The full evaluated basis vector.
+- `order::Int`: The spatial order to which the basis should be truncated.
+- `::Val{D}`: The spatial dimension.
+
+# Returns
+- A masked `SVector` where basis terms exceeding the requested spatial order are strictly zeroed out.
+"""
 @generated function mask_basis(basis::SVector{B_LEN, T}, order::Int, ::Val{D}) where {B_LEN, D, T}
     max_o = 1
     while length(_generate_exponents(D, max_o)) < B_LEN

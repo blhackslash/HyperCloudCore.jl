@@ -2,6 +2,19 @@ export MUSCL
 
 struct ConstantReconstruction end
 
+"""
+    MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER, MOOD, INTERPS, L, NF}
+
+A divergence interpolator executing MUSCL-type interface reconstruction and flux evaluation.
+
+# Fields
+- `interpolators`: A tuple of MLS interpolators instantiated for orders up to `MAX_ORDER`.
+- `limiter::L`: The selected slope limiter configuration.
+- `flux::NF`: The numerical interface flux function.
+- `mood::MOOD`: The multidimensional optimal order detection strategy.
+- `gradients`: A pre-allocated vector storing the computed and limited gradients for each particle.
+- `particle_orders`: Tracks the dynamically adjusted spatial order of each particle.
+"""
 struct MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER, MOOD, INTERPS, L, NF} <: DivergenceInterpolator
     interpolators::INTERPS
     limiter::L
@@ -60,6 +73,15 @@ end
     return zero(T)
 end
 
+"""
+    MUSCL(::Type{T}, dimension, M, max_order; div_order=0, limiter=NoLimiter(), flux=RusanovFlux(), mood=NoMOOD())
+
+Constructs a `MUSCL` divergence evaluator system.
+
+# Details
+- Asserts that `max_order` is at least 1 and that `div_order` is 0 (adaptive mode) or a positive integer.
+- Automatically instantiates `ConstantReconstruction` for 1st-order schemes and dynamically builds generalized `Interpolator` instances for all higher orders up to `max_order`.
+"""
 function MUSCL(
     ::Type{T}, dimension::Int, M::Int, max_order::Int;
     div_order::Int=0, limiter=NoLimiter(), flux=RusanovFlux(), mood=NoMOOD()
@@ -94,6 +116,16 @@ end
 # PRE-GATHER PASS: CALCULATE AND STORE GRADIENTS
 # =========================================================================
 
+"""
+    update_content!(muscl::MUSCL, i, f_i, nb_slice, pg, ib)
+
+Executes the pre-gather pass to calculate, limit, and store the MUSCL gradients for a single particle.
+
+# Details
+- Validates the active neighborhood size against the required polynomial basis length. If the stencil is insufficient, the local particle order drops to 1.
+- Dynamically dispatches to the correct internal interpolator based on the resolved `particle_order`.
+- Replaces the raw gradient with the slope-limited gradient (unless the order is 1) and stores it in the internal `gradients` buffer.
+"""
 function update_content!(
     muscl::MUSCL{D, M, T, B_LEN, MAX_ORDER}, i::Int, f_i::State{M, T}, nb_slice::UnitRange{Int},
     pg::ParticleGrid{D, M, T}, ib::InteractionBuffer{D, M, T}
@@ -127,7 +159,17 @@ end
 # =========================================================================
 # FLUX PASS: RECONSTRUCT INTERFACES AND COMPUTE DIVERGENCE
 # =========================================================================
+"""
+    (muscl::MUSCL)(eq, i, f_i, nb_slice, pg, ib)
 
+The primary functor execution for computing the `MUSCL` divergence update.
+
+# Details
+- Iterates over the neighborhood slice to evaluate MUSCL-reconstructed left and right interface states `fij` and `fji`.
+- Masks the spatial basis vectors down to the dynamically calculated `interface_order` derived from the target MOOD strategy.
+- Solves the numerical interface flux using the configured `muscl.flux` evaluator and adds any non-conservative jump corrections.
+- Calculates and returns the final bounded divergence scaled by 2.0 utilizing the dynamically resolved divergence order.
+"""
 function (muscl::MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER})(
     eq::HyperbolicPDE, i::Int, f_i::State{M, T}, nb_slice::UnitRange{Int},       
     pg::ParticleGrid{D, M, T}, ib::InteractionBuffer{D, M, T}    

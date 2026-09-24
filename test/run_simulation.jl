@@ -10,7 +10,7 @@ using StaticArrays
 @inline _unwrap(v) = v
 
 @noinline function _execute_explicit_sim!(method, eq, pg, dt, is_cfl, run_params, dimension, snapshots, remove_ghosts, M_components, xmins, xmaxs, ::Type{T}) where {T}
-    xs_svector, us_svector, ts_full, k_step, elapsed_time = mainTimeIntegrator!(method, eq, pg, run_params[:tmax], dt; is_cfl = is_cfl, snapshots = snapshots, remove_ghosts = remove_ghosts, show_progress = true, progress_interval = .1)
+    xs_svector, us_svector, ts_full, k_step, elapsed_time = solve_equation(method, eq, pg, run_params[:tmax], dt; is_cfl = is_cfl, snapshots = snapshots, remove_ghosts = remove_ghosts, show_progress = true, progress_interval = .1)
     @info "Explicit Simulation (D=$dimension) finished in $(round(elapsed_time, digits=2)) seconds."
 
     valid_indices = findall(i -> isassigned(us_svector, i), 1:length(us_svector))
@@ -27,7 +27,7 @@ using StaticArrays
 end
 
 @noinline function _execute_kinetic_sim!(system_method, eq_kin, pg, dt, is_cfl, run_params, dimension, snapshots, remove_ghosts, save_relax, km, xmins, xmaxs, ::Type{T}) where {T}
-    xs_svector, us_svector, ts_full, k_step, elapsed_time = mainTimeIntegrator!(system_method, eq_kin, pg, run_params[:tmax], dt; is_cfl = is_cfl, snapshots = snapshots, remove_ghosts = remove_ghosts, show_progress = true, progress_interval = .1)
+    xs_svector, us_svector, ts_full, k_step, elapsed_time = solve_equation(system_method, eq_kin, pg, run_params[:tmax], dt; is_cfl = is_cfl, snapshots = snapshots, remove_ghosts = remove_ghosts, show_progress = true, progress_interval = .1)
     @info "Kinetic Relaxation Simulation (D=$dimension) finished in $(round(elapsed_time, digits=2)) seconds."
 
     valid_indices = findall(i -> isassigned(us_svector, i), 1:length(us_svector))

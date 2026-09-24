@@ -1,6 +1,6 @@
 using Test
-using Meshfree4HypEq
-import Meshfree4HypEq: flux, velocity, max_eigenvalue, prim2cons, cons2prim
+using HyperCloud
+import HyperCloud: flux, velocity, max_eigenvalue, prim2cons, cons2prim
 using PDEStudioCore
 using StaticArrays
 
@@ -11,7 +11,7 @@ include("run_simulation.jl")
 # so it can dynamically resolve run_simulation and analytical_solution
 PDEStudioCore.set_target_module!(@__MODULE__)
 
-@testset "Meshfree4HypEq Pipeline Tests" begin
+@testset "HyperCloud Pipeline Tests" begin
     # Setup isolated temp directories and stats preset
     set_stat_preset!("hyperbolic")
     tmp_dir = mktempdir()

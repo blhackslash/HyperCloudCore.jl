@@ -1,4 +1,4 @@
-module Meshfree4HypEq
+module HyperCloud
 
 export run_simulation, DEBUG_TARGET_PARTICLE, DEBUG_TARGET_STEP
 
@@ -13,6 +13,16 @@ using Base.Threads
 using Polyester: @batch
 
 ## ------------------------------- SVector Types -------------------------------
+"""
+    Space{D, T}
+    State{M, T}
+    Flux{D, M, T}
+
+The core domain-specific `SVector` aliases used pervasively throughout the `HyperCloud` module.
+- `Space`: Represents `D`-dimensional spatial coordinates.
+- `State`: Represents `M`-dimensional equation variables for a single particle.
+- `Flux`: Represents the evaluated fluxes across all `D` dimensions for all `M` equations.
+"""
 const Space{D, T} = SVector{D, T}
 const State{M, T} = SVector{M, T}
 const Flux{D, M, T} = SVector{D, State{M, T}}
@@ -24,9 +34,9 @@ include("PathIntegrals.jl")
 include("LinearAdvection.jl")
 
 
-include("../Grid/ParticleGrids.jl")
-include("../Interpolation/Interpolators.jl")
-include("../TimeStepping/TimeIntegration.jl")
+include("./Grid/ParticleGrids.jl")
+include("./Interpolation/Interpolators.jl")
+include("./TimeStepping/TimeIntegration.jl")
 
 
 

@@ -1,6 +1,14 @@
 export Primitive, Conservative, Lagrangian, DifferentialOrder, Order0, Order1
 export LinePath, NaiveAveragePath, MappedPath
 
+"""
+    Order0
+    Order1
+
+Dispatch singletons representing the differential order requested during path integral evaluation.
+- `Order0`: Requests the interpolated state along the path.
+- `Order1`: Requests the derivative of the state with respect to the path parameter.
+"""
 abstract type DifferentialOrder end
 struct Order0 <: DifferentialOrder end
 struct Order1 <: DifferentialOrder end
@@ -8,9 +16,26 @@ struct Order1 <: DifferentialOrder end
 const DO0 = Order0() 
 const DO1 = Order1()
 
+"""
+    GaussLobatto5
+    Simpson3
+
+Numerical quadrature rules utilized by the path integrator.
+- Provide `get_nodes_weights` functions to retrieve the specific interpolation nodes `s` and quadrature weights `w` tailored to the requested floating-point precision.
+"""
 struct GaussLobatto5 <: PathIntegrator end
 struct Simpson3 <: PathIntegrator end
 
+"""
+    LinePath <: AbstractPath
+    MappedPath{P} <: AbstractPath
+    NaiveAveragePath <: AbstractPath
+
+Path definitions used to evaluate non-conservative products.
+- `LinePath`: Performs a direct, straight-line interpolation in the active state space, fully unrolled by the compiler.
+- `MappedPath`: Evaluates paths across variable representations. It transforms states into conservative variables, interpolates via the `base_path`, and transforms the result back into primitive variables. Evaluates the `Order1` derivative using a finite-difference approximation of the chain rule.
+- `NaiveAveragePath`: A simplified path returning a constant arithmetic average for the state and a standard jump for the derivative, independent of the path parameter `s`.
+"""
 struct LinePath <: AbstractPath end
 
 struct MappedPath{P <: AbstractPath} <: AbstractPath
@@ -81,6 +106,17 @@ end
     return nodes, weights
 end
 
+"""
+    (pi::PathIntegral)(eq::HyperbolicPDE, u_L::State, u_R::State, d::Int)
+
+Evaluates the non-conservative path integral across an interface for a specific spatial dimension `d`.
+
+# Details
+- Retrieves the quadrature nodes and weights defined by `pi.integrator`.
+- Evaluates the path state (`U_s`) and path derivative (`dU_s`) at each node.
+- Computes the advective velocity (Jacobian) at `U_s` and numerically integrates the non-conservative product.
+- Throws a hard error if the resulting integral exceeds 1000, indicating severe numerical instability.
+"""
 @inline function (pi::PathIntegral)(eq::HyperbolicPDE{D, M, T}, u_L::State{M, T}, u_R::State{M, T}, d::Int) where {D, M, T}
     # Dispatch to get the correct rule based on the integrator
     nodes, weights = get_nodes_weights(pi.integrator, T) 
@@ -105,6 +141,15 @@ end
 end
 
 # 1. Conservative Fallback
+"""
+    evaluate_nc_jump(eq::HyperbolicPDE, f_L::Flux, f_R::Flux, dist_k::Space)
+
+Computes the non-conservative jump across a reconstructed particle interface.
+
+# Details
+- **Conservative Fallback:** For systems strictly utilizing a `Conservative` representation, this safely evaluates as a zero-cost `zero(Flux)`.
+- **Non-Conservative Execution:** For `NCRepresentation` systems, it invokes the path integral functor for each dimension and properly scales the jump by `0.5` while applying the upwind sign derived from `dist_k`.
+"""
 @inline function evaluate_nc_jump(
     eq::HyperbolicPDE{D, M, T, Conservative}, f_L::Flux{D, M, T}, f_R::Flux{D, M, T}, dist_k::Space{D, T}
 ) where {D, M, T}

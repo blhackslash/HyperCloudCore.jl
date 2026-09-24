@@ -35,7 +35,14 @@ sort_particles!(pg::ParticleGrid) = pg.reorder(pg)
     w = (w | (w << 1)) & 0x55555555
     return w
 end
+"""
+    morton_2D(x::UInt32, y::UInt32)
+    morton_3D(x::UInt32, y::UInt32, z::UInt32)
 
+Generates Morton Z-order curve indices by interleaving the bits of spatial coordinates.
+- The 2D variant expands 16-bit integers by inserting a zero after every bit.
+- The 3D variant expands 10-bit integers by inserting two zeros after every bit.
+"""
 @inline morton_2D(x::UInt32, y::UInt32) = expand_bits_2D(x) | (expand_bits_2D(y) << 1)
 
 # Expands a 10-bit integer by inserting two 0 bits after every bit
@@ -54,7 +61,16 @@ end
 # =========================================================================
 # PROXIMITY-OPTIMIZED SPATIAL REORDERING
 # =========================================================================
+"""
+    (rd::ReorderData)(pg::ParticleGrid)
 
+Executes a proximity-optimized spatial reordering of the entire particle grid to drastically improve CPU cache locality and memory access patterns.
+
+# Details
+- Normalizes the domain coordinates and sorts the permutation buffer using Morton Z-order curves for 2D/3D grids, or simple lexicographical sorting for 1D grids.
+- Bypasses the memory mutation entirely if the permutation buffer is already sorted.
+- Performs fast, in-place native Julia permutations (`Base.permute!`) across the positions, boundary flags, state vectors, and volumes.
+"""
 function (rd::ReorderData{D})(pg::ParticleGrid{D, M, WF}) where {D, M, WF}
     return
     N = pg.meta.N

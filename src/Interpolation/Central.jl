@@ -1,5 +1,13 @@
 export CentralDivergence
+"""
+    CentralDivergence{D, M, T, I <: Interpolator}
 
+A divergence interpolator executing a stateless central difference numerical scheme.
+
+# Fields
+- `order::Int`: The numerical order of the interpolation.
+- `interpolator::I`: The underlying `Interpolator` instance used for the divergence calculation.
+"""
 struct CentralDivergence{D, M, T, I <: Interpolator} <: DivergenceInterpolator
     order::Int
     interpolator::I
@@ -12,6 +20,21 @@ end
 @inline update_content!(::CentralDivergence, args...) = nothing
 @inline _extract_order(g::CentralDivergence) = g.order
 
+"""
+    CentralDivergence(::Type{T}, dimension::Int, M::Int, order::Int)
+
+Constructs a `CentralDivergence` evaluator system.
+
+# Arguments
+- `::Type{T}`: The numeric type used for evaluations.
+- `dimension::Int`: The spatial dimension.
+- `M::Int`: The number of equations in the system.
+- `order::Int`: The numerical order.
+
+# Details
+- Asserts that the requested numerical `order` is at least 1.
+- Initializes an internal moving least squares interpolator configured specifically for the provided spatial dimension and order.
+"""
 function CentralDivergence(::Type{T}, dimension::Int, M::Int, order::Int) where {T}
     @assert order >= 1 "Order must be 1 or greater."       
 
@@ -26,8 +49,14 @@ end
 # =========================================================================
 
 """
-Functor for CentralDivergence.
-Works natively for 1D, 2D, 3D, and fully supports Systems via `State{M, T}`.
+    (central::CentralDivergence)(eq::HyperbolicPDE, i::Int, f_i, nb_slice, pg, ib)
+
+The primary functor execution for computing the stateless central divergence. This algorithm natively supports 1D, 2D, and 3D geometries alongside systems of equations via the `State{M, T}` type.
+
+# Details
+- Returns a zero state if the available neighborhood slice is smaller than the requested interpolation order.
+- Iterates through the active neighborhood to calculate raw central flux differences directly, inclusive of any non-conservative jump contributions (`F_j - F_i + nc_jump`).
+- Feeds the raw flux differences directly into the internal matrix-vectorized interpolator to extract the final unified divergence.
 """
 function (central::CentralDivergence{D, M, T, I})(
     eq::HyperbolicPDE, i::Int, f_i::State{M, T}, nb_slice::UnitRange{Int},       

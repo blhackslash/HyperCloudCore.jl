@@ -1,10 +1,26 @@
-export createParticleGrid, ParticleGrid, getTimeStep
+export createParticleGrid, ParticleGrid, get_time_step
 
 include("Domains.jl")
 
 # ---------------------------------------------------------
 # 1. Grid Metadata
 # ---------------------------------------------------------
+"""
+    GridMetadata{D, T}
+    SharedBuffers{D, M, T}
+    NeighborData{D, T, WF}
+    ReorderData{D}
+    GlobalBins{D, T, N_OFF}
+    ParticleGridCore{D, T}
+
+Internal structures managing the state, topology, and execution context of the mesh-free solver.
+- `GridMetadata`: Stores grid capacities, resolutions, and the active interaction radius.
+- `SharedBuffers`: Thread-safe, pre-allocated workspaces for floating-point, integer, and boolean operations.
+- `NeighborData`: Maintains the ranges, indices, weights, and distances for all active particle neighborhoods.
+- `ReorderData`: Manages permutation buffers utilized for spatial sorting and memory optimization.
+- `GlobalBins`: Defines the coarse spatial hashing bins and linked lists for the neighbor search algorithm.
+- `ParticleGridCore`: Encapsulates the fundamental particle geometry including positions, boundary flags, and tags.
+"""
 mutable struct GridMetadata{D, T}
     N::Int
     N_interior::Int
@@ -71,7 +87,17 @@ mutable struct ParticleGridCore{D, T}
     volumes::Vector{T}
     tags::Vector{Int}
 end
+"""
+    ParticleGrid{D, M, T, WF, GM, N_OFF, Geom}
 
+The primary orchestrator representing the active computational domain, tying together the physical geometry, state vectors, and mesh-free topology.
+
+# Details
+- Initializes the geometric and computational domains.
+- Invokes the universal narrow-band point generator to allocate `ParticleGridCore`.
+- Pre-allocates and assigns all internal components including `SharedBuffers`, `NeighborData`, `ReorderData`, and `GlobalBins`.
+- Automatically forces an initial spatial reordering and constructs the initial neighbor list upon instantiation if the dimension is greater than 1.
+"""
 struct ParticleGrid{D, M, T, WF, GM, N_OFF, Geom}
     meta::GridMetadata{D, T}
     geometry::Geom                             # The continuous physics definition
@@ -106,7 +132,11 @@ include("Reordering.jl")
 # =========================================================================
 # UNIFIED DISTANCE CALCULATIONS 
 # =========================================================================
+"""
+    get_distance(pos, i, j, L_wrap, invL_wrap)
 
+Calculates the strictly shortest distance vector between two particles, actively enforcing periodic wrapping limits defined by `L_wrap` and `invL_wrap`.
+"""
 @inline function get_distance(pos::AbstractVector{Space{D, T}}, i::Int, j::Int, L_wrap::Space{D, T}, invL_wrap::Space{D, T}) where {D, T}
     @inbounds begin
         p_i = pos[i]
@@ -272,7 +302,17 @@ end
     return expr
 end
 
-@inline function getTimeStep(pg::ParticleGrid{D, M, T}, eq::HyperbolicPDE, main_grad) where {D, M, T}
+"""
+    get_time_step(pg::ParticleGrid, eq::HyperbolicPDE, main_grad)
+
+Computes the exact geometric CFL-restricted time step dynamically across the active particle grid.
+
+# Details
+- Safely returns infinite time steps for completely empty grids or completely orphaned particles.
+- Evaluates the maximum eigenvalues from the equation system (`_get_Lambda`) against the localized geometric coefficients of the moving least squares (MLS) formulation.
+- Employs a Cholesky factorization of the localized MLS moment matrix to safely invert and extract the effective spatial derivative scales.
+"""
+@inline function get_time_step(pg::ParticleGrid{D, M, T}, eq::HyperbolicPDE, main_grad) where {D, M, T}
     # 1. Graceful exit for empty grids
     if pg.meta.N == 0
         return T(Inf)

@@ -3,12 +3,31 @@ export NoSourceTerm, AbstractSourceTerm, RelaxationSourceTerm, NonLocalRelaxatio
 struct NoSourceTerm <: AbstractSourceTerm end
 abstract type KineticSourceTerm <: AbstractSourceTerm end
 
+"""
+    Kin2Macro{NM, NK}(edges)
+
+A mapping structure bridging kinetic (`NK`) and macroscopic (`NM`) state components.
+
+# Details
+- Stores the component ranges to natively reconstruct macroscopic states from kinetic vectors via the `(km::Kin2Macro)(v)` functor.
+- Maintains a pre-computed inverse map array, enabling O(1) instant lookups to determine which macroscopic index owns a specific kinetic component via `(km::Kin2Macro)(k)`.
+"""
 struct Kin2Macro{NM, NK}
     ranges::NTuple{NM, UnitRange{Int}}
     k_to_m::NTuple{NK, Int}
 end
 
-# Added <: KineticSourceTerm
+"""
+    RelaxationSourceTerm{D, NM, NK, T}
+
+A kinetic source term orchestrating the relaxation of a kinetic system toward a macroscopic equilibrium state.
+
+# Fields
+- `km::Kin2Macro{NM, NK}`: The mapping between kinetic and macroscopic variables.
+- `inv_epsilon::T`: The inverse of the relaxation time scale.
+- `coefficients::State{NM, T}`: System-specific scaling coefficients.
+- `scaled_inv_speeds::SVector{NK, Space{D, T}}`: Pre-computed inverse wave speeds scaled by an interior factor.
+"""
 struct RelaxationSourceTerm{D, NM, NK, T} <: KineticSourceTerm
     km::Kin2Macro{NM, NK}
     inv_epsilon::T
@@ -16,7 +35,15 @@ struct RelaxationSourceTerm{D, NM, NK, T} <: KineticSourceTerm
     scaled_inv_speeds::SVector{NK, Space{D, T}}
 end
 
-# Added <: KineticSourceTerm
+"""
+    NonLocalRelaxationSourceTerm{D, NM, NK, T}
+
+An advanced kinetic source term incorporating non-local topological potentials evaluated along the particle grid.
+
+# Fields
+- Incorporates all base fields of the standard `RelaxationSourceTerm`.
+- `t_potential::Matrix{T}`: A dynamically resized matrix storing the non-local topological potentials (jump integrals) for each particle and macroscopic component.
+"""
 struct NonLocalRelaxationSourceTerm{D, NM, NK, T} <: KineticSourceTerm
     km::Kin2Macro{NM, NK}
     inv_epsilon::T
@@ -117,6 +144,16 @@ function ensure_buffer_size!(st::NonLocalRelaxationSourceTerm{D, NM, NK, T}, N_p
     end
 end
 
+"""
+    update_nonlocal_potential!(st::NonLocalRelaxationSourceTerm, stage_data, pg, eq)
+
+Calculates and updates the non-local potential matrix across the entire particle grid.
+
+# Details
+- Ensures the internal `t_potential` buffer is correctly sized to match the number of active particles.
+- Evaluates the path integral between adjacent particle states, mapping the kinetic states back to their macroscopic representations using `st.km`.
+- Aggregates the local jumps iteratively to formulate a cumulative potential field across the domain.
+"""
 function update_nonlocal_potential!(
     st::NonLocalRelaxationSourceTerm{D, NM, NK, T}, 
     stage_data::AbstractMatrix{T},
