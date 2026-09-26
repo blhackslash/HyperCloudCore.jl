@@ -38,13 +38,11 @@ Calculates the maximum absolute wave speed of the system along a specific spatia
 In a linear advection system, the maximum eigenvalue is simply the maximum absolute value within the pre-stored diagonal velocity vector for dimension `d` (`maximum(abs.(eq.vel[d]))`).
 """
 @inline max_eigenvalue(eq::HyperbolicPDE, u::State, dim::Int) = error("max_eigenvalue not implemented for $(typeof(eq))")
-
 # These can default to identity if the PDE doesn't use primitive forms
 """
     prim2cons(eq::HyperbolicPDE, U::State)
-    cons2prim(eq::HyperbolicPDE, W::State)
 
-Converts a state vector between primitive and conservative variable representations. 
+Converts a state vector from primitive to conservative variable representations. 
 
 # Arguments
 - `eq`: The physical equation system.
@@ -57,6 +55,21 @@ Converts a state vector between primitive and conservative variable representati
 These functions safely default to an identity mapping (`U -> U`) if not explicitly overridden, which perfectly handles systems like linear advection that do not differentiate between primitive and conservative states.
 """
 @inline prim2cons(eq::HyperbolicPDE, u::State) = u
+"""
+    cons2prim(eq::HyperbolicPDE, W::State)
+
+Converts a state vector from conservative to primitive variable representations. 
+
+# Arguments
+- `eq`: The physical equation system.
+- `U` or `W`: The local `State{M, T}` vector to be transformed.
+
+# Returns
+- A transformed `State{M, T}` vector.
+
+# Implementation Example
+These functions safely default to an identity mapping (`U -> U`) if not explicitly overridden, which perfectly handles systems like linear advection that do not differentiate between primitive and conservative states.
+"""
 @inline cons2prim(eq::HyperbolicPDE, u::State) = u
 
 # Used by the Upwind Flux (for M=1) or Custom Grid Movers

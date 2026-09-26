@@ -14,3 +14,4 @@ git-filer-repo
 #    numericalExperiments. The '**/' pattern is recursive.
 !numericalExperiments/**/*.csv
 !numericalExperiments/**/*.svg
+docs/build

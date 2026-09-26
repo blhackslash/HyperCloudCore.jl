@@ -41,7 +41,7 @@ Constructs an `UpwindDivergence` evaluator, instantiating the appropriate algori
 
 # Keyword Arguments
 - `flux::NumericalFluxFunction`: Defaults to `UpwindFlux()`.
-- `algType::String`: Specifies the algorithm type. Valid options are "Classic", "Tiwari", or "Praveen[span_37](start_span)"[span_37](end_span). 
+- `algType::String`: Specifies the algorithm type. Valid options are "Classic", "Tiwari", or "Praveen". 
 
 # Details
 - If "Tiwari" is selected, it asserts that the system is scalar (`M == 1`).

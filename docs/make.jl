@@ -5,7 +5,8 @@ using HyperCloud
 makedocs(
     sitename = "HyperCloud.jl",
     modules = [HyperCloud],
-    checkdocs = :exports, 
+    checkdocs = :none,
+    remotes = nothing,  
     format = Documenter.HTML(
         prettyurls = get(ENV, "CI", "false") == "true",
         canonical = "https://blhackslash.github.io/HyperCloud.jl/",
@@ -13,22 +14,13 @@ makedocs(
     ),
     pages = [
         "Home" => "index.md",
-        "Time Stepper" => [
-            "Explicit RK" => "" 
-        ],
-        "Render Options" => [
-            "Lines" => "render/lines.md",
-            "Contour" => "render/contour.md",
-            "Scatter" => "render/scatter.md",
-            "Heatmap" => "render/heatmap.md",
-            "Volume" => "render/volume.md",
-        ],
-        "API Reference" => "api.md",
+        "Base API" => "base_api.md",
+        "Advanced API" => "advanced_api.md",
     ]
 )
 
 deploydocs(
-    repo = "github.com/blhackslash/PDEStudio.jl.git",
+    repo = "github.com/blhackslash/HyperCloud.jl.git",
     devbranch = "main",
     push_preview = true,
 )
