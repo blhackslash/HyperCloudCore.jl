@@ -8,7 +8,7 @@ The objective of the Moving Least Squares method is to find a local polynomial a
 
 For a given particle $i$ interacting with a set of neighbors $j$, we want to minimize the weighted least squares error functional:
 
-$$ J(\mathbf{c}) = \sum_{j \in \text{neighbors}} w_j \left( p(\vec{x}_{ij})^T \mathbf{c} - \Delta f_j \right)^2 $$
+$$J(\mathbf{c}) = \sum_{j \in \text{neighbors}} w_j \left( p(\vec{x}_{ij})^T \mathbf{c} - \Delta f_j \right)^2$$
 
 Where:
 
@@ -22,7 +22,7 @@ $$ \left( \sum_{j} w_j p(\vec{x}_{ij}) p(\vec{x}_{ij})^T \right) \mathbf{c} = \s
 
 We can express this compactly as a linear system:
 
-$$ N \mathbf{c} = \mathbf{b} $$
+$$N \mathbf{c} = \mathbf{b}$$
 
 Where $N$ is the moment matrix and $\mathbf{b}$ is the right-hand side vector. Once $\mathbf{c}$ is solved, it provides the spatial derivatives of the field directly evaluated at the particle's location.
 

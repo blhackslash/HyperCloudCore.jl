@@ -8,7 +8,7 @@ The primary goal of the central divergence scheme is to approximate the spatial 
 
 For each neighbor $j$ in the interaction stencil, the raw central flux difference is computed as:
 
-$$ \Delta F_{ij} = F(U_j) - F(U_i) + \Delta_{nc}(U_i, U_j, \vec{x}_{ij}) $$
+$$\Delta F_{ij} = F(U_j) - F(U_i) + \Delta_{nc}(U_i, U_j, \vec{x}_{ij})$$
 
 Where:
 *   $F(U_i)$ and $F(U_j)$ are the conservative fluxes evaluated at particles $i$ and $j$, respectively.

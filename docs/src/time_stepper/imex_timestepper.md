@@ -6,7 +6,7 @@ This module implements a generalized, implicit-explicit (IMEX) space-time Runge-
 
 The governing system of equations for each particle $i$ is partitioned into two components. Let $U_i$ represent the state vector (e.g., the kinetic variables). The semi-discrete IMEX formulation is:
 
-$$ \frac{d U_i}{d t} = K_{E}(U_i) + K_{I}(U_i) $$
+$$\frac{d U_i}{d t} = K_{E}(U_i) + K_{I}(U_i)$$
 
 where $K_{E}$ represents the explicit spatial operator (the negative numerical divergence, $-\nabla \cdot F$), and $K_{I}$ represents the implicitly integrated source term, such as a kinetic relaxation operator. 
 
@@ -51,7 +51,7 @@ After all $s$ stages are evaluated:
 The IMEX stepper delegates the resolution of $a_{k,k}$ to specific solver structs. 
 
 For kinetic relaxation systems, the `LinearizedRelaxationImplicitSolver` provides a highly optimized, analytical update. Given an inverse relaxation time $\frac{1}{\epsilon}$ and an equilibrium Maxwellian state $M_k$, the implicit update avoids costly matrix inversions by evaluating:
-$$ Y^{(k)}_{new} = \frac{Y^{(k)}_{old} + \frac{\Delta t \cdot a_{k,k}}{\epsilon} M_k}{1 + \frac{\Delta t \cdot a_{k,k}}{\epsilon}} $$
+$$Y^{(k)}_{new} = \frac{Y^{(k)}_{old} + \frac{\Delta t \cdot a_{k,k}}{\epsilon} M_k}{1 + \frac{\Delta t \cdot a_{k,k}}{\epsilon}}$$
 
 ---
 

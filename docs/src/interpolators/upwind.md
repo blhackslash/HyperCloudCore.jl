@@ -19,18 +19,18 @@ For a given particle $i$, the scheme computes a central gradient using the full 
 
 The smoothness of a given stencil is evaluated by summing the squares of its reconstructed spatial derivatives, scaled by the local particle spacing $\Delta x$ to maintain dimensional consistency:
 
-$$ IS_{stencil} = \sum_{k} \left( D^k u \right)^2 \Delta x^{2k} $$
+$$IS_{stencil} = \sum_{k} \left( D^k u \right)^2 \Delta x^{2k}$$
 
 Where $D^k u$ represents the $k$-th order derivatives (e.g., first derivatives are scaled by $\Delta x^2$, second derivatives by $\Delta x^4$). 
 
 The non-linear weights for the central ($w_C$) and directional ($w_S$) stencils are computed using their respective smoothness indicators:
 
-$$ \beta_{stencil} = \frac{0.5}{(IS_{stencil} + \epsilon)^2} $$
-$$ w_S = \frac{\beta_S}{\beta_S + \beta_C}, \quad w_C = \frac{\beta_C}{\beta_S + \beta_C} $$
+$$\beta_{stencil} = \frac{0.5}{(IS_{stencil} + \epsilon)^2}$$
+$$w_S = \frac{\beta_S}{\beta_S + \beta_C}, \quad w_C = \frac{\beta_C}{\beta_S + \beta_C}$$
 
 The final spatial divergence for dimension $d$ is the weighted sum of the stencil derivatives:
 
-$$ \frac{\partial F_d}{\partial x_d} = \left( w_S \left( \frac{\partial u}{\partial x_d} \right)_S + w_C \left( \frac{\partial u}{\partial x_d} \right)_C \right) v_d $$
+$$\frac{\partial F_d}{\partial x_d} = \left( w_S \left( \frac{\partial u}{\partial x_d} \right)_S + w_C \left( \frac{\partial u}{\partial x_d} \right)_C \right) v_d$$
 
 ---
 

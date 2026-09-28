@@ -9,14 +9,14 @@ In finite volume and meshfree MUSCL schemes, reconstructing the left and right s
 ### Rusanov (Local Lax-Friedrichs) Flux
 The Rusanov flux is a universally applicable approximate Riemann solver. It does not require a full eigendecomposition of the system's Jacobian, making it highly robust and easily extensible to any N-dimensional system. It stabilizes the central flux average by adding a diffusive term scaled by the maximum local wave speed.
 
-$$ F_{num} = \frac{1}{2} \left( F_L + F_R - s (U_R - U_L) \right) $$
+$$F_{num} = \frac{1}{2} \left( F_L + F_R - s (U_R - U_L) \right)$$
 
 Where $s = \max(|\lambda_L|, |\lambda_R|)$ is the maximum characteristic wave speed evaluated from the left and right states.
 
 ### Upwind Flux
 The Upwind flux traces the flow of information along characteristics. For scalar conservation laws, it perfectly captures the correct physical direction without adding excessive numerical dissipation. The wave speed is determined by the Rankine-Hugoniot jump condition:
 
-$$ s = \left| \frac{F_R - F_L}{U_R - U_L} \right| $$
+$$s = \left| \frac{F_R - F_L}{U_R - U_L} \right|$$
 
 If the denominator approaches zero, the speed defaults to the local advection velocity.
 

@@ -14,6 +14,19 @@ makedocs(
     ),
     pages = [
         "Home" => "index.md",
+        "Flux Functions" => "fluxes.md",
+        "MLS Interpolation" => "mls_interpolation.md",
+        "Divergence Interpolators" => [
+            "Central" => "interpolators/central.md",
+            "Upwind" => "interpolators/upwind.md",
+            "MUSCL" => "interpolators/muscl.md",
+            "WENO" => "interpolators/weno.md",
+        ],
+        "Time Stepper" => [
+            "Runge-Kutta" => "time_stepper/rk_timestepper.md",
+            "IMEX" => "time_stepper/imex_timestepper.md",
+        ],
+
         "Base API" => "base_api.md",
         "Advanced API" => "advanced_api.md",
     ]
