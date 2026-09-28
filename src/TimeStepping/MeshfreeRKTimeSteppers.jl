@@ -139,9 +139,6 @@ function (rk::GeneralRKTimeStepper{D, M, T})(
     
     for stage in 1:s
         delta_t = stage == 1 ? c[stage] * dt : (c[stage] - c[stage-1]) * dt
-        if delta_t > zero(T)
-            pg.mover(pg, delta_t, eq, source_term)
-        end
 
         if stage == 1
             rho_stage[1:N] .= view(rho_n, 1:N)
@@ -162,12 +159,6 @@ function (rk::GeneralRKTimeStepper{D, M, T})(
         end
         
         evaluate_stage_derivatives!(main_grad, eq, pg, rk, stage, dt, rho_stage)
-    end
-    
-    delta_t = (one(T) - c[s]) * dt
-    if delta_t > zero(T)
-        pg.mover(pg, delta_t, eq, source_term)
-        pg.neighbor(pg)
     end
 
     @batch for p_idx in 1:N

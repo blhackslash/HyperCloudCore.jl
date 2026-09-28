@@ -118,7 +118,7 @@ Executes a comprehensive IMEX Runge-Kutta time step, integrating explicit advect
 - Finalizes particle states by combining both the explicit evaluations mapped via `b_t` weights and implicit evaluations mapped via `b` weights, followed by boundary condition application.
 """
 function (imex::GeneralIMEXTimeStepper{D, M, T})(
-    eq_kin::HyperbolicPDE{D, M, T, R}, pg::ParticleGrid{D, M, T}, time::Real, dt::Real
+    eq::HyperbolicPDE{D, M, T, R}, pg::ParticleGrid{D, M, T}, time::Real, dt::Real
 ) where {M, D, T, R}
     
     s = imex.num_stages
@@ -132,12 +132,8 @@ function (imex::GeneralIMEXTimeStepper{D, M, T})(
     U_n[1:N_particles] .= view(pg.rhos, 1:N_particles)
 
     for i in 1:s
-        delta_t = i != s ? (bt.c_t[i+1] - bt.c_t[i]) * dt : (one(T) - bt.c_t[i]) * dt
-        if delta_t > zero(T)
-            pg.mover(pg, delta_t)           
-        end
-        
         current_Y_i = imex.Y_stages[i]
+        stage_time = time + bt.c_t[i] * dt
 
         @batch for p_idx in 1:N_particles
             if pg.core.is_boundary[p_idx]; current_Y_i[p_idx] = pg.rhos[p_idx]; continue; end
@@ -154,35 +150,40 @@ function (imex::GeneralIMEXTimeStepper{D, M, T})(
             current_Y_i[p_idx] = Y_local
         end
 
-        if imex.source_term_object isa NonLocalRelaxationSourceTerm
-            update_nonlocal_potential!(imex.source_term_object, current_Y_i, pg, imex.pde)  
-        end
+        # --- THE NEW PURE API PIPELINE ---
         
+        # 1. API Hook: Let the source term update any global/non-local states
+        pre_solve_update!(imex.source_term_object, current_Y_i, pg, stage_time)
+        
+        # 2. API Hook: Implicit Solve
         if abs(bt.a[i,i]) > T(1e-14)
             @batch for p_idx in 1:N_particles
                 if pg.core.is_boundary[p_idx]; continue; end
                 
-                current_Y_i[p_idx] = solve(
+                current_Y_i[p_idx] = implicit_solve(
                     imex.implicit_solver, current_Y_i[p_idx], dt * bt.a[i,i],
-                    imex.source_term_object, p_idx, imex.pde, imex.source_term_object.km
+                    imex.source_term_object, p_idx, pg, stage_time
                 )
             end
         end
         
+        # 3. API Hook: Evaluate Source Term
         @batch for p_idx in 1:N_particles
             if pg.core.is_boundary[p_idx]
                 imex.K_I_stages[i][p_idx] = zero(State{M, T})
                 continue
             end
             
-            imex.K_I_stages[i][p_idx] = imex.source_term_object(
-                current_Y_i[p_idx], p_idx, imex.pde, imex.source_term_object.km
+            imex.K_I_stages[i][p_idx] = evaluate_source(
+                imex.source_term_object, current_Y_i[p_idx], p_idx, pg, stage_time
             )
         end
-        stage_time = time + bt.c_t[s] * dt
-        apply_boundary_conditions!(pg, current_Y_i, imex, imex.pde, stage_time)
-        evaluate_stage_derivatives_imex!(imex.divergence_interpolator, eq_kin, pg, imex, i, dt, current_Y_i)
-    end 
+        
+        # ---------------------------------
+        
+        apply_boundary_conditions!(pg, current_Y_i, imex, eq, stage_time)
+        evaluate_stage_derivatives_imex!(imex.divergence_interpolator, eq, pg, imex, i, dt, current_Y_i)
+    end
     
     @batch for p_idx in 1:N_particles
         if pg.core.is_boundary[p_idx]; continue; end

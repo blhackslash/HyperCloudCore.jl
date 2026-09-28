@@ -116,10 +116,8 @@ end
 
 include("MLSWeightFunctions.jl")
 include("NeighborLogic.jl")
-include("GridMovement.jl")
 include("BoundaryConditions.jl")
 include("Reordering.jl")
-#include("ParticleManagement.jl")
 
 # --- 1. Unified Position Accesso rs (No more reinterpret hacks!) ---
 @inline get_positions(pg::ParticleGrid) = pg.core.positions

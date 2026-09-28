@@ -31,7 +31,6 @@ include("CoreUtils.jl")
 include("CoreTypes.jl")
 include("API.jl")
 include("PathIntegrals.jl")
-include("LinearAdvection.jl")
 
 
 include("./Grid/ParticleGrids.jl")

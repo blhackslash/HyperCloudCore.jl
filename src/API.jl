@@ -1,5 +1,5 @@
 
-export flux, max_eigenvalue, prim2cons, cons2prim, velocity, update_size!, update_content!, _extract_order
+export flux, max_eigenvalue, prim2cons, cons2prim, velocity, update_size!, update_content!, _extract_order, solve
 
 # =========================================================================
 # PDE API -> Must be set for every PDE
@@ -133,5 +133,32 @@ Queries the underlying baseline polynomial or numerical order of the configured 
 - An `Int` representing the numerical order of the solver (e.g., 2 for a standard second-order MUSCL). This returned integer is critically required by the dynamic geometric CFL calculator to properly scale the stable time step.
 """
 @inline _extract_order(div::DivergenceInterpolator) = error("Order of the method has to be defined for CFL calculation!")
+
+export pre_solve_update!, evaluate_source, implicit_solve
+
+# API 1: Called once per stage before the implicit solve (e.g., to update non-local potentials)
+pre_solve_update!(st::AbstractSourceTerm, Y_stage, pg, t::Real) = nothing
+
+# API 2: Evaluates the source term vector S(U)
+function evaluate_source(st::AbstractSourceTerm, U, p_idx::Int, pg, t::Real)
+    error("`evaluate_source` not implemented for $(typeof(st))")
+end
+
+# API 3: Executes the implicit solve: U - dt * a_ii * S(U) = U_in
+function implicit_solve(solver::AbstractImplicitSolver, U_in, dt_coeff::Real, st::AbstractSourceTerm, p_idx::Int, pg, t::Real)
+    error("`implicit_solve` not implemented for $(typeof(solver))")
+end
+
+export kinetic_wave_speed
+
+"""
+    kinetic_wave_speed(eq::HyperbolicPDE, d::Int, k::Int)
+    
+Returns the advection speed of the `k`-th kinetic component in the `d`-th spatial dimension.
+Must be implemented by any PDE used as a kinetic relaxation system.
+"""
+function kinetic_wave_speed(eq::HyperbolicPDE, d::Int, k::Int)
+    error("`kinetic_wave_speed` not implemented for $(typeof(eq)).")
+end
 
 

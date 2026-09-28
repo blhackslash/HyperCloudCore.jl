@@ -1,10 +1,14 @@
 using Test
 using HyperCloud
-import HyperCloud: flux, velocity, max_eigenvalue, prim2cons, cons2prim
+import HyperCloud: flux, velocity, max_eigenvalue, prim2cons, cons2prim, implicit_solve, evaluate_source
 using PDEStudioCore
 using StaticArrays
 
+include("linear_advection.jl")
+include("source_terms.jl")
+include("ImplicitSolvers.jl")
 include("InitialConditions.jl")
+
 include("analytical_solution.jl")
 include("run_simulation.jl")
 # Point PDEStudioCore to look inside this test environment

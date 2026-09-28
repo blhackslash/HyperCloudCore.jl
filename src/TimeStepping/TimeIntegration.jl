@@ -242,6 +242,4 @@ end
 
 include("MeshfreeRKTimeSteppers.jl")
 include("ButcherTableaus.jl")
-include("SourceTerms.jl")
-include("ImplicitSolvers.jl")
 include("MeshfreeIMEXTimeSteppers.jl")

@@ -115,7 +115,7 @@ function build_equation(params::ParamDict, ::Type{T}) where {T}
     return eq, D, NM, vel_var
 end
 
-function build_kinetic_system(params::ParamDict, D::Int, NM::Int, rep::EquationRepresentation, ::Type{T}) where {T}
+function build_kinetic_system(params::ParamDict, D::Int, NM::Int, eq::HyperbolicPDE, ::Type{T}) where {T}
     relax_config = get(params, :relax_velocities, nothing)
     
     if isnothing(relax_config)
@@ -133,9 +133,9 @@ function build_kinetic_system(params::ParamDict, D::Int, NM::Int, rep::EquationR
     coeffs = State{NM, T}(ntuple(m -> one(T) / T(relax_indices[m+1] - relax_indices[m]), Val(NM)))
     int_factor = T(D) 
     
-    source_term = rep isa Conservative ? 
-        RelaxationSourceTerm(km, relax_eps, coeffs, eq_kin, int_factor) :
-        NonLocalRelaxationSourceTerm(km, relax_eps, coeffs, eq_kin, int_factor)
+    source_term = eq.rep isa Conservative ? 
+        RelaxationSourceTerm(km, relax_eps, coeffs, eq, eq_kin, int_factor) :
+        NonLocalRelaxationSourceTerm(km, relax_eps, eq, coeffs, eq_kin, int_factor)
         
     return km, NK, eq_kin, source_term
 end
@@ -201,7 +201,7 @@ function run_simulation(params::ParamDict)::Union{AbstractSimData, Nothing}
         eq_macro, D, NM, vel_var = build_equation(params, T)
         IC = getInitialCondition(params[:init_func], get(params, :init_params, nothing))
         
-        km, M_comps, eq_kin, source_term = build_kinetic_system(params, D, NM, eq_macro.rep, T)
+        km, M_comps, eq_kin, source_term = build_kinetic_system(params, D, NM, eq_macro, T)
         is_kinetic = !isnothing(eq_kin)
         
         # 1. Parse Parameters & Catch Serialized Strings from the Database

@@ -1,6 +1,6 @@
 export MLSWeightFunction, GridMover, AbstractBoundaryCondition, NumericalFluxFunction, MOODStrategy, MOODCriterion
 export RealMOOD, AbstractSlopeLimiter, RealSlopeLimiter, DivergenceInterpolator, AbstractPath, EquationRepresentation, NCRepresentation
-export HyperbolicPDE, UpwindAlgorithm, AbstractImplicitSolver
+export HyperbolicPDE, UpwindAlgorithm, AbstractImplicitSolver, NoSourceTerm, AbstractSourceTerm, NoGridMover, GridMover
 export RKButcherTableau, IMEXButcherTableau, GeneralIMEXTimeStepper, GeneralRKTimeStepper
 
 """
@@ -22,6 +22,7 @@ Core abstract types defining the extensible architecture of the mesh-free solver
 """
 abstract type MLSWeightFunction end
 abstract type GridMover end
+struct NoGridMover <: GridMover end
 abstract type AbstractBoundaryCondition end
 
 abstract type NumericalFluxFunction end
@@ -68,6 +69,7 @@ abstract type HyperbolicPDE{D, M, T, R <: EquationRepresentation} end
 
 abstract type TimeStepper end
 abstract type AbstractSourceTerm end
+struct NoSourceTerm <: AbstractSourceTerm end
 abstract type AbstractImplicitSolver end
 
 ## Time Steppers
