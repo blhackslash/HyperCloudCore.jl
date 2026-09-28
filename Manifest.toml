@@ -1,8 +1,8 @@
 # This file is machine-generated - editing it directly is not advised
 
-julia_version = "1.13.0"
+julia_version = "1.13.1"
 manifest_format = "2.1"
-project_hash = "d1c8ae08cdf7736bbe0d585de137b60e881ba6fd"
+project_hash = "4a4b025226d5234ae5f6103eeccb36f68a491968"
 
 [[deps.Adapt]]
 deps = ["LinearAlgebra"]
@@ -128,6 +128,12 @@ deps = ["Random", "Serialization", "Sockets"]
 uuid = "8ba89e20-285c-5b6f-9357-94700520ee1b"
 version = "1.11.0"
 
+[[deps.HyperCloud]]
+deps = ["CPUSummary", "LinearAlgebra", "Logging", "Polyester", "Printf", "ProgressMeter", "Random", "StaticArrays"]
+path = "."
+uuid = "61b85536-db47-4754-9d50-4ccb1001a5ed"
+version = "0.1.0"
+
 [[deps.IfElse]]
 git-tree-sha1 = "debdd00ffef04665ccbb3e150747a77560e8fad1"
 registries = "General"
@@ -169,12 +175,6 @@ version = "0.1.8"
 deps = ["Base64", "JuliaSyntaxHighlighting", "StyledStrings"]
 uuid = "d6f4376e-aef5-505a-96c1-9c027394607a"
 version = "1.11.0"
-
-[[deps.Meshfree4HypEq]]
-deps = ["CPUSummary", "LinearAlgebra", "Logging", "Polyester", "Printf", "ProgressMeter", "Random", "StaticArrays"]
-path = "."
-uuid = "61b85536-db47-4754-9d50-4ccb1001a5ed"
-version = "0.1.0"
 
 [[deps.OpenBLAS_jll]]
 deps = ["Artifacts", "CompilerSupportLibraries_jll", "Libdl"]

@@ -5,7 +5,7 @@ This guide details the complete configuration and execution of a numerical simul
 ## Step-by-Step Implementation
 
 ### 1. Define the Governing Equation
-The mathematical system must be defined by instantiating an object that subtypes the abstract `HyperbolicPDE` type[span_0](start_span)[span_0](end_span). For this tutorial, we employ the in-built `LinearAdvection` model[span_1](start_span)[span_1](end_span). This structure rigorously conforms to the internal PDE API by defining explicit methods for the `flux`, `max_eigenvalue`, and `velocity` calculations[span_2](start_span)[span_2](end_span). We initialize a 2D scalar system (M=1) with a constant advection velocity of $(1.0, 1.0)$ along the domain diagonal[span_3](start_span)[span_3](end_span).
+The mathematical system must be defined by instantiating an object that subtypes the abstract `HyperbolicPDE` type. For this tutorial, we employ the in-built `LinearAdvection` model. This structure rigorously conforms to the internal PDE API by defining explicit methods for the `flux`, `max_eigenvalue`, and `velocity` calculations. We initialize a 2D scalar system (M=1) with a constant advection velocity of $(1.0, 1.0)$ along the domain diagonal.
 
 ### 2. Formulate the Computational Domain
 We instantiate a standard rectangular geometry and map discrete boundary tags to appropriate boundary conditions.
