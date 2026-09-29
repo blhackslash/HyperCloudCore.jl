@@ -1,27 +1,6 @@
 reorder_particles!(pg::ParticleGrid) = pg.reorder(pg)
-
 sort_particles!(pg::ParticleGrid) = pg.reorder(pg) 
 
-# function (rd::ReorderData{D})(pg::ParticleGrid{D, M, WF}) where {D, M, WF}
-#     N = pg.meta.N
-    
-#     # 1. Lexicographical Spatial Sort (e.g., sort by X, then by Y)
-#     # This guarantees particles physically next to each other are adjacent in memory
-#     pos = pg.core.positions
-#     p = sortperm(view(pos, 1:N), by = p -> D == 1 ? p[1] : (p[1], p[2]))
-    
-#     # Check if already mostly sorted to save time
-#     if issorted(p); return nothing; end
-    
-#     # 2. Native Julia In-Place Permutations
-#     Base.permute!(pg.core.positions, p)
-#     Base.permute!(pg.core.is_boundary, p)
-#     Base.permute!(pg.rhos, p)          
-#     Base.permute!(pg.curvatures, p)    
-#     Base.permute!(pg.mood_events, p)   
-    
-#     return nothing
-# end
 # =========================================================================
 # MORTON Z-ORDER CURVE GENERATORS (For 2D and 3D Spatial Hashing)
 # =========================================================================
@@ -35,6 +14,7 @@ sort_particles!(pg::ParticleGrid) = pg.reorder(pg)
     w = (w | (w << 1)) & 0x55555555
     return w
 end
+
 """
     morton_2D(x::UInt32, y::UInt32)
     morton_3D(x::UInt32, y::UInt32, z::UInt32)
@@ -69,10 +49,9 @@ Executes a proximity-optimized spatial reordering of the entire particle grid to
 # Details
 - Normalizes the domain coordinates and sorts the permutation buffer using Morton Z-order curves for 2D/3D grids, or simple lexicographical sorting for 1D grids.
 - Bypasses the memory mutation entirely if the permutation buffer is already sorted.
-- Performs fast, in-place native Julia permutations (`Base.permute!`) across the positions, boundary flags, state vectors, and volumes.
+- Performs fast, in-place native Julia permutations (`Base.permute!`) across the positions, boundary flags, tags, state vectors, and volumes.
 """
-function (rd::ReorderData{D})(pg::ParticleGrid{D, M, WF}) where {D, M, WF}
-    return
+function (rd::ReorderData{D})(pg::ParticleGrid{D}) where {D}
     N = pg.meta.N
     if N <= 1; return nothing; end
     
@@ -84,9 +63,9 @@ function (rd::ReorderData{D})(pg::ParticleGrid{D, M, WF}) where {D, M, WF}
         p[i] = i
     end
     
-    # 2. Extract domain boundaries for normalization
-    mins = pg.meta.mins
-    extents = pg.meta.maxs .- mins
+    # 2. Extract domain boundaries from the bins (removed from meta)
+    mins = pg.bins.mins
+    extents = pg.bins.maxs .- mins
     
     # 3. Sort using the Morton Curve
     if D == 1
@@ -117,6 +96,7 @@ function (rd::ReorderData{D})(pg::ParticleGrid{D, M, WF}) where {D, M, WF}
     # 4. Native Julia In-Place Permutations
     Base.permute!(pg.core.positions, p)
     Base.permute!(pg.core.is_boundary, p)
+    Base.permute!(pg.core.tags, p)       # Permute newly added tags array
     Base.permute!(pg.rhos, p)          
     Base.permute!(pg.curvatures, p)    
     Base.permute!(pg.mood_events, p)   
