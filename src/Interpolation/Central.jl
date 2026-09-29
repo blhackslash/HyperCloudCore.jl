@@ -12,6 +12,7 @@ struct CentralDivergence{D, M, T, I <: Interpolator} <: DivergenceInterpolator
     order::Int
     interpolator::I
 end
+
 # =========================================================================
 # STATELESS CENTRAL DIVERGENCE API
 # =========================================================================
@@ -55,7 +56,7 @@ The primary functor execution for computing the stateless central divergence. Th
 
 # Details
 - Returns a zero state if the available neighborhood slice is smaller than the requested interpolation order.
-- Iterates through the active neighborhood to calculate raw central flux differences directly, inclusive of any non-conservative jump contributions (`F_j - F_i + nc_jump`).
+- Iterates through the active neighborhood to calculate raw central flux differences (`F_j - F_i`).
 - Feeds the raw flux differences directly into the internal matrix-vectorized interpolator to extract the final unified divergence.
 """
 function (central::CentralDivergence{D, M, T, I})(
@@ -75,15 +76,11 @@ function (central::CentralDivergence{D, M, T, I})(
 
     # --- 1. Compute Raw Central Flux Differences ---
     @inbounds for global_idx in nb_slice
-        dist_k = dist_all[global_idx]
         f_j    = ib.f[global_idx]
         F_j    = flux(eq, f_j)
         
-        # Central difference directly applies the physical jump
-        nc_jump = evaluate_nc_jump(eq, f_i, f_j, dist_k)
-        
         # Write directly to the global, mutually-exclusive slot
-        ib.df_flux[global_idx] = F_j - F_i + nc_jump
+        ib.df_flux[global_idx] = F_j - F_i
     end
 
     # --- 2. Call the Stateless Matrix-Vectorized Interpolator ---

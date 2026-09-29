@@ -134,9 +134,6 @@ Branchless, SIMD-friendly helper functions computing maximums and minimums.
 @inline math_max(a::AbstractVector{T}, b::AbstractVector{T}) where {T} = T(0.5) * (a + b + abs.(a - b))
 @inline math_min(a::AbstractVector{T}, b::AbstractVector{T}) where {T} = T(0.5) * (a + b - abs.(a - b))
 
-@inline prim2cons(eq, U) = U
-@inline cons2prim(eq, U) = U
-
 """
     sort_flux(f_i, f_j, F_i, F_j, dist_k)
 

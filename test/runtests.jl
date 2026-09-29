@@ -1,6 +1,6 @@
 using Test
 using HyperCloudCore
-import HyperCloudCore: flux, velocity, max_eigenvalue, prim2cons, cons2prim, implicit_solve, evaluate_source
+import HyperCloudCore: flux, velocity, max_eigenvalue, prim2cons, cons2prim, implicit_solve, evaluate_source, math_min, math_max
 using PDEStudioCore
 using StaticArrays
 
@@ -62,6 +62,11 @@ PDEStudioCore.set_target_module!(@__MODULE__)
             :main_gradient => "WENO",
             :main_flux => "Rusanov",
             :order => 2
+        ),
+        :central => Dict(
+            :main_gradient => "Central",
+            :main_flux => "Rusanov",
+            :order => 2
         )
     )
 
@@ -75,7 +80,7 @@ PDEStudioCore.set_target_module!(@__MODULE__)
         :run_simulation,
         shared,
         methods,
-        [:upwind, :muscl, :weno];
+        [:upwind, :muscl, :weno, :central];
         varied_params = varied,
         ref_func_name = :analytical_solution
     )
@@ -84,7 +89,7 @@ PDEStudioCore.set_target_module!(@__MODULE__)
     run_all_simulations(config; force_overwrite=true, calculate_stats=true)
 
     # Verify each scheme independently
-    for scheme in [:upwind, :muscl, :weno]
+    for scheme in [:upwind, :muscl, :weno, :central]
         @testset "Scheme: $scheme" begin
             # Construct the exact parameter dictionaries expected on disk
             base_params = merge(shared, methods[scheme])
@@ -119,6 +124,75 @@ PDEStudioCore.set_target_module!(@__MODULE__)
                 err_200 = sim_200.stats[:l1error][end][1]
                 @test err_200 < err_100
             end
+        end
+    end
+    @testset "Core Utility Functions (Params & SIMD Math)" begin
+        
+        @testset "param2uvec (State Conversions)" begin
+            # Scalar to 1D State
+            u_scalar = param2uvec(5.0)
+            @test u_scalar isa SVector{1, Float64}
+            @test u_scalar[1] == 5.0
+            
+            # Tuple to M-D State
+            u_tuple = param2uvec((1.0, 2.0, 3.0))
+            @test u_tuple isa SVector{3, Float64}
+            @test u_tuple == SVector(1.0, 2.0, 3.0)
+            
+            # Array to M-D State
+            u_arr = param2uvec([4.0, 5.0])
+            @test u_arr isa SVector{2, Float64}
+            @test u_arr == SVector(4.0, 5.0)
+        end
+        
+        @testset "param2xvec (Space Conversions)" begin
+            x_scalar = param2xvec(-1.5)
+            @test x_scalar isa SVector{1, Float64}
+            
+            x_tuple = param2xvec((0.0, 1.0))
+            @test x_tuple isa SVector{2, Float64}
+        end
+        
+        @testset "param2fvec (Flux Conversions)" begin
+            # Scalar to 1D, 1-component Flux
+            f_scalar = param2fvec(2.5)
+            @test f_scalar isa SVector{1, SVector{1, Float64}}
+            @test f_scalar[1][1] == 2.5
+            
+            # Tuple of Vectors to Multi-D Flux
+            f_vec_tuple = param2fvec(([1.0, 2.0], [3.0, 4.0]))
+            @test f_vec_tuple isa SVector{2, SVector{2, Float64}}
+            @test f_vec_tuple[1] == SVector(1.0, 2.0)
+            @test f_vec_tuple[2] == SVector(3.0, 4.0)
+            
+            # Vector of Vectors to Multi-D Flux
+            f_vec_arr = param2fvec([[5.0], [6.0], [7.0]])
+            @test f_vec_arr isa SVector{3, SVector{1, Float64}}
+            @test f_vec_arr[3][1] == 7.0
+        end
+        
+        @testset "param2svec (Nested State Conversions)" begin
+            # Tuple to Nested Vector
+            s_tuple = param2svec((1.5, 2.5))
+            @test s_tuple isa SVector{2, SVector{1, Float64}}
+            @test s_tuple[1][1] == 1.5
+            @test s_tuple[2][1] == 2.5
+        end
+        
+        @testset "Branchless SIMD Math (math_max / math_min)" begin
+            # Scalar logic
+            @test math_max(10.0, 5.0) == 10.0
+            @test math_max(-2.0, 3.0) == 3.0
+            
+            @test math_min(10.0, 5.0) == 5.0
+            @test math_min(-2.0, 3.0) == -2.0
+            
+            # Vector logic (Element-wise)
+            v1 = [1.0, 5.0, 3.0]
+            v2 = [2.0, 4.0, 3.0]
+            
+            @test math_max(v1, v2) == [2.0, 5.0, 3.0]
+            @test math_min(v1, v2) == [1.0, 4.0, 3.0]
         end
     end
     @testset "MUSCL Higher-Order Convergence (Orders 2-5)" begin
@@ -330,7 +404,7 @@ PDEStudioCore.set_target_module!(@__MODULE__)
             end
         end
     end
-        @testset "Slope Limiter Boundedness (VK Limiter, Box IC)" begin
+    @testset "Slope Limiter Boundedness (VK Limiter, Box IC)" begin
         shared_lim = copy(shared)
         
         # Inject the Box initial condition: (u_bg, u_box, mins, maxs)[span_0](start_span)[span_0](end_span)
@@ -375,6 +449,74 @@ PDEStudioCore.set_target_module!(@__MODULE__)
                 # Assert the VK limiter independently keeps the solution bounded within [0, 1][span_2](start_span)[span_2](end_span)
                 @test min_vk >= 0.0 - tol
                 @test max_vk <= 1.0 + tol
+            end
+        end
+    end
+    @testset "MOOD Strategies & Criteria Execution" begin
+        # 1D Advection with a Box IC to guarantee MOOD activation
+        shared_mood_exec = Dict(
+            :PDE => "linear",
+            :PDE_params => ((1.0,),), 
+            :mins => (-1.0,),
+            :maxs => (1.0,),
+            :periodic => true,
+            :domain => "rectangular",
+            :init_func => "box",
+            :init_params => ((0.0,), (1.0,), (-0.5,), (0.5,)), 
+            :tmax => 0.05, 
+            :main_gradient => "MUSCL",
+            :main_flux => "Rusanov",
+            :limiter => "none", # Disable standard limiter so MOOD does the heavy lifting
+            :order => 2,
+            :interp_range => 2.5,
+            :interp_alpha => 1.0,
+            :snapshots => 2,
+            :SEED => 42,
+            :CFL => 0.3,
+            :Ns => (50,),
+            :timestepper => "RK2",
+        )
+        
+        methods_mood_exec = Dict{Symbol, Any}()
+        
+        strategies = ["EPD0", "SEPD0", "EPD1", "EPD2"]
+        criteria = ["U1", "U2"]
+        
+        # Generate the Cartesian product of all strategies and criteria
+        for strat in strategies
+            for crit in criteria
+                sym = Symbol("mood_$(lowercase(strat))_$(lowercase(crit))")
+                methods_mood_exec[sym] = Dict(
+                    :mood_strategy => strat,
+                    :mood_criterion => crit
+                )
+            end
+        end
+        
+        config_mood_exec = SimulationConfig(
+            :run_simulation,
+            shared_mood_exec,
+            methods_mood_exec,
+            collect(keys(methods_mood_exec));
+            ref_func_name = :analytical_solution
+        )
+        
+        run_all_simulations(config_mood_exec; force_overwrite=true, calculate_stats=true)
+        
+        # Verify that every combination executed successfully without crashing
+        for strat in strategies
+            for crit in criteria
+                sym = Symbol("mood_$(lowercase(strat))_$(lowercase(crit))")
+                @testset "Strategy: $strat | Criterion: $crit" begin
+                    base_p = merge(shared_mood_exec, methods_mood_exec[sym])
+                    sim = load_sim_data(create_param_dict(base_p..., :Ns => (50,)))
+                    
+                    @test sim isa LSimData
+                    @test haskey(sim.stats, :l1error)
+                    
+                    err = sim.stats[:l1error][end][1]
+                    @test isfinite(err)
+                end
             end
         end
     end
@@ -525,6 +667,7 @@ PDEStudioCore.set_target_module!(@__MODULE__)
             
             methods_imex = Dict(
                 :ts_ars233 => Dict(:timestepper => "ARS233", :CFL => 0.3),
+                :ts_ars233_mood => Dict(:timestepper => "ARS233", :CFL => 0.3, :mood_criterion => "U2"),
                 :ts_prSSP3 => Dict(:timestepper => "PRSSP3", :CFL => 0.3),
                 :ts_ars222 => Dict(:timestepper => "ARS222", :CFL => 0.3),
                 :ts_ssp332 => Dict(:timestepper => "SSP332", :CFL => 0.3),
@@ -555,6 +698,74 @@ PDEStudioCore.set_target_module!(@__MODULE__)
                     @test isfinite(err)
                 end
             end
+        end
+    end
+
+    @testset "Spherical Domain & Boundary Conditions" begin
+        # Setup a 2D advection problem on a spherical domain
+        shared_bc = Dict(
+            :PDE => "linear",
+            :PDE_params => ((1.0,), (1.0,)), 
+            :mins => (-1.0, -1.0),
+            :maxs => (1.0, 1.0),
+            :periodic => false,
+            # Triggers get_spherical_domain which computes a center at (0,0) and radius 1.0
+            :domain => "spherical", 
+            :init_func => "gauss",
+            :init_params => (1.0, (0.0, 0.0), 0.5), 
+            :tmax => 0.1,
+            :main_gradient => "Upwind",
+            :main_flux => "Upwind",
+            :order => 1,
+            :timestepper => "RK2",
+            :interp_range => 2.5,
+            :interp_alpha => 1.0,
+            :snapshots => 2,
+            :SEED => 42,
+            :CFL => 0.4,
+            :Ns => (30,30)
+        )
+        
+        # The spherical domain automatically assigns a boundary tag of 1 to all exterior points.
+        # We test both the strict FixedDirichlet and the transmissive OutflowBC strategies.
+        methods_bc = Dict(
+            :bc_fixed   => Dict(:bc => Dict(1 => :fixed_dirichlet)),
+            :bc_outflow => Dict(:bc => Dict(1 => :outflow))
+        )
+        
+        config_bc = SimulationConfig(
+            :run_simulation,
+            shared_bc,
+            methods_bc,
+            [:bc_fixed, :bc_outflow];
+            ref_func_name = :analytical_solution
+        )
+        
+        # Run pipeline to verify geometry parsing, particle filtering, and BC execution
+        run_all_simulations(config_bc; force_overwrite=true, calculate_stats=false)
+        
+        @testset "Fixed Dirichlet Pipeline" begin
+            base_p = merge(shared_bc, methods_bc[:bc_fixed])
+            sim = load_sim_data(create_param_dict(base_p..., :Ns => (30, 30)))
+            
+            @test sim isa LSimData
+            # Ensure the coordinate arrays match the 2D configuration
+            @test length(sim.x[1][1]) == 2
+            
+            # Verify the simulation did not blow up and properly stored snapshots
+            u_final = sim.u[end]
+            @test isfinite(u_final[1][1])
+        end
+        
+        @testset "Outflow BC Pipeline" begin
+            base_p = merge(shared_bc, methods_bc[:bc_outflow])
+            sim = load_sim_data(create_param_dict(base_p..., :Ns => (30, 30)))
+            
+            @test sim isa LSimData
+            @test length(sim.x[1][1]) == 2
+            
+            u_final = sim.u[end]
+            @test isfinite(u_final[1][1])
         end
     end
 
