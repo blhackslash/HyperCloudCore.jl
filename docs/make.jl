@@ -3,10 +3,9 @@ using Documenter
 using HyperCloudCore
 
 makedocs(
-    sitename = "HyperCloudCoreCore.jl",
+    sitename = "HyperCloudCore.jl",
     modules = [HyperCloudCore],
     checkdocs = :none,
-    remotes = nothing,  
     format = Documenter.HTML(
         prettyurls = get(ENV, "CI", "false") == "true",
         canonical = "https://blhackslash.github.io/HyperCloudCore.jl/",
@@ -34,6 +33,6 @@ makedocs(
 
 deploydocs(
     repo = "github.com/blhackslash/HyperCloudCore.jl.git",
-    devbranch = "Restructuring",
+    devbranch = "main",
     push_preview = true,
 )

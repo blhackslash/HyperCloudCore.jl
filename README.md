@@ -1,5 +1,9 @@
 # HyperCloudCore.jl
 
+[![Build Status](https://github.com/blhackslash/HyperCloudCore.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/blhackslash/HyperCloudCore.jl/actions/workflows/CI.yml)
+[![Coverage](https://codecov.io/gh/blhackslash/HyperCloudCore.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/blhackslash/HyperCloudCore.jl)
+[![Stable Docs](https://img.shields.io/badge/docs-stable-blue.svg)](https://blhackslash.github.io/HyperCloudCore.jl/)
+
 **HyperCloudCore.jl** is a high-performance, physics-agnostic meshless solver backend designed for the numerical integration of hyperbolic Partial Differential Equations (PDEs) in Julia. 
 
 By operating entirely on unstructured point clouds, the framework completely bypasses traditional mesh-generation bottlenecks. It achieves this using **Generalized Finite Differences (GFD)** driven by **Moving Least Squares (MLS)** approximations to construct highly accurate spatial operators directly on arbitrary node distributions.
