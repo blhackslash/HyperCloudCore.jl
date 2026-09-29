@@ -40,22 +40,13 @@ After all $s$ stages are evaluated:
 
 1. **Final Step Update:** 
    The final state at $t^{n+1}$ is constructed using the stage weights $\tilde{b}$ and $b$:
-   $$ U_i^{n+1} = U_i^n + \Delta t \sum_{j=1}^s \tilde{b}_j K_{E, j} + \Delta t \sum_{j=1}^s b_j K_{I, j} $$
+   $$U_i^{n+1} = U_i^n + \Delta t \sum_{j=1}^s \tilde{b}_j K_{E, j} + \Delta t \sum_{j=1}^s b_j K_{I, j}$$
 2. **Final Boundary Conditions:** 
    Boundary conditions are enforced on the final updated state.
 
 ---
 
-## 3. Implicit Solvers & Source Terms
-
-The IMEX stepper delegates the resolution of $a_{k,k}$ to specific solver structs. 
-
-For kinetic relaxation systems, the `LinearizedRelaxationImplicitSolver` provides a highly optimized, analytical update. Given an inverse relaxation time $\frac{1}{\epsilon}$ and an equilibrium Maxwellian state $M_k$, the implicit update avoids costly matrix inversions by evaluating:
-$$Y^{(k)}_{new} = \frac{Y^{(k)}_{old} + \frac{\Delta t \cdot a_{k,k}}{\epsilon} M_k}{1 + \frac{\Delta t \cdot a_{k,k}}{\epsilon}}$$
-
----
-
-## 4. Explicit Spatial Derivative Evaluation (`evaluate_stage_derivatives_imex!`)
+## 3. Explicit Spatial Derivative Evaluation (`evaluate_stage_derivatives_imex!`)
 
 The explicit divergence operator perfectly mirrors the direct RK solver architecture, including full support for multi-dimensional optimal order detection (MOOD).
 
