@@ -18,7 +18,7 @@ Where:
 
 To find the minimum, we take the derivative of $J(\mathbf{c})$ with respect to the coefficients $\mathbf{c}$ and set it to zero. This yields the classical weighted Normal Equations:
 
-$$ \left( \sum_{j} w_j p(\vec{x}_{ij}) p(\vec{x}_{ij})^T \right) \mathbf{c} = \sum_{j} w_j p(\vec{x}_{ij}) \Delta f_j $$
+$$\left( \sum_{j} w_j p(\vec{x}_{ij}) p(\vec{x}_{ij})^T \right) \mathbf{c} = \sum_{j} w_j p(\vec{x}_{ij}) \Delta f_j$$
 
 We can express this compactly as a linear system:
 
