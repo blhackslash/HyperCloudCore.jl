@@ -1,0 +1,8 @@
+[deps]
+HyperCloudCore = "61b85536-db47-4754-9d50-4ccb1001a5ed"
+PDEStudioCore = "93766fa7-4b93-4712-aa47-391c0d405e89"
+StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[sources]
+HyperCloudCore = {path = ".."}

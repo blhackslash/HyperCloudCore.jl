@@ -1,7 +1,7 @@
-export MLSWeightFunction, GridMover, AbstractBoundaryCondition, NumericalFluxFunction, MOODStrategy, MOODCriterion
-export RealMOOD, AbstractSlopeLimiter, RealSlopeLimiter, DivergenceInterpolator, AbstractPath, EquationRepresentation, NCRepresentation
-export HyperbolicPDE, UpwindAlgorithm, AbstractImplicitSolver, NoSourceTerm, AbstractSourceTerm, NoGridMover, GridMover
-export RKButcherTableau, IMEXButcherTableau, GeneralIMEXTimeStepper, GeneralRKTimeStepper
+export MLSWeightFunction, AbstractBoundaryCondition, NumericalFluxFunction, MOODStrategy, MOODCriterion
+export RealMOOD, AbstractSlopeLimiter, RealSlopeLimiter, DivergenceInterpolator, AbstractPath, EquationRepresentation, NCRepresentation, Conservative
+export HyperbolicPDE, UpwindAlgorithm, NoSourceTerm, AbstractSourceTerm, NoGridMover, GridMover
+export RKButcherTableau, IMEXButcherTableau, GeneralIMEXTimeStepper, GeneralRKTimeStepper, TimeStepper
 
 """
     MLSWeightFunction
@@ -16,7 +16,6 @@ export RKButcherTableau, IMEXButcherTableau, GeneralIMEXTimeStepper, GeneralRKTi
     HyperbolicPDE
     TimeStepper
     AbstractSourceTerm
-    AbstractImplicitSolver
 
 Core abstract types defining the extensible architecture of the mesh-free solver.
 """
@@ -67,10 +66,23 @@ abstract type NCRepresentation{P <: AbstractPath} <: EquationRepresentation end
 
 abstract type HyperbolicPDE{D, M, T, R <: EquationRepresentation} end
 
-abstract type TimeStepper end
+@inline function evaluate_nc_jump(
+    eq::HyperbolicPDE{D, M, T, Conservative}, f_L::Flux{D, M, T}, f_R::Flux{D, M, T}, dist_k::Space{D, T}
+) where {D, M, T}
+    return zero(Flux{D, M, T})
+end
+
+export AbstractSourceTerm, AbstractExplicitSourceTerm, AbstractImplicitSourceTerm
+export NoExplicitSource, NoImplicitSource
+
 abstract type AbstractSourceTerm end
-struct NoSourceTerm <: AbstractSourceTerm end
-abstract type AbstractImplicitSolver end
+abstract type AbstractExplicitSourceTerm <: AbstractSourceTerm end
+abstract type AbstractImplicitSourceTerm <: AbstractSourceTerm end
+
+struct NoExplicitSource <: AbstractExplicitSourceTerm end
+struct NoImplicitSource <: AbstractImplicitSourceTerm end
+
+abstract type TimeStepper end
 
 ## Time Steppers
 """
@@ -112,10 +124,6 @@ end
     IMEXButcherTableau{T}
 
 A structure storing the paired coefficients for Implicit-Explicit (IMEX) Runge-Kutta time integration.
-
-# Details
-- Validates upon construction that the implicit matrix `a` is strictly lower triangular (diagonal allowed) and the explicit matrix `a_t` is strictly lower triangular (no diagonal).
-- Ensures all matrix dimensions and coefficient vectors correctly match the target number of stages.
 """
 struct IMEXButcherTableau{T} 
     a::Matrix{T}  
@@ -146,16 +154,17 @@ end
 A comprehensive IMEX time integration orchestrator.
 
 # Details
-- Manages the physical PDE, spatial divergence interpolator, implicit solver, and stiff source term evaluations.
-- Automatically resolves the system dimensions (`M` and `D`) natively from the provided relaxation source term.
+- Manages the physical PDE, spatial divergence interpolator, and strongly-typed explicit/implicit source term tuples.
+- Automatically resolves the system dimensions (`M` and `D`) natively from the provided physical/kinetic PDE.
 - Allocates and maintains explicit (`K_E_stages`) and implicit (`K_I_stages`) evaluation buffers for all intermediate sub-steps.
 """
-struct GeneralIMEXTimeStepper{D, M, T, PDE <: HyperbolicPDE, G <: DivergenceInterpolator, IS <: AbstractImplicitSolver, ST <: AbstractSourceTerm} <: TimeStepper
+struct GeneralIMEXTimeStepper{D, M, T, PDE <: HyperbolicPDE, G <: DivergenceInterpolator, EST <: Tuple{Vararg{AbstractExplicitSourceTerm}}, IST <: Tuple{Vararg{AbstractImplicitSourceTerm}}} <: TimeStepper
     pde::PDE
     divergence_interpolator::G
-    implicit_solver::IS
-    source_term_object::ST
     tableau::IMEXButcherTableau{T}
+    
+    explicit_sources::EST
+    implicit_sources::IST
     
     rho_n::Vector{State{M, T}}
     Y_stages::Vector{Vector{State{M, T}}}
@@ -165,19 +174,17 @@ struct GeneralIMEXTimeStepper{D, M, T, PDE <: HyperbolicPDE, G <: DivergenceInte
     int_buffer::InteractionBuffer{D, M, T}
     num_stages::Int
 
+    # Primary strictly-typed constructor
     function GeneralIMEXTimeStepper(
-        pde::PDE, div_interp::G, implicit_solver::IS, 
-        source_term_object::ST, tableau::IMEXButcherTableau{T}
-    ) where {PDE <: HyperbolicPDE, G, IS, ST, T}
+        pde::HyperbolicPDE{D, M, T}, div_interp::G, 
+        explicit_sources::EST, implicit_sources::IST, 
+        tableau::IMEXButcherTableau{T}
+    ) where {D, M, T, G, EST <: Tuple{Vararg{AbstractExplicitSourceTerm}}, IST <: Tuple{Vararg{AbstractImplicitSourceTerm}}}
         
         s = size(tableau.a, 1)
         
-        # Extract D and M natively from the relaxation system
-        M = length(source_term_object.scaled_inv_speeds) 
-        D = length(source_term_object.scaled_inv_speeds[1])
-        
-        new{D, M, T, PDE, G, IS, ST}(
-            pde, div_interp, implicit_solver, source_term_object, tableau,
+        new{D, M, T, typeof(pde), G, EST, IST}(
+            pde, div_interp, tableau, explicit_sources, implicit_sources,
             State{M, T}[], 
             [State{M, T}[] for _ in 1:s], 
             [State{M, T}[] for _ in 1:s], 
@@ -188,6 +195,26 @@ struct GeneralIMEXTimeStepper{D, M, T, PDE <: HyperbolicPDE, G <: DivergenceInte
     end
 end
 
+# Auto-Sorting Convenience Constructor for IMEX
+function GeneralIMEXTimeStepper(
+    pde::HyperbolicPDE{D, M, T}, div_interp::G, 
+    all_sources::Tuple{Vararg{AbstractSourceTerm}}, 
+    tableau::IMEXButcherTableau{T}
+) where {D, M, T, G}
+    explicit_sts = filter(st -> st isa AbstractExplicitSourceTerm, all_sources)
+    implicit_sts = filter(st -> st isa AbstractImplicitSourceTerm, all_sources)
+    
+    return GeneralIMEXTimeStepper(pde, div_interp, explicit_sts, implicit_sts, tableau)
+end
+
+# Fallback for no source terms (Empty Tuples)
+function GeneralIMEXTimeStepper(
+    pde::HyperbolicPDE{D, M, T}, div_interp::G, tableau::IMEXButcherTableau{T}
+) where {D, M, T, G}
+    return GeneralIMEXTimeStepper(pde, div_interp, (), (), tableau)
+end
+
+
 """
     GeneralRKTimeStepper
 
@@ -195,25 +222,54 @@ A standard explicit Runge-Kutta time integration orchestrator.
 
 # Details
 - Couples the physical PDE with the spatial divergence interpolator and explicit Butcher tableau.
-- Pre-allocates a primary `K_stages` buffer matrix for intermediate derivative evaluations and manages the internal `InteractionBuffer` for neighbor loops.
+- Manages an explicitly-typed tuple of `AbstractExplicitSourceTerm`s.
+- Pre-allocates a primary `K_stages` buffer matrix for intermediate derivative evaluations.
 """
-struct GeneralRKTimeStepper{D, M, T, PDE <: HyperbolicPDE, G <: DivergenceInterpolator} <: TimeStepper
+struct GeneralRKTimeStepper{D, M, T, PDE <: HyperbolicPDE, G <: DivergenceInterpolator, EST <: Tuple{Vararg{AbstractExplicitSourceTerm}}} <: TimeStepper
     pde::PDE
     divergence_interpolator::G
     tableau::RKButcherTableau{T}
+    
+    explicit_sources::EST
     
     rho_n::Vector{State{M, T}}
     rho_stage::Vector{State{M, T}}
     K_stages::Vector{Vector{State{M, T}}} 
     int_buffer::InteractionBuffer{D, M, T}
 
-    function GeneralRKTimeStepper(pde::HyperbolicPDE{D, M, T}, div_interp::G, tableau::RKButcherTableau{T}) where {G, D, M, T}
+    # Primary strictly-typed constructor
+    function GeneralRKTimeStepper(
+        pde::HyperbolicPDE{D, M, T}, div_interp::G, 
+        explicit_sources::EST, tableau::RKButcherTableau{T}
+    ) where {D, M, T, G, EST <: Tuple{Vararg{AbstractExplicitSourceTerm}}}
         s = size(tableau.a, 1)
-        new{D, M, T, typeof(pde), G}(
-            pde, div_interp, tableau, 
+        new{D, M, T, typeof(pde), G, EST}(
+            pde, div_interp, tableau, explicit_sources,
             State{M, T}[], State{M, T}[], 
             [State{M, T}[] for _ in 1:s],
             InteractionBuffer{D, M, T}()
         )
     end
+end
+
+# Auto-Sorting Convenience Constructor for standard RK
+function GeneralRKTimeStepper(
+    pde::HyperbolicPDE{D, M, T}, div_interp::G, 
+    all_sources::Tuple{Vararg{AbstractSourceTerm}}, 
+    tableau::RKButcherTableau{T}
+) where {D, M, T, G}
+    explicit_sts = filter(st -> st isa AbstractExplicitSourceTerm, all_sources)
+    
+    if length(explicit_sts) < length(all_sources)
+        @warn "AbstractImplicitSourceTerm detected in a standard Runge-Kutta stepper. It will be ignored! Use IMEX if stiffness is present."
+    end
+    
+    return GeneralRKTimeStepper(pde, div_interp, explicit_sts, tableau)
+end
+
+# Fallback for no source terms (Empty Tuple)
+function GeneralRKTimeStepper(
+    pde::HyperbolicPDE{D, M, T}, div_interp::G, tableau::RKButcherTableau{T}
+) where {D, M, T, G}
+    return GeneralRKTimeStepper(pde, div_interp, (), tableau)
 end

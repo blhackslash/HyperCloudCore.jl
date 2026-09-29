@@ -1,0 +1,6 @@
+[deps]
+Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
+HyperCloudCore = "61b85536-db47-4754-9d50-4ccb1001a5ed"
+
+[sources]
+HyperCloudCore = {path = ".."}

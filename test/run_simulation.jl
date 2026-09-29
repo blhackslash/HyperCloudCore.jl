@@ -10,7 +10,7 @@ using StaticArrays
 @inline _unwrap(v) = v
 
 @noinline function _execute_explicit_sim!(method, eq, pg, dt, is_cfl, run_params, dimension, snapshots, remove_ghosts, M_components, xmins, xmaxs, ::Type{T}) where {T}
-    xs_svector, us_svector, ts_full, k_step, elapsed_time = solve_equation(method, eq, pg, run_params[:tmax], dt; is_cfl = is_cfl, snapshots = snapshots, remove_ghosts = remove_ghosts, show_progress = true, progress_interval = .1)
+    xs_svector, us_svector, ts_full, k_step, elapsed_time = solve_equation(method, eq, pg, run_params[:tmax], dt; is_cfl = is_cfl, snapshots = snapshots, remove_ghosts = remove_ghosts)
     @info "Explicit Simulation (D=$dimension) finished in $(round(elapsed_time, digits=2)) seconds."
 
     valid_indices = findall(i -> isassigned(us_svector, i), 1:length(us_svector))
@@ -27,7 +27,7 @@ using StaticArrays
 end
 
 @noinline function _execute_kinetic_sim!(system_method, eq_kin, pg, dt, is_cfl, run_params, dimension, snapshots, remove_ghosts, save_relax, km, xmins, xmaxs, ::Type{T}) where {T}
-    xs_svector, us_svector, ts_full, k_step, elapsed_time = solve_equation(system_method, eq_kin, pg, run_params[:tmax], dt; is_cfl = is_cfl, snapshots = snapshots, remove_ghosts = remove_ghosts, show_progress = true, progress_interval = .1)
+    xs_svector, us_svector, ts_full, k_step, elapsed_time = solve_equation(system_method, eq_kin, pg, run_params[:tmax], dt; is_cfl = is_cfl, snapshots = snapshots, remove_ghosts = remove_ghosts)
     @info "Kinetic Relaxation Simulation (D=$dimension) finished in $(round(elapsed_time, digits=2)) seconds."
 
     valid_indices = findall(i -> isassigned(us_svector, i), 1:length(us_svector))
@@ -65,28 +65,6 @@ function build_equation(params::ParamDict, ::Type{T}) where {T}
     # STANDARD FACTORY: String-based Instantiation
     # =========================================================================
     eq_name = lowercase(string(params[:PDE]))
-    
-    path_str = lowercase(string(get(params, :PDE_path, "mapped")))
-    path_obj = if path_str == "line"
-        LinePath()
-    elseif path_str == "mapped"
-        MappedPath()
-    elseif path_str == "naive" || path_str == "naiveaverage"
-        NaiveAveragePath()
-    else
-        error("Unknown PDE path: $path_str")
-    end
-    
-    rep_str = lowercase(string(get(params, :PDE_representation, "conservative")))
-    rep = if rep_str == "conservative"
-        Conservative()
-    elseif rep_str == "primitive"
-        Primitive(path_obj)
-    elseif rep_str == "lagrangian" || rep_str == "lagrange"
-        Lagrangian(path_obj)
-    else
-        error("Unknown PDE representation: $rep_str")
-    end
 
     D = haskey(params, :Ns) ? length(params[:Ns]) : 1
     
@@ -94,20 +72,9 @@ function build_equation(params::ParamDict, ::Type{T}) where {T}
 
     if eq_name == "linear"
         # Linear Advection automatically deduces T from the provided velocity matrix in its constructor
-        eq = LinearAdvection(params[:PDE_params]; rep=rep) 
+        eq = LinearAdvection(params[:PDE_params]) 
         NM = length(eq.vel[1])
         vel_var = (1,)
-        
-    elseif eq_name == "burgers"
-        NM = 1
-        vel_var = (1,)
-        eq = BurgersEquation(Val(D), T, rep)
-        
-    elseif eq_name == "euler"
-        NM = D + 2
-        vel_var = Tuple(2:D+1)
-        eq = EulerEquation(Val(D), T, T(GAS_GAMMA_EULER), rep)        
-        
     else
         error("PDE '$eq_name' is not implemented.")
     end
@@ -298,11 +265,10 @@ function run_simulation(params::ParamDict)::Union{AbstractSimData, Nothing}
 
         # 5. Construct the Particle Grid
         pg = ParticleGrid(
-            geom, nominal_dx, interp_range_factor;
+            geom, nominal_dx, interp_range_factor, M_comps;
             is_periodic = is_per_input,
             randomness = randomness,
             rng = rng,
-            M = M_comps,
             weight_func = weight_func,
             mover = grid_mover
         )
@@ -325,12 +291,11 @@ function run_simulation(params::ParamDict)::Union{AbstractSimData, Nothing}
             return _execute_explicit_sim!(method, eq_macro, pg, dt, is_cfl, params, D, params[:snapshots], get(params, :remove_ghosts, true), M_comps, geom_mins, geom_maxs, T)
             
         else
-            implicit_solver = LinearizedRelaxationImplicitSolver()
-            method = if ts_name == "ARS233"; GeneralIMEXTimeStepper(eq_macro, MainGrad, implicit_solver, source_term, IMEX_ARS233_Tableau(T))
-                     elseif ts_name == "PRSSP3"; GeneralIMEXTimeStepper(eq_macro, MainGrad, implicit_solver, source_term, IMEX_PRSSP3_Tableau(T))
-                     elseif ts_name == "ARS222"; GeneralIMEXTimeStepper(eq_macro, MainGrad, implicit_solver, source_term, IMEX_ARS222_Tableau(T))
-                     elseif ts_name == "SSP332"; GeneralIMEXTimeStepper(eq_macro, MainGrad, implicit_solver, source_term, IMEX_SSP2332_Tableau(T))
-                     elseif ts_name == "IMEXEuler"; GeneralIMEXTimeStepper(eq_macro, MainGrad, implicit_solver, source_term, IMEX_Euler_Tableau(T))
+            method = if ts_name == "ARS233"; GeneralIMEXTimeStepper(eq_kin, MainGrad, (source_term,), IMEX_ARS233_Tableau(T))
+                     elseif ts_name == "PRSSP3"; GeneralIMEXTimeStepper(eq_kin, MainGrad, (source_term,), IMEX_PRSSP3_Tableau(T))
+                     elseif ts_name == "ARS222"; GeneralIMEXTimeStepper(eq_kin, MainGrad, (source_term,), IMEX_ARS222_Tableau(T))
+                     elseif ts_name == "SSP332"; GeneralIMEXTimeStepper(eq_kin, MainGrad, (source_term,), IMEX_SSP2332_Tableau(T))
+                     elseif ts_name == "IMEXEuler"; GeneralIMEXTimeStepper(eq_kin, MainGrad, (source_term,), IMEX_Euler_Tableau(T))
                      else; error("Unknown IMEX TimeStepper: '$ts_name'") end
             
             setInitialConditions!(pg, source_term, IC, eq_macro)

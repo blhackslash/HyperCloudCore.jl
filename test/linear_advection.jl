@@ -45,3 +45,13 @@ end
         i == j ? eq.vel[d][i] : zero(T)
     end, Val(M * M)))
 end
+
+"""
+    kinetic_wave_speed(eq::HyperbolicPDE, d::Int, k::Int)
+    
+Returns the advection speed of the `k`-th kinetic component in the `d`-th spatial dimension.
+Must be implemented by any PDE used as a kinetic relaxation system.
+"""
+function kinetic_wave_speed(eq::HyperbolicPDE, d::Int, k::Int)
+    error("`kinetic_wave_speed` not implemented for $(typeof(eq)).")
+end

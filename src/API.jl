@@ -1,5 +1,7 @@
 
-export flux, max_eigenvalue, prim2cons, cons2prim, velocity, update_size!, update_content!, _extract_order, solve
+export flux, max_eigenvalue, prim2cons, cons2prim, velocity, update_size!, update_content!, _extract_order
+
+export pre_solve_update!, evaluate_source, evaluate_sources, implicit_solve
 
 # =========================================================================
 # PDE API -> Must be set for every PDE
@@ -76,7 +78,7 @@ These functions safely default to an identity mapping (`U -> U`) if not explicit
 """
     velocity(eq::HyperbolicPDE{D, M, T, R}, U::State{M, T}, d::Int)
 
-Evaluates the exact advective velocity matrix (the flux Jacobian) for a specified spatial dimension. This is strictly required for upwind flux evaluations or dynamic grid moving operations.
+Evaluates the exact advective velocity matrix (the flux Jacobian) for a specified spatial dimension. This is strictly required for upwind flux evaluations.
 
 # Arguments
 - `eq`: The physical equation system.
@@ -92,73 +94,83 @@ For a diagonal linear advection system, this method dynamically assembles an `M 
 @inline velocity(eq::HyperbolicPDE, u::State, d::Int) = error("velocity not implemented for $(typeof(eq))")
 
 # =========================================================================
-# INTERPOLATOR API -> Must be set for every DivergenceInterpolator
+# EXPLICIT SOURCE TERM API
 # =========================================================================
-"""
-    update_size!(div::DivergenceInterpolator, N_particles::Int)
-
-Dynamically resizes internal evaluation buffers inside a divergence interpolator before a time step begins. 
-
-# Arguments
-- `div`: The selected spatial interpolator (e.g., MUSCL, WENO, Central).
-- `N_particles::Int`: The current total number of active particles in the simulation domain.
-
-# Returns
-- Must return `nothing` or act as a zero-cost no-op for stateless interpolators.
-"""
-update_size!(div::DivergenceInterpolator, N_particles::Int) =  error("Size update of the buffers has to be set! Set no-op for stateless interpolators!")
 
 """
-    update_content!(div::DivergenceInterpolator, nb_slice::UnitRange{Int}, pg::ParticleGrid, ib::InteractionBuffer)
+    evaluate_source(st::AbstractExplicitSourceTerm, U, p_idx::Int, pg::ParticleGrid, t::Real)
 
-Executes any pre-calculation passes required by specific interpolators before the primary flux loop executes.
-
-# Arguments
-- `div`: The divergence interpolator.
-- `nb_slice`: A `UnitRange` pointing to the target particle's neighbors.
-- `pg`: The active `ParticleGrid`.
-- `ib`: The `InteractionBuffer` holding the locally extracted neighbor states.
-
-# Returns
-- Acts as a no-op for stateless interpolators. For stateful interpolators like MUSCL, this computes the raw gradients and applies slope limiters prior to the interface reconstruction.
+Evaluates explicit volumetric source terms. Returns a State vector.
 """
-update_content!(div::DivergenceInterpolator, nb_slice, pg, ib) = error("Content update of the buffers has to be set! Set no-op for stateless interpolators! ")
+@inline evaluate_source(::AbstractExplicitSourceTerm, U, p_idx, pg, t) = error("`evaluate_source` not implemented!")
+@inline evaluate_source(::NoExplicitSource, U, p_idx, pg, t) = zero(U)
+
+# =========================================================================
+# IMPLICIT SOURCE TERM API
+# =========================================================================
 
 """
-    _extract_order(div::DivergenceInterpolator)
+    pre_solve_update!(st::AbstractImplicitSourceTerm, Y_stage, pg::ParticleGrid, t::Real)
 
-Queries the underlying baseline polynomial or numerical order of the configured spatial scheme.
-
-# Returns
-- An `Int` representing the numerical order of the solver (e.g., 2 for a standard second-order MUSCL). This returned integer is critically required by the dynamic geometric CFL calculator to properly scale the stable time step.
+Called once per RK/IMEX stage before the implicit solve. Useful for updating global potentials.
 """
-@inline _extract_order(div::DivergenceInterpolator) = error("Order of the method has to be defined for CFL calculation!")
-
-export pre_solve_update!, evaluate_source, implicit_solve
-
-# API 1: Called once per stage before the implicit solve (e.g., to update non-local potentials)
-pre_solve_update!(st::AbstractSourceTerm, Y_stage, pg, t::Real) = nothing
-
-# API 2: Evaluates the source term vector S(U)
-function evaluate_source(st::AbstractSourceTerm, U, p_idx::Int, pg, t::Real)
-    error("`evaluate_source` not implemented for $(typeof(st))")
-end
-
-# API 3: Executes the implicit solve: U - dt * a_ii * S(U) = U_in
-function implicit_solve(solver::AbstractImplicitSolver, U_in, dt_coeff::Real, st::AbstractSourceTerm, p_idx::Int, pg, t::Real)
-    error("`implicit_solve` not implemented for $(typeof(solver))")
-end
-
-export kinetic_wave_speed
+pre_solve_update!(::AbstractImplicitSourceTerm, Y_stage, pg, t::Real) = nothing
 
 """
-    kinetic_wave_speed(eq::HyperbolicPDE, d::Int, k::Int)
+    evaluate_source(st::AbstractImplicitSourceTerm, U, p_idx::Int, pg::ParticleGrid, t::Real)
+
+Evaluates the implicit source term for explicit assembly in the IMEX tableau (K_I).
+"""
+@inline evaluate_source(::AbstractImplicitSourceTerm, U, p_idx, pg, t) = error("`evaluate_source` not implemented!")
+@inline evaluate_source(::NoImplicitSource, U, p_idx, pg, t) = zero(U)
+
+"""
+    implicit_solve(st::AbstractImplicitSourceTerm, U_in, dt_coeff::Real, p_idx::Int, pg::ParticleGrid, t::Real)
+
+Executes the implicit solve: U_out - dt_coeff * S(U_out) = U_in.
+"""
+@inline implicit_solve(::AbstractImplicitSourceTerm, U_in, dt_coeff::Real, p_idx::Int, pg, t::Real) = error("`implicit_solve` not implemented!")
+@inline implicit_solve(::NoImplicitSource, U_in, dt_coeff::Real, p_idx::Int, pg, t::Real) = U_in
+
+# =========================================================================
+# ZERO-COST TUPLE UNROLLERS (For stacking multiple source terms)
+# =========================================================================
+
+# Automatically sums the evaluated states of all source terms in a tuple
+@inline @generated function evaluate_sources(sts::Tuple{Vararg{AbstractSourceTerm}}, U, p_idx::Int, pg, t::Real)
+    N = length(sts.parameters)
     
-Returns the advection speed of the `k`-th kinetic component in the `d`-th spatial dimension.
-Must be implemented by any PDE used as a kinetic relaxation system.
-"""
-function kinetic_wave_speed(eq::HyperbolicPDE, d::Int, k::Int)
-    error("`kinetic_wave_speed` not implemented for $(typeof(eq)).")
+    if N == 0
+        return :(zero(U))
+    elseif N == 1
+        return :(evaluate_source(sts[1], U, p_idx, pg, t))
+    else
+        # Iteratively build the AST: S1 + S2 + ... + SN
+        expr = :(evaluate_source(sts[1], U, p_idx, pg, t))
+        for i in 2:N
+            expr = :($expr + evaluate_source(sts[$i], U, p_idx, pg, t))
+        end
+        return expr
+    end
 end
+
+# Chains pre-solve updates sequentially
+@inline function pre_solve_updates!(sts::Tuple{Vararg{AbstractImplicitSourceTerm}}, Y_stage, pg, t::Real)
+    for st in sts
+        pre_solve_update!(st, Y_stage, pg, t)
+    end
+end
+
+# Operator Splitting: Chains implicit solves sequentially (Lie-Trotter splitting)
+@inline @generated function implicit_solve(sts::Tuple{Vararg{AbstractImplicitSourceTerm}}, U_in, dt_coeff::Real, p_idx::Int, pg, t::Real)
+    N = length(sts.parameters)
+    if N == 0; return :(U_in); end
+    quote
+        U_out = U_in
+        Base.Cartesian.@nexprs $N i -> U_out = implicit_solve(sts[i], U_out, dt_coeff, p_idx, pg, t)
+        return U_out
+    end
+end
+
 
 

@@ -1,14 +1,63 @@
 """
-    evaluate_stage_derivatives!(main_grad, eq, pg, rk, stage, dt, rho_stage)
+    update_size!(ib::InteractionBuffer, num_interactions)
+    update_size!(ts::GeneralIMEXTimeStepper, N_particles, M_neighbors)
+    update_size!(ts::GeneralRKTimeStepper, N_particles, M_neighbors)
 
-Evaluates the spatial divergence for a specific Runge-Kutta stage across the particle grid.
+Dynamically resizes internal buffers and state arrays to accommodate the current number of particles and neighbor interactions.
 
 # Details
-- Allocates or resizes interaction buffers and evaluates the `main_grad` divergence interpolator across non-boundary particles utilizing smart parallel thread execution.
-- **MUSCL Dispatch:** If a `MUSCL` divergence interpolator configured with a MOOD strategy is provided, it triggers an iterative evaluation loop. It continuously resets effective spatial orders, evaluates the divergence, and invokes the MOOD halo trigger until the scheme is fully satisfied or a maximum cap of 20 iterations is reached.
+- For `InteractionBuffer`, it ensures sufficient capacity for fields like `f`, `df`, `df_flux`, and `mask`.
+- For time steppers, it resizes the target RK/IMEX stage arrays (e.g., `Y_stages`, `K_stages`) and automatically cascades the update to the internal neighbor `InteractionBuffer`.
 """
+function update_size!(ib::InteractionBuffer, num_interactions::Int)
+    ensure_capacity!(ib.f, num_interactions)
+    ensure_capacity!(ib.df, num_interactions)
+    ensure_capacity!(ib.df_flux, num_interactions)
+    ensure_capacity!(ib.df_scratch, num_interactions)
+    ensure_capacity!(ib.mask, num_interactions)
+    return nothing
+end
+function update_size!(ts::GeneralRKTimeStepper, N_particles::Int, M_neighbors::Int)
+    ensure_capacity!(ts.rho_n, N_particles)
+    ensure_capacity!(ts.rho_stage, N_particles)
+    
+    for i in 1:length(ts.K_stages)
+        ensure_capacity!(ts.K_stages[i], N_particles)
+    end
+    
+    update_size!(ts.int_buffer, M_neighbors)
+    return nothing
+end
+
+"""
+    update_content!(ib::InteractionBuffer, nb_indices, f_i, nb_slice, fVec)
+
+Populates the interaction buffer for a given target particle.
+
+# Details
+- Retrieves neighbor states from `fVec` using the provided `nb_indices`.
+- Directly stores the neighbor state into `ib.f` and computes the raw difference (`f_j - f_i`) into `ib.df` for immediate access during flux evaluation.
+"""
+@inline function update_content!(
+    ib::InteractionBuffer{D, M, T},
+    nb_indices::AbstractVector{Int}, 
+    f_i::State{M, T}, 
+    nb_slice::UnitRange{Int}, 
+    fVec::AbstractVector{State{M, T}}
+) where {D, M, T}
+    
+    @inbounds for k in nb_slice
+        j = nb_indices[k]
+        f_j = fVec[j] 
+        
+        ib.f[k]  = f_j
+        ib.df[k] = f_j - f_i 
+    end
+    return nothing
+end
+
 @inline function evaluate_stage_derivatives!(
-    main_grad::DivergenceInterpolator, eq, pg, rk, stage, dt, rho_stage
+    main_grad::DivergenceInterpolator, eq, pg, rk, stage, dt, rho_stage, stage_time
 )
     N = pg.meta.N
     nb_slices = pg.neighbor.ranges
@@ -36,16 +85,19 @@ Evaluates the spatial divergence for a specific Runge-Kutta stage across the par
         fi = rho_stage[p_idx]
         nb_slice = nb_slices[p_idx]
         
-        K_stage[p_idx] = main_grad(eq, p_idx, fi, nb_slice, pg, int_buffer)
+        div_F = main_grad(eq, p_idx, fi, nb_slice, pg, int_buffer)
+        S_expl = evaluate_sources(rk.explicit_sources, fi, p_idx, pg, stage_time)
+        
+        # RK accumulation uses subtraction, so K = div_F - S_expl
+        K_stage[p_idx] = div_F - S_expl
     end
 end
 
 @inline function evaluate_stage_derivatives!(
     main_grad::MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER, MOOD{S, C}}, 
-    eq, pg, rk, stage, dt, rho_stage
+    eq, pg, rk, stage, dt, rho_stage, stage_time
 ) where {D, M, T, B_LEN, MAX_ORDER, DIV_ORDER, S <: MOODStrategy, C <: RealMOOD}
     
-    mood_fun = main_grad.mood
     N = pg.meta.N
     nb_slices = pg.neighbor.ranges
     nb_indices = pg.neighbor.indices
@@ -57,12 +109,9 @@ end
     needs_recalc = pg.shared.bit_buffer
 
     update_size!(main_grad, N)
-
-    if stage == 1
-        fill!(orders, MAX_ORDER)
-    end
-
+    if stage == 1; fill!(orders, MAX_ORDER); end
     fill!(needs_recalc, true)
+    
     use_threads = _use_threads()
     iteration = 0
     
@@ -92,31 +141,20 @@ end
             fi = rho_stage[p_idx]
             nb_slice = nb_slices[p_idx]
             
-            K_stage[p_idx] = main_grad(eq, p_idx, fi, nb_slice, pg, int_buffer)
+            div_F = main_grad(eq, p_idx, fi, nb_slice, pg, int_buffer)
+            S_expl = evaluate_sources(rk.explicit_sources, fi, p_idx, pg, stage_time)
+            
+            K_stage[p_idx] = div_F - S_expl
         end
 
         needs_another_pass = evaluate_mood_and_halo!(main_grad, pg, rk, stage, dt, rho_stage)
-        
-        if !needs_another_pass || iteration >= 20
-            break
-        end
+        if !needs_another_pass || iteration >= 20; break; end
     end
 end
 
-"""
-    (rk::GeneralRKTimeStepper)(eq::HyperbolicPDE, pg::ParticleGrid, time::Real, dt::Real, source_term=NoSourceTerm())
-
-Executes a complete explicit Runge-Kutta time step, advancing the particle states from `time` to `time + dt`.
-
-# Details
-- Resolves intermediate physical time steps for each stage and applies coordinate displacement via `pg.mover` if the temporal advance is greater than zero.
-- Updates local states iteratively applying explicit RK weights (`A` and `b`), evaluating the stage derivatives, and strictly enforcing boundary conditions at each sub-stage.
-- Repopulates the neighbor lists dynamically via `pg.neighbor(pg)` if a final temporal displacement shifts the mesh configuration before executing the final state summation.
-"""
 function (rk::GeneralRKTimeStepper{D, M, T})(
-    eq::HyperbolicPDE{D, M, T, R}, pg::ParticleGrid, time::Real, dt::Real, 
-    source_term::AbstractSourceTerm = NoSourceTerm()
-) where {D, M, T, R}
+    eq::HyperbolicPDE, pg::ParticleGrid, time::Real, dt::Real
+) where {D, M, T}
     
     N = pg.meta.N
     M_neighbors = length(pg.neighbor.indices)
@@ -138,8 +176,8 @@ function (rk::GeneralRKTimeStepper{D, M, T})(
     rho_n[1:N] .= view(rhos, 1:N)
     
     for stage in 1:s
-        delta_t = stage == 1 ? c[stage] * dt : (c[stage] - c[stage-1]) * dt
-
+        stage_time = time + c[stage] * dt
+        
         if stage == 1
             rho_stage[1:N] .= view(rho_n, 1:N)
         else
@@ -154,11 +192,11 @@ function (rk::GeneralRKTimeStepper{D, M, T})(
                 end
                 rho_stage[p_idx] = u_stage
             end
-            stage_time = time + c[stage] * dt
             apply_boundary_conditions!(pg, rho_stage, rk, eq, stage_time)
         end
         
-        evaluate_stage_derivatives!(main_grad, eq, pg, rk, stage, dt, rho_stage)
+        # Pass stage_time to cleanly evaluate sources
+        evaluate_stage_derivatives!(main_grad, eq, pg, rk, stage, dt, rho_stage, stage_time)
     end
 
     @batch for p_idx in 1:N

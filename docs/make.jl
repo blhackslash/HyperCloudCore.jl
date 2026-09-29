@@ -1,15 +1,15 @@
 # docs/make.jl
 using Documenter
-using HyperCloud
+using HyperCloudCore
 
 makedocs(
-    sitename = "HyperCloud.jl",
-    modules = [HyperCloud],
+    sitename = "HyperCloudCoreCore.jl",
+    modules = [HyperCloudCore],
     checkdocs = :none,
     remotes = nothing,  
     format = Documenter.HTML(
         prettyurls = get(ENV, "CI", "false") == "true",
-        canonical = "https://blhackslash.github.io/HyperCloud.jl/",
+        canonical = "https://blhackslash.github.io/HyperCloudCore.jl/",
         assets = String[],
     ),
     pages = [
@@ -33,7 +33,7 @@ makedocs(
 )
 
 deploydocs(
-    repo = "github.com/blhackslash/HyperCloud.jl.git",
-    devbranch = "main",
+    repo = "github.com/blhackslash/HyperCloudCore.jl.git",
+    devbranch = "Restructuring",
     push_preview = true,
 )

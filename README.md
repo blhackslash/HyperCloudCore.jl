@@ -1,40 +1,68 @@
-# Quick Start Guide
+# HyperCloudCore.jl
 
-This guide details the complete configuration and execution of a numerical simulation using the HyperCloud framework. As a canonical explicit example, we will discretize and solve the linear advection equation on a two-dimensional rectangular domain.
+**HyperCloudCore.jl** is a high-performance, physics-agnostic meshless solver backend designed for the numerical integration of hyperbolic Partial Differential Equations (PDEs) in Julia. 
 
-## Step-by-Step Implementation
+By operating entirely on unstructured point clouds, the framework completely bypasses traditional mesh-generation bottlenecks. It achieves this using **Generalized Finite Differences (GFD)** driven by **Moving Least Squares (MLS)** approximations to construct highly accurate spatial operators directly on arbitrary node distributions.
+
+Built with a zero-overhead, trait-based API, `HyperCloudCore` provides a strict but flexible mathematical engine. Users simply define their governing physical equations, fluxes, and source terms, while the backend autonomously handles the complex spatial reconstruction, stabilization, and time integration.
+
+### Core Capabilities
+* **Meshless Spatial Discretization:** High-order spatial gradients via MLS, supporting advanced reconstruction schemes like **MUSCL** (stabilized by Multi-Dimensional Optimal Order Detection, or **MOOD**) and meshless **WENO**.
+* **Advanced Time Integration:** A robust suite of time-steppers including explicit Strong Stability Preserving Runge-Kutta (**SSP-RK**) methods and **IMEX** (Implicit-Explicit) tableaus for resolving stiff operator interactions.
+* **Unified Source Term API:** Zero-cost tuple unrolling for stacking multiple explicit (e.g., gravity, body forces) and implicit (e.g., stiff kinetic relaxation) source terms natively into the sub-stages of the RK/IMEX tableaus.
+* **Dimensional & Physical Generality:** A completely decoupled architecture allowing it to solve anything from simple 1D scalar advection to 3D non-linear gas dynamics (Euler) and kinetic relaxation systems without altering the core solver logic.
+
+## Quick Start Guide: Step-by-Step Implementation
+This guide details the complete configuration and execution of a numerical simulation using the HyperCloudCore framework. Because HyperCloudCore is a physics-agnostic mathematical engine, we will demonstrate how to define a custom governing equation from scratch, discretize it on a two-dimensional rectangular domain, and march the solution forward in time.
 
 ### 1. Define the Governing Equation
-The mathematical system must be defined by instantiating an object that subtypes the abstract `HyperbolicPDE` type. For this tutorial, we employ the in-built `LinearAdvection` model. This structure rigorously conforms to the internal PDE API by defining explicit methods for the `flux`, `max_eigenvalue`, and `velocity` calculations. We initialize a 2D scalar system (M=1) with a constant advection velocity of $(1.0, 1.0)$ along the domain diagonal.
+The mathematical system must be defined by creating a custom structure that subtypes the abstract `HyperbolicPDE` type. To satisfy the core engine's API contract, we explicitly extend three fundamental methods: `flux`, `max_eigenvalue`, and `velocity`. In this example, we formulate a simple 2D linear advection equation for a scalar variable (M=1) with a constant advection velocity of $(1.0, 1.0)$ along the domain diagonal.
 
 ### 2. Formulate the Computational Domain
-We instantiate a standard rectangular geometry and map discrete boundary tags to appropriate boundary conditions.
+We instantiate a standard rectangular geometry and map discrete boundary tags to appropriate physical boundary conditions.
 
 ### 3. Initialize the Particle Grid and State
-The continuous geometry is subsequently discretized into a meshfree point cloud based on a nominal spatial resolution.
+The continuous geometry is seamlessly discretized into a meshfree point cloud based on a nominal spatial resolution, entirely eliminating the need for unstructured mesh generation.
 
 ### 4. Configure Spatial and Temporal Discretizations
-We define a spatial divergence operator and pass it to an explicit Runge-Kutta time integrator to march the solution forward in time.
+We define a spatial divergence interpolator and pass it to an explicit Runge-Kutta time integrator to advance the system.
+
+### 5. Create Time Loop
+We create a simple time loop to integrate our linear advection equation up to time $t_{max}=.5$ using the functor of our Runge-Kutta time integrator.
+
+### 6. Visualize Results
+Finally, we plot the integrated results compared to the initial condition as a simple scatter.
 
 ---
 
 ### Complete Example Code
 
 ```julia
-using HyperCloud
+using HyperCloudCore
+using StaticArrays
+using Plots
 
 # =========================================================================
-# 1. DEFINE THE PHYSICS
+# 1. DEFINE THE PHYSICS (CUSTOM PDE)
 # =========================================================================
-# Configure the LinearAdvection PDE with velocity v_x = 1.0, v_y = 1.0[span_4](start_span)[span_4](end_span).
-# The input is a Tuple containing the state vectors for each dimension[span_5](start_span)[span_5](end_span).
-velocities = ((1.0,), (1.0,)) 
-eq = LinearAdvection(velocities) 
+struct SimpleAdvection{D, M, T} <: HyperbolicPDE{D, M, T, Conservative}
+    vel::SVector{D, T}
+end
+
+@inline HyperCloudCore.flux(eq::SimpleAdvection{D, M, T}, U::State{M, T}) where {D, M, T} = 
+    Flux{D, M, T}(ntuple(d -> eq.vel[d] * U, Val(D)))
+
+@inline HyperCloudCore.max_eigenvalue(eq::SimpleAdvection, U::State, d::Int) = 
+    abs(eq.vel[d])
+
+@inline HyperCloudCore.velocity(eq::SimpleAdvection{D, M, T}, U::State{M, T}, d::Int) where {D, M, T} = 
+    SMatrix{M, M, T}(eq.vel[d])
+
+eq = SimpleAdvection{2, 1, Float64}(SVector(1.0, 1.0))
 
 # =========================================================================
 # 2. DEFINE THE GEOMETRY & BOUNDARIES
 # =========================================================================
-# Map integer geometric boundary tags to explicit boundary condition functors.
 bc_map = Dict{Int, AbstractBoundaryCondition}(
     1 => FixedDirichlet(), # Left boundary
     2 => OutflowBC(),      # Right boundary
@@ -42,31 +70,33 @@ bc_map = Dict{Int, AbstractBoundaryCondition}(
     4 => OutflowBC()       # Top boundary
 )
 
-# Instantiate a 2D unit square domain [0,1] x [0,1]
 domain = get_rectangular_domain(Float64, (0.0, 0.0), (1.0, 1.0); bc_map=bc_map)
 
 # =========================================================================
-# 3. GENERATE THE PARTICLE GRID
+# 3. GENERATE THE PARTICLE GRID & INITIALIZE
 # =========================================================================
-# Discretize the domain with a nominal spacing and interaction radius multiplier
 nominal_dx = (0.025, 0.025)
 interp_range_factor = 2.5
-pg = ParticleGrid(domain, nominal_dx, interp_range_factor; M=1)
+pg = ParticleGrid(domain, nominal_dx, interp_range_factor, 1)
 
-# Initialize the state vector (M=1) with a Gaussian pulse centered at (0.25, 0.25)
+positions = HyperCloudCore.get_positions(pg)
+x_coords = [pos[1] for pos in positions]
+y_coords = [pos[2] for pos in positions]
+
+# Initialize with Gaussian pulse centered at (0.25, 0.25)
 for i in 1:pg.meta.N
-    pos = get_positions(pg)[i]
+    pos = positions[i]
     r2 = (pos[1] - 0.25)^2 + (pos[2] - 0.25)^2
     pg.rhos[i] = State{1, Float64}((exp(-100.0 * r2),))
 end
 
-# =========================================================================
-# 4. CONFIGURE NUMERICS (SPATIAL & TEMPORAL)
-# =========================================================================
-# Initialize a 1st-order upwind spatial interpolator 
-main_grad = UpwindDivergence(Float64, 2, 1, 1; flux=UpwindFlux(), algType="Classic")
+# Cache initial state for plotting
+rho_initial = [pg.rhos[i][1] for i in 1:pg.meta.N]
 
-# Initialize a 3rd-order Strong Stability Preserving (SSP) Runge-Kutta time stepper
+# =========================================================================
+# 4. CONFIGURE NUMERICS
+# =========================================================================
+main_grad = UpwindDivergence(Float64, 2, 1, 1; flux=UpwindFlux(), algType="Classic")
 tableau = RK3_SSP_Tableau(Float64)
 time_stepper = GeneralRKTimeStepper(eq, main_grad, tableau)
 
@@ -78,17 +108,50 @@ t_end = 0.5
 
 println("Starting simulation...")
 while t < t_end
-    # Extract the maximum stable step size based on the exact geometric CFL
-    dt = getTimeStep(pg, eq, main_grad)
-    
-    # Bound the final step size to precisely hit t_end
+    dt = get_time_step(pg, eq, main_grad)
     dt = min(dt, t_end - t)
     
-    # Advance the solution via the time stepper functor
     time_stepper(eq, pg, t, dt)
-    
     global t += dt
-    println("Integrated to t = $(round(t, digits=4)) \vert{} dt =$(round(dt, digits=6))")
 end
 println("Simulation complete.")
+
+# Extract final state
+rho_final = [pg.rhos[i][1] for i in 1:pg.meta.N]
+
+# =========================================================================
+# 6. PLOT INITIAL VS FINAL STATE
+# =========================================================================
+# Plot t = 0.0
+p1 = scatter(
+    x_coords, y_coords,
+    zcolor=rho_initial,
+    markersize=3.5,
+    markerstrokewidth=0,
+    aspect_ratio=:equal,
+    xlims=(0, 1), ylims=(0, 1),
+    title="Initial Condition (t = 0.0)",
+    xlabel="x", ylabel="y",
+    colorbar=true,
+    color=:viridis
+)
+
+# Plot t = 0.5
+p2 = scatter(
+    x_coords, y_coords,
+    zcolor=rho_final,
+    markersize=3.5,
+    markerstrokewidth=0,
+    aspect_ratio=:equal,
+    xlims=(0, 1), ylims=(0, 1),
+    title="Solution at t = $(t_end)",
+    xlabel="x", ylabel="y",
+    colorbar=true,
+    color=:viridis
+)
+
+# Combine into a side-by-side comparison and save
+fig = plot(p1, p2, layout=(1, 2), size=(900, 400))
+savefig(fig, "advection_comparison.png")
+display(fig)
 ```

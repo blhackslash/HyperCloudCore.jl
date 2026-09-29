@@ -119,6 +119,8 @@ include("NeighborLogic.jl")
 include("BoundaryConditions.jl")
 include("Reordering.jl")
 
+export get_positions, get_weights, get_distances, get_neighbors
+
 # --- 1. Unified Position Accesso rs (No more reinterpret hacks!) ---
 @inline get_positions(pg::ParticleGrid) = pg.core.positions
 @inline get_positions(sb::SharedBuffers) = sb.pos_buffer
@@ -150,11 +152,11 @@ end
 function ParticleGrid(
     geom::GeometricDomain{GEO, D, T, FI, FT},
     nominal_dx::NTuple{D, Real},
-    interp_range_factor::Real;
+    interp_range_factor::Real,
+    M::Int;
     is_periodic::Union{Bool, NTuple{D, Bool}} = false,
     randomness::Tuple = ntuple(i -> zero(T), D),
     rng = Random.default_rng(),
-    M::Int = 1,
     weight_func = ExponentialWeightFunction(one(T), one(T)), 
     mover = NoGridMover()
 ) where {D, T, FI, FT, GEO}

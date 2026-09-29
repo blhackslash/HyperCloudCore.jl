@@ -1,25 +1,21 @@
-name = "HyperCloud"
+name = "HyperCloudCore"
 uuid = "61b85536-db47-4754-9d50-4ccb1001a5ed"
 version = "0.1.0"
-authors = ["Pascal Jung <julia@blackslash.win>"]
+authors = ["Pascal Jung <dev@blackslash.win>"]
 
 [deps]
-CPUSummary = "2a0fbf3d-bb9c-48f3-b0a9-814d99fd7ab9"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 Logging = "56ddb016-857b-54e1-b83d-db4d58db5568"
 Polyester = "f517fe37-dbe3-4b94-8317-1923a5111588"
 Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
-ProgressMeter = "92933f4c-e287-5a05-a399-4b506db050ca"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 
 [compat]
-CPUSummary = "0.2, 1"
 LinearAlgebra = "1"
 Logging = "1"
 Polyester = "0.7, 1"
 Printf = "1"
-ProgressMeter = "1"
 Random = "1"
 StaticArrays = "1"
 julia = "1"

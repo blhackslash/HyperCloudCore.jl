@@ -40,7 +40,7 @@ end
 # LOCAL RELAXATION SOURCE TERM
 # =========================================================================
 
-struct RelaxationSourceTerm{D, NM, NK, T, MEQ <: HyperbolicPDE} <: KineticSourceTerm
+struct RelaxationSourceTerm{D, NM, NK, T, MEQ <: HyperbolicPDE} <: AbstractImplicitSourceTerm
     km::Kin2Macro{NM, NK}
     macro_eq::MEQ
     inv_epsilon::T
@@ -169,6 +169,32 @@ end
         Mk_val = st.coefficients[m_idx] * (u_macro[m_idx] + T_dot_inv_lambda)
         
         (Mk_val - V_kin[k]) * st.inv_epsilon
+    end)
+end
+
+@inline function implicit_solve(
+    rs::RelaxationSourceTerm{D, NM, NK, T}, 
+    Y_in::State{NK, T},                
+    dt_coeff::Real,              
+    p_idx::Int,
+    pg::ParticleGrid,
+    t::Real      
+) where {D, NM, NK, T}
+    
+    dt_over_eps = T(dt_coeff) * rs.inv_epsilon
+    denom = one(T) / (one(T) + dt_over_eps)
+
+    u_macro = rs.km(Y_in)
+    flux_vals = flux(rs.macro_eq, u_macro)
+
+    return State{NK, T}(ntuple(Val(NK)) do k
+        v_k_base = Y_in[k]
+        m_idx = rs.km(k)
+        
+        f_dot_inv_lambda = flux_dot(flux_vals, m_idx, rs.scaled_inv_speeds[k])
+        Mk_val = rs.coefficients[m_idx] * (u_macro[m_idx] + f_dot_inv_lambda)
+        
+        (v_k_base + dt_over_eps * Mk_val) * denom
     end)
 end
 
