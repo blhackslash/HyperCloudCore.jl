@@ -49,7 +49,7 @@ jobs:
         with:
           file: lcov.info
           token: ${{ secrets.CODECOV_TOKEN }}
-          slug: blhackslash/Meshfree4HypEq.jl
+          slug: blhackslash/HyperCloudCore.jl
 
   docs:
     name: Documentation
