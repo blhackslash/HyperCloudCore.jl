@@ -88,6 +88,76 @@ PDEStudioCore.set_target_module!(@__MODULE__)
     # Run the complete pipeline (Generation + Stats)
     run_all_simulations(config; force_overwrite=true, calculate_stats=true)
 
+    @testset "Dynamic Grid Resizing (ensure_capacity!)" begin
+        # 1. Initialize a baseline 1D grid
+        geom = get_rectangular_domain(Float64, (0.0,), (1.0,))
+        pg = ParticleGrid(
+            geom, (0.1,), 2.5, 1;
+            is_periodic = true
+        )
+        
+        N_initial = length(pg.rhos)
+        @test N_initial > 0
+        
+        # 2. Define a required capacity that exceeds the current particle size
+        req_cap = N_initial + 50
+        expected_cap = ceil(Int, req_cap * 1.25)
+        
+        # 3. Trigger the global resize cascade
+        HyperCloudCore.ensure_capacity!(pg, req_cap)
+        
+        @testset "Top-Level Grid Arrays" begin
+            @test length(pg.rhos) == expected_cap
+            @test length(pg.mood_events) == expected_cap
+            @test length(pg.curvatures) == expected_cap
+        end
+        
+        @testset "ParticleGridCore Arrays" begin
+            @test length(pg.core.positions) == expected_cap
+            @test length(pg.core.is_boundary) == expected_cap
+            @test length(pg.core.volumes) == expected_cap
+            @test length(pg.core.tags) == expected_cap
+        end
+        
+        @testset "SharedBuffers Arrays" begin
+            @test length(pg.shared.rho_buffer) == expected_cap
+            @test length(pg.shared.pos_buffer) == expected_cap
+            @test length(pg.shared.float_buffer) == expected_cap
+            @test length(pg.shared.bit_buffer) == expected_cap
+            @test length(pg.shared.int_buffer) == expected_cap
+        end
+        
+        @testset "ReorderData Arrays" begin
+            @test length(pg.reorder.permutation) == expected_cap
+            @test length(pg.reorder.inv_permutation) == expected_cap
+            @test length(pg.reorder.new_permutation_buffer) == expected_cap
+            @test length(pg.reorder.seen_buffer) == expected_cap
+        end
+        
+        @testset "GlobalBins Arrays" begin
+            @test length(pg.bins.next) == expected_cap
+        end
+        
+        @testset "NeighborData Arrays" begin
+            # Neighbor arrays scale by pairs, so we must target them specifically
+            N_nb_initial = length(pg.neighbor.indices)
+            req_nb_cap = N_nb_initial + 100
+            expected_nb_cap = ceil(Int, req_nb_cap * 1.25)
+            
+            # Manually trigger the specific neighbor capacity manager
+            HyperCloudCore.ensure_capacity!(pg.neighbor, req_nb_cap)
+            
+            @test length(pg.neighbor.indices) == expected_nb_cap
+            @test length(pg.neighbor.weights) == expected_nb_cap
+            @test length(pg.neighbor.distances) == expected_nb_cap
+        end
+        
+        @testset "Safe No-Op on Shrink" begin
+            # Requesting a capacity lower than the current length should do nothing
+            HyperCloudCore.ensure_capacity!(pg, req_cap - 10)
+            @test length(pg.rhos) == expected_cap 
+        end
+    end
     # Verify each scheme independently
     for scheme in [:upwind, :muscl, :weno, :central]
         @testset "Scheme: $scheme" begin
@@ -195,6 +265,7 @@ PDEStudioCore.set_target_module!(@__MODULE__)
             @test math_min(v1, v2) == [1.0, 4.0, 3.0]
         end
     end
+    
     @testset "MUSCL Higher-Order Convergence (Orders 2-5)" begin
         # 1. Setup a clean, high-precision environment for strict convergence testing
         shared_muscl = copy(shared)

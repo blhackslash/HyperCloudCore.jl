@@ -202,26 +202,22 @@ function ParticleGrid(
     if D > 1; pg.neighbor(pg); end 
     pg.reorder(pg)
     pg.neighbor(pg)
+    determine_volumes!(pg)
     
     return pg
 end
 
-# Extractor simply returns the cached UnitRange
-@inline function getNBSlice(pg::ParticleGrid, p_idx::Int)
-    return pg.neighbor.ranges[p_idx]
-end
-updateNeighbors!(pg::ParticleGrid) = pg.neighbor(pg)
+determine_volumes!(pg) = return
 
-determineVolumes!(pg) = return
-
-function determineVolumes!(pg::ParticleGrid{1, M, T, WF, GM, BC}) where {M, WF, GM, BC, T}
+function determine_volumes!(pg::ParticleGrid{1, M, T, WF, GM, N_OFF, Geom}) where {M, WF, GM, N_OFF, Geom, T}
     N = pg.meta.N
     if N == 0; return; end
     
     positions = get_positions(pg)
     volumes = pg.core.volumes
     
-    if BC == pg.domain.is_periodic[1]
+    # Directly evaluate the numerical wrapper's boolean flag
+    if pg.domain.is_periodic[1]
         L = pg.domain.L_wrap
         L_inv = pg.domain.invL_wrap
         for i in 1:N
