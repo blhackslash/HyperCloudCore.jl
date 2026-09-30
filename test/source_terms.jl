@@ -1,6 +1,3 @@
-export NoSourceTerm, KineticSourceTerm, Kin2Macro
-export RelaxationSourceTerm, NonLocalRelaxationSourceTerm
-
 struct NoSourceTerm <: AbstractSourceTerm end
 abstract type KineticSourceTerm <: AbstractSourceTerm end
 

@@ -154,7 +154,6 @@ function ParticleGrid(
     nominal_dx::NTuple{D, Real},
     interp_range_factor::Real,
     M::Int;
-    is_periodic::Union{Bool, NTuple{D, Bool}} = false,
     randomness::Tuple = ntuple(i -> zero(T), D),
     rng = Random.default_rng(),
     weight_func = ExponentialWeightFunction(one(T), one(T)), 
@@ -162,8 +161,7 @@ function ParticleGrid(
 ) where {D, T, FI, FT, GEO}
     
     comp_domain = ComputationalDomain(
-        geom, nominal_dx, interp_range_factor; 
-        is_periodic_input = is_periodic
+        geom, nominal_dx, interp_range_factor
     )
     
     positions, is_boundary, tags, volumes, dxs_f = get_points(

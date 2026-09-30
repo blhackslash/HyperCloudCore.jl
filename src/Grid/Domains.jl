@@ -19,6 +19,7 @@ struct GeometricDomain{GEO, D, T, F_Interior, F_Tag}
     label::GEO
     mins::Space{D, T}
     maxs::Space{D, T}
+    is_periodic::SVector{D, Bool}
     is_interior::F_Interior
     get_tag::F_Tag
     bc_map::Dict{Int, AbstractBoundaryCondition}
@@ -35,11 +36,14 @@ function get_rectangular_domain(
     ::Type{T}, 
     mins::NTuple{D, Real}, 
     maxs::NTuple{D, Real};
-    bc_map::Dict{Int, AbstractBoundaryCondition} = Dict{Int, AbstractBoundaryCondition}()
+    bc_map::Dict{Int, AbstractBoundaryCondition} = Dict{Int, AbstractBoundaryCondition}(),
+    is_periodic_input::Union{Bool, NTuple{D, Bool}} = false
 ) where {D, T}
     
     mins_f = Space{D, T}(mins...)
     maxs_f = Space{D, T}(maxs...)
+
+    is_per_svec = isa(is_periodic_input, Bool) ? SVector{D, Bool}(ntuple(_ -> is_periodic_input, Val(D))) : SVector{D, Bool}(is_periodic_input)
     
     is_interior_func = (pos) -> begin
         for d in 1:D
@@ -71,7 +75,7 @@ function get_rectangular_domain(
         end
     end
 
-    return GeometricDomain(Val(:rectangular),mins_f, maxs_f, is_interior_func, tag_func, bc_map)
+    return GeometricDomain(Val(:rectangular),mins_f, maxs_f, is_per_svec, is_interior_func, tag_func, bc_map)
 end
 
 """
@@ -85,8 +89,11 @@ function get_spherical_domain(
     ::Type{T}, 
     center::NTuple{D, Real}, 
     radius::Real;
-    bc_map::Dict{Int, AbstractBoundaryCondition} = Dict{Int, AbstractBoundaryCondition}()
+    bc_map::Dict{Int, AbstractBoundaryCondition} = Dict{Int, AbstractBoundaryCondition}(),
+    is_periodic_input::Union{Bool, NTuple{D, Bool}} = false
 ) where {D, T}
+
+    is_per_svec = isa(is_periodic_input, Bool) ? SVector{D, Bool}(ntuple(_ -> is_periodic_input, Val(D))) : SVector{D, Bool}(is_periodic_input)
     
     c_svec = Space{D, T}(center...)
     r_T = T(radius)
@@ -97,7 +104,7 @@ function get_spherical_domain(
     is_interior_func = (pos) -> sum(abs2, pos - c_svec) <= r_T^2
     tag_func = (pos) -> is_interior_func(pos) ? 0 : 1 
     
-    return GeometricDomain(Val(:spherical), mins_f, maxs_f, is_interior_func, tag_func, bc_map)
+    return GeometricDomain(Val(:spherical), mins_f, maxs_f, is_per_svec, is_interior_func, tag_func, bc_map)
 end
 
 # =========================================================================
@@ -125,12 +132,10 @@ A numerical wrapper surrounding the `GeometricDomain` that manages computational
 function ComputationalDomain(
     geom::GeometricDomain{GEO, D, T, FI, FT}, 
     nominal_dx::NTuple{D, Real}, 
-    interp_range_factor::Real;
-    is_periodic_input::Union{Bool, NTuple{D, Bool}} = false
+    interp_range_factor::Real
 ) where {D, T, FI, FT, GEO}
     
-    is_per_svec = isa(is_periodic_input, Bool) ? SVector{D, Bool}(ntuple(_ -> is_periodic_input, Val(D))) : SVector{D, Bool}(is_periodic_input)
-    
+    is_per_svec = geom.is_periodic
     dxs_f = Space{D, T}(nominal_dx...)
     N_ghost = any(is_per_svec) ? 0 : ceil(Int, interp_range_factor)
     
