@@ -1,5 +1,3 @@
-export solve_equation
-
 """
     saveData!(xs_storage, us_storage, ts_storage, snap_idx, pg, current_t, remove_ghosts)
 

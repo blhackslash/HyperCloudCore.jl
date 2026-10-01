@@ -24,17 +24,6 @@ If the denominator approaches zero, the speed defaults to the local advection ve
 
 ## 2. Implementation Details
 
-The implementation handles multi-dimensional systems seamlessly by evaluating fluxes along each spatial dimension independently using static tuples.
-
-### Wave Speeds (`max_eigenvalue`)
-The wave speeds ($|\lambda|$) are resolved dynamically using multiple dispatch depending on the physical equation:
-
-*   **Linear Advection:** Returns the maximum absolute defined velocity.
-*   **Euler Equations:** Calculates the speed of sound $c = \sqrt{\gamma p / \rho}$. It safely floors the density and pressure to $10^{-9}$ to prevent crashes in near-vacuum or negative density regions. The final speed is $|v_d| + c$, supporting both conservative ($\rho, m, E$) and primitive/Lagrangian ($\rho, u, p$) variable states.
-*   **Scalar Fallback:** For generic $M=1$ equations, it defaults to the absolute value of the physical velocity.
-*   **Interface Aggregator:** `max_eigenvalues` evaluates the left and right states and returns $\max(\lambda_L, \lambda_R)$ for each spatial dimension $d$.
-
-### Flux Functors
 *   **`RusanovFlux`:** Computes the numerical flux for every dimension $d$ by applying the maximum localized wave speed $s^d$ as the dissipation coefficient.
 *   **`UpwindFlux`:** 
     *   **Scalar Execution:** Computes the Rankine-Hugoniot wave speed $s$. To avoid division by zero, if the state jump $\Delta u < 10^{-14}$, it falls back to the absolute advection velocity.

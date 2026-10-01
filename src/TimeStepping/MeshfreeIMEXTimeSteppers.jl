@@ -1,3 +1,22 @@
+# Auto-Sorting Convenience Constructor for IMEX
+function GeneralIMEXTimeStepper(
+    pde::HyperbolicPDE{D, M, T}, div_interp::G, 
+    all_sources::Tuple{Vararg{AbstractSourceTerm}}, 
+    tableau::IMEXButcherTableau{T}
+) where {D, M, T, G}
+    explicit_sts = filter(st -> st isa AbstractExplicitSourceTerm, all_sources)
+    implicit_sts = filter(st -> st isa AbstractImplicitSourceTerm, all_sources)
+    
+    return GeneralIMEXTimeStepper(pde, div_interp, explicit_sts, implicit_sts, tableau)
+end
+
+# Fallback for no source terms (Empty Tuples)
+function GeneralIMEXTimeStepper(
+    pde::HyperbolicPDE{D, M, T}, div_interp::G, tableau::IMEXButcherTableau{T}
+) where {D, M, T, G}
+    return GeneralIMEXTimeStepper(pde, div_interp, (), (), tableau)
+end
+
 function update_size!(ts::GeneralIMEXTimeStepper, N_particles::Int, M_neighbors::Int)
     ensure_capacity!(ts.rho_n, N_particles)
     

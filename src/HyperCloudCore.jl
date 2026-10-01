@@ -1,6 +1,6 @@
 module HyperCloudCore
 
-export run_simulation, DEBUG_TARGET_PARTICLE, DEBUG_TARGET_STEP
+export DEBUG_TARGET_PARTICLE, DEBUG_TARGET_STEP
 
 using LinearAlgebra
 using Logging

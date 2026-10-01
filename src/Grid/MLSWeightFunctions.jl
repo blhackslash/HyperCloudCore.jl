@@ -57,3 +57,6 @@ Evaluates the inverse distance weight natively, utilizing a fixed `1e-12` tolera
 @inline function (w::InverseWeightFunction{T})(dist_sq::Real) where {T}
     return one(T) / (T(dist_sq) + T(1e-12))
 end
+
+@inline get_cutoff(wf::ExponentialWeightFunction) = wf.range
+@inline get_cutoff(wf::InverseWeightFunction) = wf.range

@@ -1,5 +1,3 @@
-export LinearAdvection
-
 # Diagonal Linear Advection Implementation used by Relaxation Methods
 
 struct LinearAdvection{D, M, T, R} <: HyperbolicPDE{D, M, T, R}

@@ -108,6 +108,7 @@ struct InteractionBuffer{D, M, T}
         State{M, T}[], State{M, T}[], Flux{D, M, T}[], State{M, T}[], Bool[]
     )
 end
+
 """
     RKButcherTableau{T}
 
@@ -145,6 +146,43 @@ struct IMEXButcherTableau{T}
             @assert a_t[i,j] == zero(T) "Explicit matrix a_t must be strictly lower triangular."
         end
         new{T}(a, a_t, c, c_t, b, b_t)
+    end
+end
+
+"""
+    GeneralRKTimeStepper
+
+A standard explicit Runge-Kutta time integration orchestrator.
+
+# Details
+- Couples the physical PDE with the spatial divergence interpolator and explicit Butcher tableau.
+- Manages an explicitly-typed tuple of `AbstractExplicitSourceTerm`s.
+- Pre-allocates a primary `K_stages` buffer matrix for intermediate derivative evaluations.
+"""
+struct GeneralRKTimeStepper{D, M, T, PDE <: HyperbolicPDE, G <: DivergenceInterpolator, EST <: Tuple{Vararg{AbstractExplicitSourceTerm}}} <: TimeStepper
+    pde::PDE
+    divergence_interpolator::G
+    tableau::RKButcherTableau{T}
+    
+    explicit_sources::EST
+    
+    rho_n::Vector{State{M, T}}
+    rho_stage::Vector{State{M, T}}
+    K_stages::Vector{Vector{State{M, T}}} 
+    int_buffer::InteractionBuffer{D, M, T}
+
+    # Primary strictly-typed constructor
+    function GeneralRKTimeStepper(
+        pde::HyperbolicPDE{D, M, T}, div_interp::G, 
+        explicit_sources::EST, tableau::RKButcherTableau{T}
+    ) where {D, M, T, G, EST <: Tuple{Vararg{AbstractExplicitSourceTerm}}}
+        s = size(tableau.a, 1)
+        new{D, M, T, typeof(pde), G, EST}(
+            pde, div_interp, tableau, explicit_sources,
+            State{M, T}[], State{M, T}[], 
+            [State{M, T}[] for _ in 1:s],
+            InteractionBuffer{D, M, T}()
+        )
     end
 end
 
@@ -193,83 +231,4 @@ struct GeneralIMEXTimeStepper{D, M, T, PDE <: HyperbolicPDE, G <: DivergenceInte
             s
         )
     end
-end
-
-# Auto-Sorting Convenience Constructor for IMEX
-function GeneralIMEXTimeStepper(
-    pde::HyperbolicPDE{D, M, T}, div_interp::G, 
-    all_sources::Tuple{Vararg{AbstractSourceTerm}}, 
-    tableau::IMEXButcherTableau{T}
-) where {D, M, T, G}
-    explicit_sts = filter(st -> st isa AbstractExplicitSourceTerm, all_sources)
-    implicit_sts = filter(st -> st isa AbstractImplicitSourceTerm, all_sources)
-    
-    return GeneralIMEXTimeStepper(pde, div_interp, explicit_sts, implicit_sts, tableau)
-end
-
-# Fallback for no source terms (Empty Tuples)
-function GeneralIMEXTimeStepper(
-    pde::HyperbolicPDE{D, M, T}, div_interp::G, tableau::IMEXButcherTableau{T}
-) where {D, M, T, G}
-    return GeneralIMEXTimeStepper(pde, div_interp, (), (), tableau)
-end
-
-
-"""
-    GeneralRKTimeStepper
-
-A standard explicit Runge-Kutta time integration orchestrator.
-
-# Details
-- Couples the physical PDE with the spatial divergence interpolator and explicit Butcher tableau.
-- Manages an explicitly-typed tuple of `AbstractExplicitSourceTerm`s.
-- Pre-allocates a primary `K_stages` buffer matrix for intermediate derivative evaluations.
-"""
-struct GeneralRKTimeStepper{D, M, T, PDE <: HyperbolicPDE, G <: DivergenceInterpolator, EST <: Tuple{Vararg{AbstractExplicitSourceTerm}}} <: TimeStepper
-    pde::PDE
-    divergence_interpolator::G
-    tableau::RKButcherTableau{T}
-    
-    explicit_sources::EST
-    
-    rho_n::Vector{State{M, T}}
-    rho_stage::Vector{State{M, T}}
-    K_stages::Vector{Vector{State{M, T}}} 
-    int_buffer::InteractionBuffer{D, M, T}
-
-    # Primary strictly-typed constructor
-    function GeneralRKTimeStepper(
-        pde::HyperbolicPDE{D, M, T}, div_interp::G, 
-        explicit_sources::EST, tableau::RKButcherTableau{T}
-    ) where {D, M, T, G, EST <: Tuple{Vararg{AbstractExplicitSourceTerm}}}
-        s = size(tableau.a, 1)
-        new{D, M, T, typeof(pde), G, EST}(
-            pde, div_interp, tableau, explicit_sources,
-            State{M, T}[], State{M, T}[], 
-            [State{M, T}[] for _ in 1:s],
-            InteractionBuffer{D, M, T}()
-        )
-    end
-end
-
-# Auto-Sorting Convenience Constructor for standard RK
-function GeneralRKTimeStepper(
-    pde::HyperbolicPDE{D, M, T}, div_interp::G, 
-    all_sources::Tuple{Vararg{AbstractSourceTerm}}, 
-    tableau::RKButcherTableau{T}
-) where {D, M, T, G}
-    explicit_sts = filter(st -> st isa AbstractExplicitSourceTerm, all_sources)
-    
-    if length(explicit_sts) < length(all_sources)
-        @warn "AbstractImplicitSourceTerm detected in a standard Runge-Kutta stepper. It will be ignored! Use IMEX if stiffness is present."
-    end
-    
-    return GeneralRKTimeStepper(pde, div_interp, explicit_sts, tableau)
-end
-
-# Fallback for no source terms (Empty Tuple)
-function GeneralRKTimeStepper(
-    pde::HyperbolicPDE{D, M, T}, div_interp::G, tableau::RKButcherTableau{T}
-) where {D, M, T, G}
-    return GeneralRKTimeStepper(pde, div_interp, (), tableau)
 end

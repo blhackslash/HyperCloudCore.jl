@@ -266,7 +266,6 @@ function run_simulation(params::ParamDict)::Union{AbstractSimData, Nothing}
         # 5. Construct the Particle Grid
         pg = ParticleGrid(
             geom, nominal_dx, interp_range_factor, M_comps;
-            is_periodic = is_per_input,
             randomness = randomness,
             rng = rng,
             weight_func = weight_func,

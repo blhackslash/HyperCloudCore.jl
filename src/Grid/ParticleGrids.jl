@@ -151,20 +151,29 @@ end
 
 function ParticleGrid(
     geom::GeometricDomain{GEO, D, T, FI, FT},
-    nominal_dx::NTuple{D, Real},
-    interp_range_factor::Real,
+    nominal_dx::NTuple{D, T},
+    weight_func::MLSWeightFunction,
     M::Int;
     randomness::Tuple = ntuple(i -> zero(T), D),
     rng = Random.default_rng(),
-    weight_func = ExponentialWeightFunction(one(T), one(T)), 
     mover = NoGridMover()
 ) where {D, T, FI, FT, GEO}
     
+    # 1. Extract the cutoff radius directly from the mandatory weight function
+    R = get_cutoff(weight_func)
+    
+    # 2. Derive max_dx and the implied interpolation range factor
+    dxs_f = Space{D, T}(nominal_dx...)
+    max_dx = maximum(dxs_f)
+    interp_range_factor = R / max_dx
+    
+    # 3. Build the Computational Domain
     comp_domain = ComputationalDomain(
         geom, nominal_dx, interp_range_factor
     )
     
-    positions, is_boundary, tags, volumes, dxs_f = get_points(
+    # 4. Generate points (using the dynamically calculated factor)
+    positions, is_boundary, tags, volumes, _ = get_points(
         comp_domain, geom;
         nominal_dx = nominal_dx,
         interp_range_factor = interp_range_factor,
@@ -176,10 +185,7 @@ function ParticleGrid(
     N_interior = count(!, is_boundary)
     N_ghost = N - N_interior
     
-    max_dx = maximum(dxs_f)
-    R = T(interp_range_factor) * max_dx
-    
-    meta = GridMetadata{D, T}(N, N_interior, N_ghost, R, max_dx, Space{D, T}(dxs_f), T(interp_range_factor), 0)
+    meta = GridMetadata{D, T}(N, N_interior, N_ghost, R, max_dx, dxs_f, interp_range_factor, 0)
     core = ParticleGridCore{D, T}(positions, is_boundary, volumes, tags)
     
     shared = SharedBuffers{D, M, T}(zeros(State{M, T}, N), similar(positions), zeros(T, N), zeros(Bool, N), zeros(Int, N))

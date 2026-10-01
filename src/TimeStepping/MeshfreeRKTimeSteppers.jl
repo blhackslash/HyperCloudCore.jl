@@ -1,3 +1,25 @@
+# Auto-Sorting Convenience Constructor for standard RK
+function GeneralRKTimeStepper(
+    pde::HyperbolicPDE{D, M, T}, div_interp::G, 
+    all_sources::Tuple{Vararg{AbstractSourceTerm}}, 
+    tableau::RKButcherTableau{T}
+) where {D, M, T, G}
+    explicit_sts = filter(st -> st isa AbstractExplicitSourceTerm, all_sources)
+    
+    if length(explicit_sts) < length(all_sources)
+        @warn "AbstractImplicitSourceTerm detected in a standard Runge-Kutta stepper. It will be ignored! Use IMEX if stiffness is present."
+    end
+    
+    return GeneralRKTimeStepper(pde, div_interp, explicit_sts, tableau)
+end
+
+# Fallback for no source terms (Empty Tuple)
+function GeneralRKTimeStepper(
+    pde::HyperbolicPDE{D, M, T}, div_interp::G, tableau::RKButcherTableau{T}
+) where {D, M, T, G}
+    return GeneralRKTimeStepper(pde, div_interp, (), tableau)
+end
+
 """
     update_size!(ib::InteractionBuffer, num_interactions)
     update_size!(ts::GeneralIMEXTimeStepper, N_particles, M_neighbors)

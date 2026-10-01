@@ -5,7 +5,7 @@ using HyperCloudCore
 makedocs(
     sitename = "HyperCloudCore.jl",
     modules = [HyperCloudCore],
-    checkdocs = :none,
+    checkdocs = :exports,
     format = Documenter.HTML(
         prettyurls = get(ENV, "CI", "false") == "true",
         canonical = "https://blhackslash.github.io/HyperCloudCore.jl/",
