@@ -1,6 +1,7 @@
 
 # Conversions
-export param2uvec, param2xvec, param2svec, param2fvec, prim2cons, cons2prim
+export param2uvec, param2xvec, param2svec, param2fvec, prim2cons, cons2prim, param2vel
+export set_threads!, _use_threads
 export set_threads!, @pebug, DEBUG_TARGET_PARTICLE, set_thread_tolerance!
 
 
@@ -34,7 +35,6 @@ const _USE_THREADS      = Ref(false)
 _use_threads() = _USE_THREADS[]
 set_threads!(N::Int) = _THREAD_THRESHOLD[] < N ? _USE_THREADS[] = true : nothing
 set_threads!(B::Bool) = (_USE_THREADS[] = B)
-set_thread_tolerance!(N::Int) = _THREAD_TOLERANCE[] = N/100
 
 """
     @smart_parallel condition loop
@@ -78,11 +78,10 @@ end
     param2xvec(v)
     param2svec(v)
     param2fvec(v)
+    param2vel(v, [TOut])
 
-Type-casting utilities that convert generalized user inputs (Scalars, Tuples, or standard Arrays) into the highly optimized, strictly typed `StaticArrays` utilized internally by the solver.
-- `param2uvec` and `param2xvec`: Convert inputs into standard `SVector` formulations.
-- `param2svec`: Nests values into vectors of vectors representing multidimensional data.
-- `param2fvec`: Specifically constructs `Flux{D, M, T}` types from tuple or array representations.
+Type-casting utilities that convert generalized user inputs into the highly optimized, strictly typed `StaticArrays` utilized internally by the solver.
+- `param2vel`: Safely converts scalar tuples into `SVector{D, SMatrix{M, M, T}}` diagonal matrices required by multi-dimensional linear advection.
 """
 @inline param2svec(v::T) where {T <: Real} = SVector{1, SVector{1, T}}((SVector{1, T}(v),))
 @inline param2svec(v::NTuple{D, T}) where {D, T <: Real} = SVector{D, SVector{1, T}}(ntuple(i -> SVector{1, T}(v[i]), Val(D)))
@@ -117,6 +116,28 @@ end
 @inline param2xvec(x::Tuple) = SVector{length(x), eltype(x)}(x)
 @inline param2xvec(x::SVector) = x 
 @inline param2xvec(x::AbstractVector) = SVector{length(x), eltype(x)}(x)
+
+# --- NEW VELOCITY CASTING ---
+# 1. Single scalar: D=1, M=1
+@inline param2vel(v::Real, ::Type{TOut}=typeof(v)) where {TOut <: Real} = SVector{1, SMatrix{1, 1, TOut, 1}}((SMatrix{1, 1, TOut, 1}(TOut(v)),))
+
+# 2. Tuple of scalars: D dimensions, M=1
+@inline param2vel(v::NTuple{D, Real}, ::Type{TOut}=eltype(v)) where {D, TOut <: Real} = SVector{D, SMatrix{1, 1, TOut, 1}}(ntuple(d -> SMatrix{1, 1, TOut, 1}(TOut(v[d])), Val(D)))
+
+# 3. Tuple of Tuples (Diagonals): D dimensions, M components
+@inline function param2vel(v::NTuple{D, NTuple{M, Real}}, ::Type{TOut}=eltype(v[1])) where {D, M, TOut <: Real}
+    # Constructs the diagonal M x M SMatrix strictly allocation-free
+    SVector{D, SMatrix{M, M, TOut, M*M}}(ntuple(d -> 
+        SMatrix{M, M, TOut, M*M}(ntuple(idx -> begin
+            i = (idx - 1) % M + 1
+            j = div(idx - 1, M) + 1
+            i == j ? TOut(v[d][i]) : zero(TOut)
+        end, Val(M*M))), 
+    Val(D)))
+end
+
+# Fallback for already correct matrices
+@inline param2vel(v::Velocity{D, M, T, L}, ::Type{TOut}=T) where {D, M, T, L, TOut} = v
 
 # =========================================================================
 # MATHEMATICAL BRANCHLESS SIMD HELPERS

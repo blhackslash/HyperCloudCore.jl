@@ -1,5 +1,5 @@
 
-export flux, max_eigenvalue, prim2cons, cons2prim, velocity, update_size!, update_content!, _extract_order
+export flux, max_eigenvalue, prim2cons, cons2prim, velocity
 
 export pre_solve_update!, evaluate_source, evaluate_sources, implicit_solve
 

@@ -37,13 +37,13 @@ function get_rectangular_domain(
     mins::NTuple{D, Real}, 
     maxs::NTuple{D, Real};
     bc_map::Dict{Int, AbstractBoundaryCondition} = Dict{Int, AbstractBoundaryCondition}(),
-    is_periodic_input::Union{Bool, NTuple{D, Bool}} = false
+    is_periodic::Union{Bool, NTuple{D, Bool}} = false
 ) where {D, T}
     
     mins_f = Space{D, T}(mins...)
     maxs_f = Space{D, T}(maxs...)
 
-    is_per_svec = isa(is_periodic_input, Bool) ? SVector{D, Bool}(ntuple(_ -> is_periodic_input, Val(D))) : SVector{D, Bool}(is_periodic_input)
+    is_per_svec = isa(is_periodic, Bool) ? SVector{D, Bool}(ntuple(_ -> is_periodic, Val(D))) : SVector{D, Bool}(is_periodic)
     
     is_interior_func = (pos) -> begin
         for d in 1:D
@@ -90,10 +90,10 @@ function get_spherical_domain(
     center::NTuple{D, Real}, 
     radius::Real;
     bc_map::Dict{Int, AbstractBoundaryCondition} = Dict{Int, AbstractBoundaryCondition}(),
-    is_periodic_input::Union{Bool, NTuple{D, Bool}} = false
+    is_periodic::Union{Bool, NTuple{D, Bool}} = false
 ) where {D, T}
 
-    is_per_svec = isa(is_periodic_input, Bool) ? SVector{D, Bool}(ntuple(_ -> is_periodic_input, Val(D))) : SVector{D, Bool}(is_periodic_input)
+    is_per_svec = isa(is_periodic, Bool) ? SVector{D, Bool}(ntuple(_ -> is_periodic, Val(D))) : SVector{D, Bool}(is_periodic)
     
     c_svec = Space{D, T}(center...)
     r_T = T(radius)

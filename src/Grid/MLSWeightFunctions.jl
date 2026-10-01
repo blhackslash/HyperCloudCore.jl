@@ -24,9 +24,6 @@ function ExponentialWeightFunction(alpha::T, range::T) where {T}
     ExponentialWeightFunction{T}(alpha, range, inv_range_sq)
 end
 
-# Provide a parameterized default constructor
-InverseWeightFunction(::Type{T}) where {T} = InverseWeightFunction{T}(zero(T), zero(T))
-
 """
     fast_exp_accurate(x)
 

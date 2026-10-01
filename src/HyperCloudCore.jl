@@ -11,19 +11,24 @@ using Base.Threads
 using Polyester: @batch
 
 ## ------------------------------- SVector Types -------------------------------
+export Space, State, Flux, Velocity
+
 """
     Space{D, T}
     State{M, T}
     Flux{D, M, T}
+    Velocity{D, M, T, L}
 
 The core domain-specific `SVector` aliases used pervasively throughout the `HyperCloud` module.
 - `Space`: Represents `D`-dimensional spatial coordinates.
 - `State`: Represents `M`-dimensional equation variables for a single particle.
 - `Flux`: Represents the evaluated fluxes across all `D` dimensions for all `M` equations.
+- `Velocity`: Represents the evaluated Jacobians across all `D` dimensions for all `M` equations.
 """
 const Space{D, T} = SVector{D, T}
 const State{M, T} = SVector{M, T}
 const Flux{D, M, T} = SVector{D, State{M, T}}
+const Velocity{D, M, T, L} = SVector{D, SMatrix{M,M,T,L}}
 
 include("Utils.jl")
 include("Types.jl")
@@ -36,13 +41,5 @@ include("./Interpolation/Interpolators.jl")
 include("./TimeStepping/ButcherTableaus.jl")
 include("./TimeStepping/MeshfreeRKTimeSteppers.jl")
 include("./TimeStepping/MeshfreeIMEXTimeSteppers.jl")
-
-
-# ==============================================================================
-# --- PUBLIC API EXPORTS ---
-# ==============================================================================
-
-# 1. Geometries & State
-export Space, State, Flux
 
 end # module
