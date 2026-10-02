@@ -86,6 +86,10 @@ mutable struct ParticleGridCore{D, T}
     is_boundary::Vector{Bool}
     volumes::Vector{T}
     tags::Vector{Int}
+    
+    # Universal Adaptive Order Tracking
+    particle_orders::Vector{Int}
+    mood_triggered::Vector{Bool}
 end
 """
     ParticleGrid{D, M, T, WF, GM, N_OFF, Geom}
@@ -100,8 +104,8 @@ The primary orchestrator representing the active computational domain, tying tog
 """
 struct ParticleGrid{D, M, T, WF, GM, N_OFF, Geom}
     meta::GridMetadata{D, T}
-    geometry::Geom                             # The continuous physics definition
-    domain::ComputationalDomain{D, T}          # The numerical canvas logic
+    geometry::Geom                             
+    domain::ComputationalDomain{D, T}          
     core::ParticleGridCore{D, T}
     shared::SharedBuffers{D, M, T}
     neighbor::NeighborData{D, T, WF}
@@ -110,7 +114,6 @@ struct ParticleGrid{D, M, T, WF, GM, N_OFF, Geom}
     mover::GM
     
     rhos::Vector{State{M, T}}
-    mood_events::Vector{SVector{M, Bool}}
     curvatures::Vector{State{M, T}}
 end
 
@@ -159,20 +162,13 @@ function ParticleGrid(
     mover = NoGridMover()
 ) where {D, T, FI, FT, GEO}
     
-    # 1. Extract the cutoff radius directly from the mandatory weight function
     R = get_cutoff(weight_func)
-    
-    # 2. Derive max_dx and the implied interpolation range factor
     dxs_f = Space{D, T}(nominal_dx...)
     max_dx = maximum(dxs_f)
     interp_range_factor = R / max_dx
     
-    # 3. Build the Computational Domain
-    comp_domain = ComputationalDomain(
-        geom, nominal_dx, interp_range_factor
-    )
+    comp_domain = ComputationalDomain(geom, nominal_dx, interp_range_factor)
     
-    # 4. Generate points (using the dynamically calculated factor)
     positions, is_boundary, tags, volumes, _ = get_points(
         comp_domain, geom;
         nominal_dx = nominal_dx,
@@ -186,7 +182,12 @@ function ParticleGrid(
     N_ghost = N - N_interior
     
     meta = GridMetadata{D, T}(N, N_interior, N_ghost, R, max_dx, dxs_f, interp_range_factor, 0)
-    core = ParticleGridCore{D, T}(positions, is_boundary, volumes, tags)
+    
+    # NEW: Initialize order tracking arrays
+    core = ParticleGridCore{D, T}(
+        positions, is_boundary, volumes, tags, 
+        zeros(Int, N), zeros(Bool, N)
+    )
     
     shared = SharedBuffers{D, M, T}(zeros(State{M, T}, N), similar(positions), zeros(T, N), zeros(Bool, N), zeros(Int, N))
     reorder = ReorderData{D}(collect(1:N), collect(1:N), zeros(Int, N), zeros(Bool, N))
@@ -200,7 +201,7 @@ function ParticleGrid(
     
     pg = ParticleGrid{D, M, T, typeof(weight_func), typeof(mover), N_OFF, typeof(geom)}(
         meta, geom, comp_domain, core, shared, neighbors, reorder, bins, mover,
-        zeros(State{M, T}, N), zeros(SVector{M, Bool}, N), zeros(State{M, T}, N)
+        zeros(State{M, T}, N), zeros(State{M, T}, N)
     )
 
     if D > 1; pg.neighbor(pg); end 
@@ -386,6 +387,8 @@ end
         resize!(core.is_boundary, new_cap)
         resize!(core.volumes, new_cap)
         resize!(core.tags, new_cap)
+        resize!(core.particle_orders, new_cap)
+        resize!(core.mood_triggered, new_cap)
     end
     return nothing
 end
@@ -432,7 +435,6 @@ end
         new_cap = ceil(Int, req_capacity * 1.25)
         
         resize!(pg.rhos, new_cap)
-        resize!(pg.mood_events, new_cap)
         resize!(pg.curvatures, new_cap)
     end
     

@@ -1,97 +1,49 @@
 export UpwindDivergence
-export TiwariAlgorithm, PraveenAlgorithm, ClassicAlgorithm
-"""
-    TiwariAlgorithm
-    PraveenAlgorithm
-    ClassicAlgorithm
+export TiwariAlgorithm, PraveenAlgorithm, ClassicAlgorithm, UpwindAlgorithm
 
-Abstract types representing various upwind divergence algorithms. 
-- `TiwariAlgorithm`: Restricted to scalar PDEs.
-- `PraveenAlgorithm`: Restricted to 1st-order scalar PDEs.
-- `ClassicAlgorithm`: Natively supports both scalars and systems via state structures.
-"""
+abstract type UpwindAlgorithm end 
 abstract type TiwariAlgorithm <: UpwindAlgorithm end 
 abstract type PraveenAlgorithm <: UpwindAlgorithm end  
 abstract type NonLinearPraveenAlgorithm <: UpwindAlgorithm end  
 abstract type ClassicAlgorithm <: UpwindAlgorithm end 
-## ------------------------------- Upwind -------------------------------
-struct UpwindDivergence{D, M, T, I <: Interpolator, Algorithm <: UpwindAlgorithm} <: DivergenceInterpolator
-    order::Int
-    flux::NumericalFluxFunction
-    interpolator::I
+
+"""
+    UpwindDivergence{D, M, T, MAX_ORDER, B_LEN, INTERPS, Algorithm <: UpwindAlgorithm, NF}
+
+A divergence interpolator executing upwind numerical schemes.
+Dynamically tracks polynomial limits via `ParticleGridCore` and supports universal order degradation.
+"""
+struct UpwindDivergence{D, M, T, MAX_ORDER, B_LEN, INTERPS, Algorithm <: UpwindAlgorithm, NF} <: DivergenceInterpolator
+    interpolators::INTERPS
+    flux::NF
 end
 
 @inline update_size!(::UpwindDivergence, ::Int) = nothing
 @inline update_content!(::UpwindDivergence, args...) = nothing
-@inline _extract_order(g::UpwindDivergence) = g.order
-
-# =========================================================================
-# UPWIND GRADIENT SETUP
-# =========================================================================
-"""
-    UpwindDivergence(::Type{T}, dimension::Int, M::Int, order::Int; flux=UpwindFlux(), algType="Classic")
-
-Constructs an `UpwindDivergence` evaluator, instantiating the appropriate algorithm and interpolator types.
-
-# Arguments
-- `::Type{T}`: The numeric type used for evaluations.
-- `dimension::Int`: The spatial dimension.
-- `M::Int`: The number of equations (M=1 for scalars).
-- `order::Int`: The numerical order, which must be greater than or equal to 1.
-
-# Keyword Arguments
-- `flux::NumericalFluxFunction`: Defaults to `UpwindFlux()`.
-- `algType::String`: Specifies the algorithm type. Valid options are "Classic", "Tiwari", or "Praveen". 
-
-# Details
-- If "Tiwari" is selected, it asserts that the system is scalar (`M == 1`).
-- If "Praveen" is selected, it asserts that the system is scalar (`M == 1`) and strictly 1st order (`order == 1`).
-"""
-function UpwindDivergence(
-    ::Type{T}, dimension::Int, M::Int, order::Int; 
-    flux::NumericalFluxFunction=UpwindFlux(), algType::String="Classic"
-) where {T}
-    @assert order >= 1 "Order must be larger or equal to one."
-    
-    local alg_type
-    
-    if algType == "Classic"
-        alg_type = ClassicAlgorithm
-    elseif algType == "Tiwari"
-        alg_type = TiwariAlgorithm
-        @assert M == 1 "Tiwari Algorithm only supports Scalar Equations."
-    elseif algType == "Praveen"
-        alg_type = PraveenAlgorithm 
-        @assert order == 1 "Praveen only supports 1st order."
-        @assert M == 1 "Praveen Algorithm only supports Scalar Equations."
-    else
-        error("Algorithm type $algType not fully configured for workspace selection.")
-    end
-
-    interpolator = Interpolator{dimension, order, 1}()
-    I = typeof(interpolator)
-
-    return UpwindDivergence{dimension, M, T, I, alg_type}(order, flux, interpolator)
-end
+@inline _extract_order(::UpwindDivergence{D, M, T, MAX_ORDER}) where {D, M, T, MAX_ORDER} = MAX_ORDER
 
 #==============================================================================
   UPWIND GRADIENT FUNCTORS
 ==============================================================================#
 
-"""
-    (upwind::UpwindDivergence{D, M, T, <:Any, ClassicAlgorithm})(...)
-
-Functor execution for `ClassicAlgorithm`. This algorithm works natively across 1D, 2D, and 3D geometries, and naturally handles both scalar problems and systems of equations.
-
-# Returns
-- A `State{M, T}` representing the divergence multiplied by 2.0. It returns a zero state if the neighborhood slice is smaller than the requested interpolation order.
-"""
-function (upwind::UpwindDivergence{D, M, T, <:Any, ClassicAlgorithm})(
+# --- Classic Algorithm ---
+function (upwind::UpwindDivergence{D, M, T, MAX_ORDER, B_LEN, INTERPS, ClassicAlgorithm, NF})(
     eq::HyperbolicPDE, i::Int, f_i::State{M, T}, nb_slice::UnitRange{Int},       
     pg::ParticleGrid{D, M, T}, ib::InteractionBuffer{D, M, T}    
-) where {D, M, T}
+) where {D, M, T, MAX_ORDER, B_LEN, INTERPS, NF}
     
-    if length(nb_slice) < upwind.order
+    num_nb = length(nb_slice)
+    p_order = pg.core.particle_orders[i]
+
+    while p_order > 1
+        req_nb = typeof(basis_length(Val(D), Val(p_order))).parameters[1]
+        if num_nb >= req_nb
+            break
+        end
+        p_order -= 1
+    end
+    
+    if num_nb < typeof(basis_length(Val(D), Val(p_order))).parameters[1]
         return zero(State{M, T})
     end
 
@@ -110,37 +62,29 @@ function (upwind::UpwindDivergence{D, M, T, <:Any, ClassicAlgorithm})(
         ib.df_flux[global_idx] = F_num - F_i + nc_jump
     end
     
-    div = upwind.interpolator(
-        nb_slice, dist_all, get_weights(pg), ib.df_flux, ib.df_scratch; scale = pg.meta.dx
+    div = compute_dynamic_divergence(
+        upwind.interpolators, p_order, 
+        nb_slice, dist_all, get_weights(pg), 
+        ib.df_flux, ib.df_scratch, pg.meta.dx
     )
     
     return T(2.0) * div
 end
-"""
-    (upwind::UpwindDivergence{D, 1, T, <:Any, TiwariAlgorithm})(...)
 
-Functor execution for `TiwariAlgorithm`. This evaluation is exclusively restricted to scalar PDEs.
-
-# Details
-- Constructs a stencil mask by evaluating whether the velocity multiplied by the particle distance is less than or equal to zero.
-- Returns a zeroed state if the valid stencil size falls below the interpolator's order.
-"""
-function (upwind::UpwindDivergence{D, 1, T, <:Any, TiwariAlgorithm})(
+# --- Tiwari Algorithm ---
+function (upwind::UpwindDivergence{D, 1, T, MAX_ORDER, B_LEN, INTERPS, TiwariAlgorithm, NF})(
     eq::HyperbolicPDE, i::Int, f_i::State{1, T}, nb_slice::UnitRange{Int}, 
     pg::ParticleGrid{D, 1, T}, ib::InteractionBuffer{D, 1, T} 
-) where {D, T}
+) where {D, T, MAX_ORDER, B_LEN, INTERPS, NF}
 
-    interp = upwind.interpolator
     dist_all = get_distances(pg)
     w_all = get_weights(pg) 
 
     num_nb = length(nb_slice)
-    if num_nb < upwind.order; return zero(State{1, T}); end
-    
+    p_order_base = pg.core.particle_orders[i]
     scale = pg.meta.dx
     
     div_tuple = ntuple(Val(D)) do d
-        # FIX: Fetch the velocity matrix for this specific direction and extract the scalar
         vel_d = velocity(eq, f_i, d)[1, 1] 
         
         stencil_size = 0 
@@ -154,38 +98,43 @@ function (upwind::UpwindDivergence{D, 1, T, <:Any, TiwariAlgorithm})(
             end
         end
 
-        if stencil_size >= upwind.order
-            scale_d = scale[d]
-            if upwind.order == 1
-                res = interp(nb_slice, dist_all, w_all, ib.df, ib.mask; scale = scale_d)
-                dF_dx = State{1, T}(res[d, 1])
-            else
-                res_tuple = interp(nb_slice, dist_all, w_all, ib.df, ib.mask; scale = scale_d)
-                dF_dx = State{1, T}(res_tuple[1][d, 1])
+        p_order_d = p_order_base
+        while p_order_d > 1
+            req_nb = typeof(basis_length(Val(D), Val(p_order_d))).parameters[1]
+            if stencil_size >= req_nb
+                break
             end
-            return dF_dx * vel_d
-        else
+            p_order_d -= 1
+        end
+
+        if stencil_size < typeof(basis_length(Val(D), Val(p_order_d))).parameters[1]
             return zero(State{1, T})
         end
+        
+        scale_d = scale[d]
+        
+        # FIX: Degree maps directly to p_order_d
+        B_LEN_D_VAL = typeof(basis_length(Val(D), Val(p_order_d))).parameters[1]
+        
+        raw_grad = dispatch_interpolator(
+            upwind.interpolators, p_order_d, 
+            nb_slice, dist_all, w_all, ib.df, ib.mask, scale_d, Val(B_LEN_D_VAL), State{1, T}
+        )
+        
+        # The first derivatives perfectly align with the leading D components
+        dF_dx = raw_grad[d]
+        return dF_dx * vel_d
     end
 
     return sum(div_tuple) 
 end
-"""
-    (upwind::UpwindDivergence{2, 1, T, <:Any, PraveenAlgorithm})(...)
 
-Functor execution for `PraveenAlgorithm`. This execution path is restricted to scalar PDEs exclusively in 2D space.
-
-# Details
-- Assembles a 2D velocity vector by explicitly evaluating the velocity in both principal directions.
-- Evaluates moving least squares normal and shear components using specialized thresholding (e.g., `min(vel_n, zero(T))`).
-"""
-function (upwind::UpwindDivergence{2, 1, T, <:Any, PraveenAlgorithm})(
+# --- Praveen Algorithm (Strictly 1st Order, Stateless) ---
+function (upwind::UpwindDivergence{2, 1, T, MAX_ORDER, B_LEN, INTERPS, PraveenAlgorithm, NF})(
     eq::HyperbolicPDE, i::Int, f_i::State{1, T}, nb_slice::UnitRange{Int}, 
     pg::ParticleGrid{2, 1, T}, ib::InteractionBuffer{2, 1, T} 
-) where {T}
+) where {T, MAX_ORDER, B_LEN, INTERPS, NF}
 
-    # FIX: Assemble the 2D velocity vector by evaluating both directions
     vel_x = velocity(eq, f_i, 1)[1, 1]
     vel_y = velocity(eq, f_i, 2)[1, 1]
     vel = Space{2, T}(vel_x, vel_y)

@@ -173,4 +173,8 @@ end
 end
 
 
-
+@inline function evaluate_nc_jump(
+    eq::HyperbolicPDE{D, M, T, Conservative}, f_L::Flux{D, M, T}, f_R::Flux{D, M, T}, dist_k::Space{D, T}
+) where {D, M, T}
+    return zero(Flux{D, M, T})
+end

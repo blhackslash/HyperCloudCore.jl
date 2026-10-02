@@ -1,3 +1,5 @@
+export solve_equation
+
 """
     saveData!(xs_storage, us_storage, ts_storage, snap_idx, pg, current_t, remove_ghosts)
 
@@ -45,7 +47,28 @@ function saveData!(
     end
 end
 
+"""
+    solve_equation(timestepper, eq, pg, tmax, dt; kwargs...)
 
+The primary simulation orchestrator governing the main time-stepping loop. 
+
+# Arguments
+- `timestepper::TimeStepper`: The selected Runge-Kutta or IMEX time integrator.
+- `eq::HyperbolicPDE`: The physical equation system.
+- `pg::ParticleGrid`: The active mesh-free domain configuration.
+- `tmax::Real`: The final simulation time.
+- `dt::Real`: The baseline time step.
+
+# Keyword Arguments
+- `is_cfl::Bool`: If true, `dt` is treated as a CFL number, and the physical time step is dynamically computed at each iteration using the grid and interpolator properties.
+- `snapshots::Integer`: The number of discrete data dumps to record evenly across the simulation timeline.
+- `remove_ghosts::Bool`: Strips boundary/ghost particles from the returned snapshot data if true.
+- `show_progress::Bool`: Toggles visual progress tracking.
+- `progress_interval::Real`: Sets the refresh rate (in seconds) for logging the simulation's progress and calculating the ETA.
+
+# Returns
+- A tuple containing: `(position_history, state_history, time_history, total_steps, elapsed_wall_time)`.
+"""
 function solve_equation(
     timestepper::TimeStepper, 
     eq::HyperbolicPDE{D, M, T, R}, 
@@ -73,6 +96,8 @@ function solve_equation(
     saveData!(xs, us, ts, snap_counter, pg, t, remove_ghosts)
     snap_counter += 1 
     
+    @info "Using $(_use_threads() ? "@threads" : "@batch") for parallel runs!"
+    
     # Initialize trackers for the interval-based ETA
     last_log_time = time()
     last_sim_time = t
@@ -91,10 +116,6 @@ function solve_equation(
             saveData!(xs, us, ts, snap_counter, pg, t, remove_ghosts)
             snap_counter += 1
         end
-
-        current_time = time()
-        wall_dt = current_time - last_log_time
-        
     end
 
     if snap_counter <= snapshots + 1

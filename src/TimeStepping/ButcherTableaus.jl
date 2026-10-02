@@ -1,6 +1,48 @@
 
 export RK1_Euler_Tableau, RK2_Ralston_Tableau, RK3_SSP_Tableau, RK4_Classical_Tableau
 export IMEX_Euler_Tableau, IMEX_ARS233_Tableau, IMEX_ARS222_Tableau, IMEX_PRSSP3_Tableau, IMEX_SSP2332_Tableau
+
+
+"""
+    RKButcherTableau{T}
+
+A structure storing the coefficients for explicit Runge-Kutta time integration.
+- Contains the explicit step weights `a`, the final combination weights `b`, and the fractional time steps `c`.
+"""
+struct RKButcherTableau{T}
+    a::Matrix{T}
+    b::Vector{T}
+    c::Vector{T}
+end
+
+"""
+    IMEXButcherTableau{T}
+
+A structure storing the paired coefficients for Implicit-Explicit (IMEX) Runge-Kutta time integration.
+"""
+struct IMEXButcherTableau{T} 
+    a::Matrix{T}  
+    a_t::Matrix{T} 
+    c::Vector{T}   
+    c_t::Vector{T} 
+    b::Vector{T}   
+    b_t::Vector{T}
+    
+    function IMEXButcherTableau(a::Matrix{T}, a_t::Matrix{T}, c::Vector{T}, c_t::Vector{T}, b::Vector{T}, b_t::Vector{T}) where {T}
+        s = size(a, 1) 
+        @assert (size(a, 2) == s && size(a_t, 1) == s && size(a_t, 2) == s &&
+                 length(c) == s && length(c_t) == s && length(b) == s && length(b_t) == s) "All Butcher tableau components must match number of stages"    
+        
+        for i in 1:s, j in (i+1):s
+            @assert a[i,j] == zero(T) "Implicit matrix A must be lower triangular."
+        end
+        for i in 1:s, j in i:s 
+            @assert a_t[i,j] == zero(T) "Explicit matrix a_t must be strictly lower triangular."
+        end
+        new{T}(a, a_t, c, c_t, b, b_t)
+    end
+end
+
 # =========================================================================
 # EXPLICIT RUNGE-KUTTA TABLEAUS
 # =========================================================================

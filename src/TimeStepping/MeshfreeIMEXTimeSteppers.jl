@@ -1,20 +1,67 @@
+"""
+    GeneralIMEXTimeStepper
+
+A comprehensive IMEX time integration orchestrator.
+
+# Details
+- Manages the physical PDE, spatial divergence interpolator, and strongly-typed explicit/implicit source term tuples.
+- Automatically resolves the system dimensions (`M` and `D`) natively from the provided physical/kinetic PDE.
+- Allocates and maintains explicit (`K_E_stages`) and implicit (`K_I_stages`) evaluation buffers for all intermediate sub-steps.
+"""
+struct GeneralIMEXTimeStepper{D, M, T, PDE <: HyperbolicPDE, G <: DivergenceInterpolator, MO <: MOOD, EST <: Tuple{Vararg{AbstractExplicitSourceTerm}}, IST <: Tuple{Vararg{AbstractImplicitSourceTerm}}} <: TimeStepper
+    pde::PDE
+    divergence_interpolator::G
+    mood::MO
+    explicit_sources::EST
+    implicit_sources::IST
+    tableau::IMEXButcherTableau{T}
+    
+    rho_n::Vector{State{M, T}}
+    Y_stages::Vector{Vector{State{M, T}}}
+    K_E_stages::Vector{Vector{State{M, T}}}
+    K_I_stages::Vector{Vector{State{M, T}}}
+    
+    int_buffer::InteractionBuffer{D, M, T}
+    num_stages::Int
+
+    # Primary strictly-typed constructor
+    function GeneralIMEXTimeStepper(
+        pde::HyperbolicPDE{D, M, T}, div_interp::G, mood::MO,
+        explicit_sources::EST, implicit_sources::IST, 
+        tableau::IMEXButcherTableau{T}
+    ) where {D, M, T, G, MO <: MOOD, EST <: Tuple{Vararg{AbstractExplicitSourceTerm}}, IST <: Tuple{Vararg{AbstractImplicitSourceTerm}}}
+        
+        s = size(tableau.a, 1)
+        
+        new{D, M, T, typeof(pde), G, MO, EST, IST}(
+            pde, div_interp, mood, explicit_sources, implicit_sources, tableau,
+            State{M, T}[], 
+            [State{M, T}[] for _ in 1:s], 
+            [State{M, T}[] for _ in 1:s], 
+            [State{M, T}[] for _ in 1:s], 
+            InteractionBuffer{D, M, T}(), 
+            s
+        )
+    end
+end
+
 # Auto-Sorting Convenience Constructor for IMEX
 function GeneralIMEXTimeStepper(
-    pde::HyperbolicPDE{D, M, T}, div_interp::G, 
+    pde::HyperbolicPDE{D, M, T}, div_interp::G, mood::MO,
     all_sources::Tuple{Vararg{AbstractSourceTerm}}, 
     tableau::IMEXButcherTableau{T}
-) where {D, M, T, G}
+) where {D, M, T, G, MO}
     explicit_sts = filter(st -> st isa AbstractExplicitSourceTerm, all_sources)
     implicit_sts = filter(st -> st isa AbstractImplicitSourceTerm, all_sources)
     
-    return GeneralIMEXTimeStepper(pde, div_interp, explicit_sts, implicit_sts, tableau)
+    return GeneralIMEXTimeStepper(pde, div_interp, mood, explicit_sts, implicit_sts, tableau)
 end
 
 # Fallback for no source terms (Empty Tuples)
 function GeneralIMEXTimeStepper(
-    pde::HyperbolicPDE{D, M, T}, div_interp::G, tableau::IMEXButcherTableau{T}
-) where {D, M, T, G}
-    return GeneralIMEXTimeStepper(pde, div_interp, (), (), tableau)
+    pde::HyperbolicPDE{D, M, T}, div_interp::G, mood::MO, tableau::IMEXButcherTableau{T}
+) where {D, M, T, G, MO}
+    return GeneralIMEXTimeStepper(pde, div_interp, mood, (), (), tableau)
 end
 
 function update_size!(ts::GeneralIMEXTimeStepper, N_particles::Int, M_neighbors::Int)
@@ -30,6 +77,9 @@ function update_size!(ts::GeneralIMEXTimeStepper, N_particles::Int, M_neighbors:
     return nothing
 end
 
+# =========================================================================
+# UNIVERSAL IMEX STAGE DERIVATIVE EVALUATOR
+# =========================================================================
 
 @inline function evaluate_stage_derivatives_imex!(
     main_grad::DivergenceInterpolator, eq_kin, pg, imex, i, dt, current_Y_i, stage_time
@@ -41,53 +91,15 @@ end
     int_buffer = imex.int_buffer
     K_E_stage = imex.K_E_stages[i]
 
-    update_size!(main_grad, N_particles)
-    use_threads = _use_threads()
-    
-    @smart_parallel use_threads for p_idx in 1:N_particles
-        if is_boundary[p_idx]; continue; end
-        
-        fi = current_Y_i[p_idx]
-        nb_slice = nb_slices[p_idx]
-        
-        update_content!(int_buffer, nb_indices, fi, nb_slice, current_Y_i)
-        update_content!(main_grad, p_idx, fi, nb_slice, pg, int_buffer)
-    end
-    
-    @smart_parallel use_threads for p_idx in 1:N_particles
-        if is_boundary[p_idx]
-            K_E_stage[p_idx] = zero(eltype(K_E_stage))
-            continue
-        end
-        
-        fi = current_Y_i[p_idx]
-        nb_slice = nb_slices[p_idx]
-        
-        div_F = main_grad(eq_kin, p_idx, fi, nb_slice, pg, int_buffer)
-        S_expl = evaluate_sources(imex.explicit_sources, fi, p_idx, pg, stage_time)
-        
-        # IMEX accumulation uses addition, so K_E = -div_F + S_expl
-        K_E_stage[p_idx] = -div_F + S_expl
-    end
-end
-
-@inline function evaluate_stage_derivatives_imex!(
-    main_grad::MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER, MOOD{S, C}, INTERPS, L, NF}, 
-    eq_kin, pg, imex, i, dt, current_Y_i, stage_time
-) where {D, M, T, B_LEN, MAX_ORDER, DIV_ORDER, S <: MOODStrategy, C <: RealMOOD, INTERPS, L, NF}
-    
-    N_particles = pg.meta.N
-    nb_slices = pg.neighbor.ranges
-    nb_indices = pg.neighbor.indices
-    is_boundary = pg.core.is_boundary
-    int_buffer = imex.int_buffer
-    K_E_stage = imex.K_E_stages[i]
-    
-    orders = main_grad.particle_orders
+    orders = pg.core.particle_orders
     needs_recalc = pg.shared.bit_buffer
 
     update_size!(main_grad, N_particles)
-    if i == 1; fill!(orders, MAX_ORDER); end
+    
+    if i == 1
+        max_order = _extract_order(main_grad)
+        fill!(orders, max_order)
+    end
     fill!(needs_recalc, true)
     
     use_threads = _use_threads()
@@ -105,16 +117,15 @@ end
             update_content!(int_buffer, nb_indices, fi, nb_slice, current_Y_i)
             update_content!(main_grad, p_idx, fi, nb_slice, pg, int_buffer)
         end
-
-        effective_orders = pg.shared.int_buffer
-        @smart_parallel use_threads for p_idx in 1:N_particles
-            if is_boundary[p_idx]; continue; end
-            nb_slice = nb_slices[p_idx]
-            effective_orders[p_idx] = get_effective_order(main_grad.mood.strategy, orders, p_idx, nb_slice, nb_indices)
-        end
         
         @smart_parallel use_threads for p_idx in 1:N_particles
-            if is_boundary[p_idx] || !needs_recalc[p_idx]; continue; end
+            if is_boundary[p_idx]
+                K_E_stage[p_idx] = zero(eltype(K_E_stage))
+                continue
+            end
+            if !needs_recalc[p_idx]
+                continue
+            end
             
             fi = current_Y_i[p_idx]
             nb_slice = nb_slices[p_idx]
@@ -122,13 +133,100 @@ end
             div_F = main_grad(eq_kin, p_idx, fi, nb_slice, pg, int_buffer)
             S_expl = evaluate_sources(imex.explicit_sources, fi, p_idx, pg, stage_time)
             
+            # IMEX accumulation uses addition, so K_E = -div_F + S_expl
             K_E_stage[p_idx] = -div_F + S_expl
         end
 
         needs_another_pass = evaluate_mood_and_halo!(main_grad, pg, imex, i, dt, current_Y_i)
-        if !needs_another_pass || iteration >= MAX_ORDER; break; end
+        if !needs_another_pass || iteration >= 20; break; end
     end
 end
+
+@inline function evaluate_mood_and_halo!(
+    main_grad::DivergenceInterpolator, pg::ParticleGrid{D, M, T}, 
+    imex_ts::GeneralIMEXTimeStepper, i::Int, dt::Real, current_Y_i::AbstractVector
+) where {D, M, T}
+    
+    mood_fun = imex_ts.mood
+    
+    # 1. Zero-Cost Fast Exit for Non-Adaptive Schemes
+    if mood_fun.criterion isa NoMOOD
+        return false
+    end
+    
+    N = pg.meta.N
+    nb_slices = pg.neighbor.ranges
+    is_boundary = pg.core.is_boundary
+    
+    int_buffer = imex_ts.int_buffer
+    orders = pg.core.particle_orders
+    mood_triggered = pg.core.mood_triggered
+    needs_recalc = pg.shared.bit_buffer
+    bt = imex_ts.tableau
+    
+    fill!(mood_triggered, false)
+
+    # 2. IMEX Candidate Evaluation Pass
+    @batch for p_idx in 1:N
+        if is_boundary[p_idx] || !needs_recalc[p_idx]; continue; end
+        
+        fi = current_Y_i[p_idx]
+        nb_slice = nb_slices[p_idx]
+        
+        div_val = -imex_ts.K_E_stages[i][p_idx] 
+        
+        s = imex_ts.num_stages
+        Y_local = imex_ts.rho_n[p_idx]
+        
+        if i < s
+            for j in 1:(i-1)
+                a_t_val = bt.a_t[i+1, j]
+                if a_t_val != zero(T); Y_local += (dt * a_t_val) * imex_ts.K_E_stages[j][p_idx]; end
+                
+                a_val = bt.a[i+1, j]
+                if a_val != zero(T); Y_local += (dt * a_val) * imex_ts.K_I_stages[j][p_idx]; end
+            end
+            
+            Y_local += (dt * bt.a[i+1, i]) * imex_ts.K_I_stages[i][p_idx]
+            Y_local += (dt * bt.a_t[i+1, i]) * (-div_val)
+        else
+            for j in 1:(s-1)
+                b_t_val = bt.b_t[j]
+                if b_t_val != zero(T); Y_local += (dt * b_t_val) * imex_ts.K_E_stages[j][p_idx]; end
+                
+                b_val = bt.b[j]
+                if b_val != zero(T); Y_local += (dt * b_val) * imex_ts.K_I_stages[j][p_idx]; end
+            end
+            
+            Y_local += (dt * bt.b[i]) * imex_ts.K_I_stages[i][p_idx]
+            Y_local += (dt * bt.b_t[i]) * (-div_val)
+        end
+        
+        if mood_fun(main_grad, p_idx, fi, nb_slice, Y_local, pg, int_buffer.f)
+            mood_triggered[p_idx] = true
+        end
+    end
+    
+    fill!(needs_recalc, false)
+    any_triggered = false
+
+    # 3. Halo Propagation Pass
+    for p_idx in 1:N
+        if mood_triggered[p_idx] && orders[p_idx] > 1
+            any_triggered = true
+            orders[p_idx] -= 1
+            needs_recalc[p_idx] = true 
+            
+            trigger_halo!(mood_fun.strategy, p_idx, pg, needs_recalc, orders)
+        end
+    end
+    
+    return any_triggered
+end
+
+# =========================================================================
+# IMEX TIME STEP FUNCTOR
+# =========================================================================
 
 function (imex::GeneralIMEXTimeStepper{D, M, T})(
     eq::HyperbolicPDE, pg::ParticleGrid, time::Real, dt::Real
@@ -188,7 +286,6 @@ function (imex::GeneralIMEXTimeStepper{D, M, T})(
         
         apply_boundary_conditions!(pg, current_Y_i, imex, eq, stage_time)
         
-        # Pass stage_time cleanly down into the evaluator
         evaluate_stage_derivatives_imex!(imex.divergence_interpolator, eq, pg, imex, i, dt, current_Y_i, stage_time)
     end 
     

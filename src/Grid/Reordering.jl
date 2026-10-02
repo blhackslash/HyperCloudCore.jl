@@ -96,10 +96,11 @@ function (rd::ReorderData{D})(pg::ParticleGrid{D}) where {D}
     # 4. Native Julia In-Place Permutations
     Base.permute!(pg.core.positions, p)
     Base.permute!(pg.core.is_boundary, p)
-    Base.permute!(pg.core.tags, p)       # Permute newly added tags array
+    Base.permute!(pg.core.tags, p)
+    Base.permute!(pg.core.particle_orders, p)
+    Base.permute!(pg.core.mood_triggered, p)
     Base.permute!(pg.rhos, p)          
     Base.permute!(pg.curvatures, p)    
-    Base.permute!(pg.mood_events, p)   
     
     # 5. Optional: Update volumes if they exist
     if length(pg.core.volumes) >= N

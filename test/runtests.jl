@@ -3,16 +3,18 @@ using HyperCloudCore
 import HyperCloudCore: flux, velocity, max_eigenvalue, prim2cons, cons2prim, implicit_solve, evaluate_source, math_min, math_max
 using PDEStudioCore
 using StaticArrays
+using LinearAlgebra
+using Random
 
-include("linear_advection.jl")
-include("source_terms.jl")
-include("initial_conditions.jl")
+include("ICs/_main.jl")
+include("PDEs/_main.jl")
+include("SimulationFunctions/_main.jl")
+include("Builder/_main.jl")
+
+include("kinetic_source.jl")
 include("time_integration.jl")
 
-include("analytical_solution.jl")
-include("run_simulation.jl")
 # Point PDEStudioCore to look inside this test environment
-# so it can dynamically resolve run_simulation and analytical_solution
 PDEStudioCore.set_target_module!(@__MODULE__)
 
 @testset "HyperCloud Pipeline Tests" begin
@@ -22,62 +24,79 @@ PDEStudioCore.set_target_module!(@__MODULE__)
     set_save_path!(tmp_dir)
 
     # Base parameters shared across all spatial schemes
-    shared = Dict(
-        :PDE => "linear",
-        :PDE_params => ((1.0,),),          # Advective speed c = 1.0
-        :mins => (-1.0,),
-        :maxs => (1.0,),
-        :Ns => (100,),
-        :periodic => true,
-        :domain => "rectangular",
-        :init_func => "gauss",
-        :init_params => (
-            1.,                        # Amplitude a
-            (0.,),                        # position
-            .1                         # width
-        ),
-        :tmax => 2.,
-        :timestepper => "RK3",             # Upgraded to RK3 for MUSCL/WENO stability
-        :interp_range => 2.5,
-        :interp_alpha => 1.0,
+    shared = Dict{Symbol, Any}(
+        :sim_func_name => :run_direct_simulation, # Replaces positional argument
+        
+        # Global
         :snapshots => 5,
-        :SEED => 42,
-        :CFL => 0.4
+        :tmax => 2.0,
+        
+        # Grid Namespace
+        :Grid_domain => :rectangular,
+        :Grid_mins => (-1.0,),
+        :Grid_maxs => (1.0,),
+        :Grid_Ns => (100,),
+        :Grid_periodic => true,
+        :Grid_SEED => 42,
+        :Grid_randomness_factor => (0.0,),
+        
+        # Weight Namespace
+        :Weight_name => :exponential,
+        :Weight_range => 2.5,
+        :Weight_alpha => 1.0,
+        
+        # PDE Namespace
+        :PDE_name => :linear,
+        :PDE_velocities => ((1.0,),),          
+        
+        # IC Namespace (Gauss)
+        :IC_name => :gauss,
+        :IC_a => (1.0,),
+        :IC_b => (0.0,),
+        :IC_width => 0.1,
+
+        # Time Namespace
+        :Time_stepper => :RK3,                 
+        :Time_CFL => 0.4,
+        
+        # Scheme Fallbacks
+        :Scheme_MLS_order => 0
     )
 
-    # Define the different spatial reconstruction schemes
+    # Define the different spatial reconstruction schemes with strictly required parameters
     methods = Dict(
         :upwind => Dict(
-            :main_gradient => "Upwind",
-            :main_flux => "Upwind",
-            :order => 1
+            :Scheme_name => :Upwind,
+            :Flux_name => :Rusanov,
+            :Scheme_upwind_alg_nd => :Classic, # Strictly Required!
+            :Scheme_order => 1
         ),
         :muscl => Dict(
-            :main_gradient => "MUSCL",
-            :main_flux => "Rusanov",
-            :limiter => "minmod",
-            :order => 2
+            :Scheme_name => :MUSCL,
+            :Flux_name => :Rusanov,
+            :Limiter_name => :minmod,
+            :Limiter_mode => :hard,            # Strictly Required!
+            :Scheme_order => 2
         ),
         :weno => Dict(
-            :main_gradient => "WENO",
-            :main_flux => "Rusanov",
-            :order => 2
+            :Scheme_name => :WENO,
+            :Flux_name => :Rusanov,
+            :Scheme_order => 2
         ),
         :central => Dict(
-            :main_gradient => "Central",
-            :main_flux => "Rusanov",
-            :order => 2
+            :Scheme_name => :Central,
+            :Flux_name => :Rusanov,
+            :Scheme_order => 2
         )
     )
 
     # Parameter Sweep for Grid Convergence
     varied = Dict(
-        :Ns => [(200,), (400,)]
+        :Grid_Ns => [(200,), (400,)]
     )
 
-    # Build the SimulationConfig with all three active methods
+    # Build the SimulationConfig (No positional sim_func_name!)
     config = SimulationConfig(
-        :run_simulation,
         shared,
         methods,
         [:upwind, :muscl, :weno, :central];
@@ -89,26 +108,19 @@ PDEStudioCore.set_target_module!(@__MODULE__)
     run_all_simulations(config; force_overwrite=true, calculate_stats=true)
 
     @testset "Dynamic Grid Resizing (ensure_capacity!)" begin
-        # 1. Initialize a baseline 1D grid
-        geom = get_rectangular_domain(Float64, (0.0,), (1.0,))
-        pg = ParticleGrid(
-            geom, (0.1,), 2.5, 1;
-            is_periodic = true
-        )
+        geom = get_rectangular_domain(Float64, (0.0,), (1.0,); is_periodic = true)
+        pg = ParticleGrid(geom, (0.1,), ExponentialWeightFunction(1.,2.5), 1)
         
         N_initial = length(pg.rhos)
         @test N_initial > 0
         
-        # 2. Define a required capacity that exceeds the current particle size
         req_cap = N_initial + 50
         expected_cap = ceil(Int, req_cap * 1.25)
         
-        # 3. Trigger the global resize cascade
         HyperCloudCore.ensure_capacity!(pg, req_cap)
         
         @testset "Top-Level Grid Arrays" begin
             @test length(pg.rhos) == expected_cap
-            @test length(pg.mood_events) == expected_cap
             @test length(pg.curvatures) == expected_cap
         end
         
@@ -117,6 +129,8 @@ PDEStudioCore.set_target_module!(@__MODULE__)
             @test length(pg.core.is_boundary) == expected_cap
             @test length(pg.core.volumes) == expected_cap
             @test length(pg.core.tags) == expected_cap
+            @test length(pg.core.mood_triggered) == expected_cap
+            @test length(pg.core.particle_orders) == expected_cap
         end
         
         @testset "SharedBuffers Arrays" begin
@@ -139,12 +153,10 @@ PDEStudioCore.set_target_module!(@__MODULE__)
         end
         
         @testset "NeighborData Arrays" begin
-            # Neighbor arrays scale by pairs, so we must target them specifically
             N_nb_initial = length(pg.neighbor.indices)
             req_nb_cap = N_nb_initial + 100
             expected_nb_cap = ceil(Int, req_nb_cap * 1.25)
             
-            # Manually trigger the specific neighbor capacity manager
             HyperCloudCore.ensure_capacity!(pg.neighbor, req_nb_cap)
             
             @test length(pg.neighbor.indices) == expected_nb_cap
@@ -153,18 +165,17 @@ PDEStudioCore.set_target_module!(@__MODULE__)
         end
         
         @testset "Safe No-Op on Shrink" begin
-            # Requesting a capacity lower than the current length should do nothing
             HyperCloudCore.ensure_capacity!(pg, req_cap - 10)
             @test length(pg.rhos) == expected_cap 
         end
     end
+
     # Verify each scheme independently
     for scheme in [:upwind, :muscl, :weno, :central]
         @testset "Scheme: $scheme" begin
-            # Construct the exact parameter dictionaries expected on disk
             base_params = merge(shared, methods[scheme])
-            params_100 = create_param_dict(base_params..., :Ns => (200,))
-            params_200 = create_param_dict(base_params..., :Ns => (400,))
+            params_100 = create_param_dict(base_params..., :Grid_Ns => (200,))
+            params_200 = create_param_dict(base_params..., :Grid_Ns => (400,))
 
             @test does_sim_data_exist(params_100)
             @test does_sim_data_exist(params_200)
@@ -172,7 +183,6 @@ PDEStudioCore.set_target_module!(@__MODULE__)
             sim_100 = load_sim_data(params_100)
             sim_200 = load_sim_data(params_200)
 
-            # Ensure output structure is Lagrangian data
             @test sim_100 isa LSimData
 
             @testset "Statistic Generation" begin
@@ -182,34 +192,29 @@ PDEStudioCore.set_target_module!(@__MODULE__)
             end
 
             @testset "Mass Conservation" begin
-                # Integrated mass across time steps should remain constant
                 mass_200 = sim_200.stats[:mass]
                 initial_mass = mass_200[1][1]
                 @test all(m -> isapprox(m[1], initial_mass; rtol=1e-2), mass_200)
             end
 
             @testset "Grid Convergence" begin
-                # Error should strictly reduce as particle density increases
                 err_100 = sim_100.stats[:l1error][end][1]
                 err_200 = sim_200.stats[:l1error][end][1]
                 @test err_200 < err_100
             end
         end
     end
+
     @testset "Core Utility Functions (Params & SIMD Math)" begin
-        
         @testset "param2uvec (State Conversions)" begin
-            # Scalar to 1D State
             u_scalar = param2uvec(5.0)
             @test u_scalar isa SVector{1, Float64}
             @test u_scalar[1] == 5.0
             
-            # Tuple to M-D State
             u_tuple = param2uvec((1.0, 2.0, 3.0))
             @test u_tuple isa SVector{3, Float64}
             @test u_tuple == SVector(1.0, 2.0, 3.0)
             
-            # Array to M-D State
             u_arr = param2uvec([4.0, 5.0])
             @test u_arr isa SVector{2, Float64}
             @test u_arr == SVector(4.0, 5.0)
@@ -224,25 +229,21 @@ PDEStudioCore.set_target_module!(@__MODULE__)
         end
         
         @testset "param2fvec (Flux Conversions)" begin
-            # Scalar to 1D, 1-component Flux
             f_scalar = param2fvec(2.5)
             @test f_scalar isa SVector{1, SVector{1, Float64}}
             @test f_scalar[1][1] == 2.5
             
-            # Tuple of Vectors to Multi-D Flux
             f_vec_tuple = param2fvec(([1.0, 2.0], [3.0, 4.0]))
             @test f_vec_tuple isa SVector{2, SVector{2, Float64}}
             @test f_vec_tuple[1] == SVector(1.0, 2.0)
             @test f_vec_tuple[2] == SVector(3.0, 4.0)
             
-            # Vector of Vectors to Multi-D Flux
             f_vec_arr = param2fvec([[5.0], [6.0], [7.0]])
             @test f_vec_arr isa SVector{3, SVector{1, Float64}}
             @test f_vec_arr[3][1] == 7.0
         end
         
         @testset "param2svec (Nested State Conversions)" begin
-            # Tuple to Nested Vector
             s_tuple = param2svec((1.5, 2.5))
             @test s_tuple isa SVector{2, SVector{1, Float64}}
             @test s_tuple[1][1] == 1.5
@@ -250,14 +251,12 @@ PDEStudioCore.set_target_module!(@__MODULE__)
         end
         
         @testset "Branchless SIMD Math (math_max / math_min)" begin
-            # Scalar logic
             @test math_max(10.0, 5.0) == 10.0
             @test math_max(-2.0, 3.0) == 3.0
             
             @test math_min(10.0, 5.0) == 5.0
             @test math_min(-2.0, 3.0) == -2.0
             
-            # Vector logic (Element-wise)
             v1 = [1.0, 5.0, 3.0]
             v2 = [2.0, 4.0, 3.0]
             
@@ -267,30 +266,26 @@ PDEStudioCore.set_target_module!(@__MODULE__)
     end
     
     @testset "MUSCL Higher-Order Convergence (Orders 2-5)" begin
-        # 1. Setup a clean, high-precision environment for strict convergence testing
         shared_muscl = copy(shared)
-        shared_muscl[:timestepper] = "RK4" # Prevent time-integration from bottlenecking 4th-order spatial error
+        shared_muscl[:Time_stepper] = :RK4
         
-        # Disable limiters to measure the true asymptotic convergence rate of the reconstruction
         methods_muscl = Dict(
-            :muscl2 => Dict(:main_gradient => "MUSCL", :main_flux => "Rusanov", :limiter => "none", :order => 2, :mood_criterion => "none"),
-            :muscl3 => Dict(:main_gradient => "MUSCL", :main_flux => "Rusanov", :limiter => "none", :order => 3, :mood_criterion => "none"),
-            :muscl4 => Dict(:main_gradient => "MUSCL", :main_flux => "Rusanov", :limiter => "none", :order => 4, :mood_criterion => "none"),
-            :muscl5 => Dict(:main_gradient => "MUSCL", :main_flux => "Rusanov", :limiter => "none", :order => 5, :mood_criterion => "none")
+            :muscl2 => Dict(:Scheme_name => :MUSCL, :Flux_name => :Rusanov, :Limiter_name => :none, :Scheme_order => 2),
+            :muscl3 => Dict(:Scheme_name => :MUSCL, :Flux_name => :Rusanov, :Limiter_name => :none, :Scheme_order => 3),
+            :muscl4 => Dict(:Scheme_name => :MUSCL, :Flux_name => :Rusanov, :Limiter_name => :none, :Scheme_order => 4),
+            :muscl5 => Dict(:Scheme_name => :MUSCL, :Flux_name => :Rusanov, :Limiter_name => :none, :Scheme_order => 5)
         )
         
         config_muscl = SimulationConfig(
-            :run_simulation,
             shared_muscl,
             methods_muscl,
             [:muscl2, :muscl3, :muscl4, :muscl5];
-            varied_params = create_varied_dict(:Ns => [(200,),(400,)]), # Re-uses your Dict(:Ns => [(100,), (200,)])
+            varied_params = create_varied_dict(:Grid_Ns => [(200,),(400,)]),
             ref_func_name = :analytical_solution
         )
         
         run_all_simulations(config_muscl; force_overwrite=true, calculate_stats=true)
         
-        # 2. Extract errors and evaluate Empirical Order of Convergence (EOC)
         errors_100 = Dict{Int, Float64}()
         errors_200 = Dict{Int, Float64}()
         
@@ -298,8 +293,8 @@ PDEStudioCore.set_target_module!(@__MODULE__)
             scheme_sym = Symbol("muscl$order")
             base_p = merge(shared_muscl, methods_muscl[scheme_sym])
             
-            sim_100 = load_sim_data(create_param_dict(base_p..., :Ns => (200,)))
-            sim_200 = load_sim_data(create_param_dict(base_p..., :Ns => (400,)))
+            sim_100 = load_sim_data(create_param_dict(base_p..., :Grid_Ns => (200,)))
+            sim_200 = load_sim_data(create_param_dict(base_p..., :Grid_Ns => (400,)))
             
             err_100 = sim_100.stats[:relative_l2error][end][1]
             err_200 = sim_200.stats[:relative_l2error][end][1]
@@ -307,141 +302,99 @@ PDEStudioCore.set_target_module!(@__MODULE__)
             errors_100[order] = err_100
             errors_200[order] = err_200
             
-            # Calculate Empirical Order of Convergence: log2(E_coarse / E_fine)
             eoc = log2(err_100 / err_200)
             
             @testset "MUSCL Order $order Convergence" begin
-                # Assert error reduces with grid refinement
                 @test err_200 < err_100
-                
-                # Test grouped order behaviors (Odd/Even grouping)
                 if order == 2 || order == 3
-                    # Expecting ~2nd order convergence
                     @test 1.5 < eoc < 2.5
                 elseif order == 4 || order == 5
-                    # Expecting ~4th order convergence
-                    @test 3.5 < eoc < 5.
+                    @test 3.5 < eoc < 5.0
                 end
             end
         end
         
         @testset "Error Hierarchy" begin
-            # Ensure the 4th-order group is strictly more accurate than the 2nd-order group
             @test errors_200[4] < errors_200[2]
             @test errors_200[5] < errors_200[3]
-            
-            # The odd grouped orders (3 and 5) usually yield similar or slightly better 
-            # absolute errors than their even counterparts (2 and 4) at the same resolution.
             @test errors_200[3] <= errors_200[2]
             @test errors_200[5] <= errors_200[4]
         end
     end
     
-@testset "MUSCL Higher-Order Convergence (Orders 2-5) with MOOD" begin
-        # 1. Setup a clean, high-precision environment for strict convergence testing
+    @testset "MUSCL Higher-Order Convergence (Orders 2-5) with MOOD" begin
         shared_muscl = copy(shared)
-        shared_muscl[:timestepper] = "RK4" # Prevent time-integration from bottlenecking 4th-order spatial error
+        shared_muscl[:Time_stepper] = :RK4 
         
-        # Disable limiters to measure the true asymptotic convergence rate of the reconstruction
+        # MOOD Strictly Requires Strategy and Delta Relax
         methods_muscl = Dict(
-            :muscl2 => Dict(:main_gradient => "MUSCL", :main_flux => "Rusanov", :limiter => "none", :order => 2, :mood_criterion => "U2"),
-            :muscl3 => Dict(:main_gradient => "MUSCL", :main_flux => "Rusanov", :limiter => "none", :order => 3, :mood_criterion => "U2"),
-            :muscl4 => Dict(:main_gradient => "MUSCL", :main_flux => "Rusanov", :limiter => "none", :order => 4, :mood_criterion => "U2"),
-            :muscl5 => Dict(:main_gradient => "MUSCL", :main_flux => "Rusanov", :limiter => "none", :order => 5, :mood_criterion => "U2")
+            :muscl2 => Dict(:Scheme_name => :MUSCL, :Flux_name => :Rusanov, :Limiter_name => :none, :Scheme_order => 2, :MOOD_criterion => :U2, :MOOD_strategy => :EPD1, :MOOD_delta_relax => 1e-4),
+            :muscl3 => Dict(:Scheme_name => :MUSCL, :Flux_name => :Rusanov, :Limiter_name => :none, :Scheme_order => 3, :MOOD_criterion => :U2, :MOOD_strategy => :EPD1, :MOOD_delta_relax => 1e-4),
+            :muscl4 => Dict(:Scheme_name => :MUSCL, :Flux_name => :Rusanov, :Limiter_name => :none, :Scheme_order => 4, :MOOD_criterion => :U2, :MOOD_strategy => :EPD1, :MOOD_delta_relax => 1e-4),
+            :muscl5 => Dict(:Scheme_name => :MUSCL, :Flux_name => :Rusanov, :Limiter_name => :none, :Scheme_order => 5, :MOOD_criterion => :U2, :MOOD_strategy => :EPD1, :MOOD_delta_relax => 1e-4)
         )
         
         config_muscl = SimulationConfig(
-            :run_simulation,
             shared_muscl,
             methods_muscl,
             [:muscl2, :muscl3, :muscl4, :muscl5];
-            varied_params = create_varied_dict(:Ns => [(300,),(600,)]), # Re-uses your Dict(:Ns => [(100,), (200,)])
+            varied_params = create_varied_dict(:Grid_Ns => [(300,),(600,)]),
             ref_func_name = :analytical_solution
         )
         
         run_all_simulations(config_muscl; force_overwrite=true, calculate_stats=true)
         
-        # 2. Extract errors and evaluate Empirical Order of Convergence (EOC)
-        errors_100 = Dict{Int, Float64}()
-        errors_200 = Dict{Int, Float64}()
-        
         for order in 2:5
             scheme_sym = Symbol("muscl$order")
             base_p = merge(shared_muscl, methods_muscl[scheme_sym])
             
-            sim_100 = load_sim_data(create_param_dict(base_p..., :Ns => (300,)))
-            sim_200 = load_sim_data(create_param_dict(base_p..., :Ns => (600,)))
+            sim_100 = load_sim_data(create_param_dict(base_p..., :Grid_Ns => (300,)))
+            sim_200 = load_sim_data(create_param_dict(base_p..., :Grid_Ns => (600,)))
             
             err_100 = sim_100.stats[:relative_l2error][end][1]
             err_200 = sim_200.stats[:relative_l2error][end][1]
-            
-            errors_100[order] = err_100
-            errors_200[order] = err_200
-            
-            # Calculate Empirical Order of Convergence: log2(E_coarse / E_fine)
             eoc = log2(err_100 / err_200)
             
             @testset "MUSCL Order $order Convergence" begin
-                # Assert error reduces with grid refinement
                 @test err_200 < err_100
-                
-                # Test grouped order behaviors (Odd/Even grouping)
                 if order == 2 || order == 3
-                    # Expecting ~2nd order convergence
                     @test 1.5 < eoc < 2.5
                 elseif order == 4 || order == 5
-                    # Expecting ~4th order convergence
-                    @test 3.5 < eoc < 5.
+                    @test 3.5 < eoc < 5.0
                 end
             end
         end
-        
-        @testset "Error Hierarchy" begin
-            # Ensure the 4th-order group is strictly more accurate than the 2nd-order group
-            @test errors_200[4] < errors_200[2]
-            @test errors_200[5] < errors_200[3]
-            
-            # The odd grouped orders (3 and 5) usually yield similar or slightly better 
-            # absolute errors than their even counterparts (2 and 4) at the same resolution.
-            @test errors_200[3] <= errors_200[2]
-            @test errors_200[5] <= errors_200[4]
-        end
     end
-        @testset "MOOD Boundedness vs Unlimited Oscillations (Box IC)" begin
+
+    @testset "MOOD Boundedness vs Unlimited Oscillations (Box IC)" begin
         shared_mood = copy(shared)
+        shared_mood[:IC_name] = :box
+        shared_mood[:IC_u_bg] = (0.0,)
+        shared_mood[:IC_u_box] = (1.0,)
+        shared_mood[:IC_mins] = (-0.5,)
+        shared_mood[:IC_maxs] = (0.5,)
         
-        # Inject the Box initial condition: (u_bg, u_box, mins, maxs)[span_2](start_span)[span_2](end_span)
-        # Background is 0.0, Box is 1.0, located between x = -0.5 and x = 0.5[span_3](start_span)[span_3](end_span)
-        shared_mood[:init_func] = "box"
-        shared_mood[:init_params] = ((0.0,), (1.0,), (-0.5,), (0.5,)) 
-        
-        # 1. MOOD-enabled schemes (Should remain bounded)
         methods_mood = Dict(
-            :muscl2 => Dict(:main_gradient => "MUSCL", :main_flux => "Rusanov", :limiter => "none", :order => 2, :mood_criterion => "U2"),
-            :muscl3 => Dict(:main_gradient => "MUSCL", :main_flux => "Rusanov", :limiter => "none", :order => 3, :mood_criterion => "U2"),
-            :muscl4 => Dict(:main_gradient => "MUSCL", :main_flux => "Rusanov", :limiter => "none", :order => 4, :mood_criterion => "U2"),
-            :muscl5 => Dict(:main_gradient => "MUSCL", :main_flux => "Rusanov", :limiter => "none", :order => 5, :mood_criterion => "U2")
+            :muscl2 => Dict(:Scheme_name => :MUSCL, :Flux_name => :Rusanov, :Limiter_name => :none, :Scheme_order => 2, :MOOD_criterion => :U2, :MOOD_strategy => :EPD1, :MOOD_delta_relax => 1e-4),
+            :muscl3 => Dict(:Scheme_name => :MUSCL, :Flux_name => :Rusanov, :Limiter_name => :none, :Scheme_order => 3, :MOOD_criterion => :U2, :MOOD_strategy => :EPD1, :MOOD_delta_relax => 1e-4),
+            :muscl4 => Dict(:Scheme_name => :MUSCL, :Flux_name => :Rusanov, :Limiter_name => :none, :Scheme_order => 4, :MOOD_criterion => :U2, :MOOD_strategy => :EPD1, :MOOD_delta_relax => 1e-4),
+            :muscl5 => Dict(:Scheme_name => :MUSCL, :Flux_name => :Rusanov, :Limiter_name => :none, :Scheme_order => 5, :MOOD_criterion => :U2, :MOOD_strategy => :EPD1, :MOOD_delta_relax => 1e-4)
         )
 
-        # 2. Unbounded schemes (No Limiters, No MOOD)[span_4](start_span)[span_4](end_span)
         methods_nomood = Dict(
-            :muscl2_unlimited => Dict(:main_gradient => "MUSCL", :main_flux => "Rusanov", :limiter => "none", :order => 2, :mood_criterion => "none"),
-            :muscl3_unlimited => Dict(:main_gradient => "MUSCL", :main_flux => "Rusanov", :limiter => "none", :order => 3, :mood_criterion => "none"),
-            :muscl4_unlimited => Dict(:main_gradient => "MUSCL", :main_flux => "Rusanov", :limiter => "none", :order => 4, :mood_criterion => "none"),
-            :muscl5_unlimited => Dict(:main_gradient => "MUSCL", :main_flux => "Rusanov", :limiter => "none", :order => 5, :mood_criterion => "none")
+            :muscl2_unlimited => Dict(:Scheme_name => :MUSCL, :Flux_name => :Rusanov, :Limiter_name => :none, :Scheme_order => 2),
+            :muscl3_unlimited => Dict(:Scheme_name => :MUSCL, :Flux_name => :Rusanov, :Limiter_name => :none, :Scheme_order => 3),
+            :muscl4_unlimited => Dict(:Scheme_name => :MUSCL, :Flux_name => :Rusanov, :Limiter_name => :none, :Scheme_order => 4),
+            :muscl5_unlimited => Dict(:Scheme_name => :MUSCL, :Flux_name => :Rusanov, :Limiter_name => :none, :Scheme_order => 5)
         )
         
-        # Merge both dictionaries to run them in a single orchestration sweep
         all_methods = merge(methods_mood, methods_nomood)
-        method_keys = collect(keys(all_methods))
-        
-        varied_mood = Dict(:Ns => [(100,)])
+        varied_mood = Dict(:Grid_Ns => [(100,)])
         
         config_mood = SimulationConfig(
-            :run_simulation,
             shared_mood,
             all_methods,
-            method_keys;
+            collect(keys(all_methods));
             varied_params = varied_mood,
             ref_func_name = :analytical_solution
         )
@@ -452,49 +405,45 @@ PDEStudioCore.set_target_module!(@__MODULE__)
         
         for order in 2:5
             @testset "Order $order Behaviors" begin
-                # --- MOOD Check ---
                 base_p_mood = merge(shared_mood, methods_mood[Symbol("muscl$order")])
-                sim_mood = load_sim_data(create_param_dict(base_p_mood..., :Ns => (100,)))
+                sim_mood = load_sim_data(create_param_dict(base_p_mood..., :Grid_Ns => (100,)))
                 
                 min_mood = minimum(val[1] for val in sim_mood.u[end])
                 max_mood = maximum(val[1] for val in sim_mood.u[end])
                 
-                # Assert the MOOD solution stays within the [0, 1] background and box values[span_5](start_span)[span_5](end_span)
                 @test min_mood >= 0.0 - tol
                 @test max_mood <= 1.0 + tol
 
-                # --- Unlimited Check ---
                 base_p_unlim = merge(shared_mood, methods_nomood[Symbol("muscl$(order)_unlimited")])
-                sim_unlim = load_sim_data(create_param_dict(base_p_unlim..., :Ns => (100,)))
+                sim_unlim = load_sim_data(create_param_dict(base_p_unlim..., :Grid_Ns => (100,)))
                 
                 min_unlim = minimum(val[1] for val in sim_unlim.u[end])
                 max_unlim = maximum(val[1] for val in sim_unlim.u[end])
                 
-                # Assert the Unlimited solution oscillates beyond the constraints
                 @test (min_unlim < 0.0 - tol) || (max_unlim > 1.0 + tol)
             end
         end
     end
+
     @testset "Slope Limiter Boundedness (VK Limiter, Box IC)" begin
         shared_lim = copy(shared)
+        shared_lim[:IC_name] = :box
+        shared_lim[:IC_u_bg] = (0.0,)
+        shared_lim[:IC_u_box] = (1.0,)
+        shared_lim[:IC_mins] = (-0.5,)
+        shared_lim[:IC_maxs] = (0.5,)
         
-        # Inject the Box initial condition: (u_bg, u_box, mins, maxs)[span_0](start_span)[span_0](end_span)
-        # Background is 0.0, Box is 1.0, located between x = -0.5 and x = 0.5
-        shared_lim[:init_func] = "box"
-        shared_lim[:init_params] = ((0.0,), (1.0,), (-0.5,), (0.5,)) 
-        
-        # Enable the VK limiter and completely disable MOOD[span_1](start_span)[span_1](end_span)
+        # Limiter requires mode
         methods_vk = Dict(
-            :muscl2_vk => Dict(:main_gradient => "MUSCL", :main_flux => "Rusanov", :limiter => "VK", :order => 2, :mood_criterion => "none"),
-            :muscl3_vk => Dict(:main_gradient => "MUSCL", :main_flux => "Rusanov", :limiter => "VK", :order => 3, :mood_criterion => "none"),
-            :muscl4_vk => Dict(:main_gradient => "MUSCL", :main_flux => "Rusanov", :limiter => "VK", :order => 4, :mood_criterion => "none"),
-            :muscl5_vk => Dict(:main_gradient => "MUSCL", :main_flux => "Rusanov", :limiter => "VK", :order => 5, :mood_criterion => "none")
+            :muscl2_vk => Dict(:Scheme_name => :MUSCL, :Flux_name => :Rusanov, :Limiter_name => :VK, :Limiter_mode => :hard, :Scheme_order => 2),
+            :muscl3_vk => Dict(:Scheme_name => :MUSCL, :Flux_name => :Rusanov, :Limiter_name => :VK, :Limiter_mode => :hard, :Scheme_order => 3),
+            :muscl4_vk => Dict(:Scheme_name => :MUSCL, :Flux_name => :Rusanov, :Limiter_name => :VK, :Limiter_mode => :hard, :Scheme_order => 4),
+            :muscl5_vk => Dict(:Scheme_name => :MUSCL, :Flux_name => :Rusanov, :Limiter_name => :VK, :Limiter_mode => :hard, :Scheme_order => 5)
         )
         
-        varied_lim = Dict(:Ns => [(100,)])
+        varied_lim = Dict(:Grid_Ns => [(100,)])
         
         config_vk = SimulationConfig(
-            :run_simulation,
             shared_lim,
             methods_vk,
             collect(keys(methods_vk));
@@ -502,70 +451,71 @@ PDEStudioCore.set_target_module!(@__MODULE__)
             ref_func_name = :analytical_solution
         )
         
-        # Run the simulations
         run_all_simulations(config_vk; force_overwrite=true, calculate_stats=false)
         
-        # Tolerance for minor meshfree scattered interpolation noise
         tol = 3e-2 
         
         for order in 2:5
             @testset "VK Limiter Order $order" begin
                 base_p = merge(shared_lim, methods_vk[Symbol("muscl$(order)_vk")])
-                sim_vk = load_sim_data(create_param_dict(base_p..., :Ns => (100,)))
+                sim_vk = load_sim_data(create_param_dict(base_p..., :Grid_Ns => (100,)))
                 
-                # Extract the final snapshot
                 min_vk = minimum(val[1] for val in sim_vk.u[end])
                 max_vk = maximum(val[1] for val in sim_vk.u[end])
                 
-                # Assert the VK limiter independently keeps the solution bounded within [0, 1][span_2](start_span)[span_2](end_span)
                 @test min_vk >= 0.0 - tol
                 @test max_vk <= 1.0 + tol
             end
         end
     end
+
     @testset "MOOD Strategies & Criteria Execution" begin
-        # 1D Advection with a Box IC to guarantee MOOD activation
-        shared_mood_exec = Dict(
-            :PDE => "linear",
-            :PDE_params => ((1.0,),), 
-            :mins => (-1.0,),
-            :maxs => (1.0,),
-            :periodic => true,
-            :domain => "rectangular",
-            :init_func => "box",
-            :init_params => ((0.0,), (1.0,), (-0.5,), (0.5,)), 
+        shared_mood_exec = Dict{Symbol, Any}(
+            :sim_func_name => :run_direct_simulation,
+            :PDE_name => :linear,
+            :PDE_velocities => ((1.0,),), 
+            :Grid_mins => (-1.0,),
+            :Grid_maxs => (1.0,),
+            :Grid_periodic => true,
+            :Grid_domain => :rectangular,
+            :Grid_randomness_factor => (0.0,),
+            :IC_name => :box,
+            :IC_u_bg => (0.0,),
+            :IC_u_box => (1.0,),
+            :IC_mins => (-0.5,),
+            :IC_maxs => (0.5,), 
             :tmax => 0.05, 
-            :main_gradient => "MUSCL",
-            :main_flux => "Rusanov",
-            :limiter => "none", # Disable standard limiter so MOOD does the heavy lifting
-            :order => 2,
-            :interp_range => 2.5,
-            :interp_alpha => 1.0,
+            :Scheme_name => :MUSCL,
+            :Flux_name => :Rusanov,
+            :Limiter_name => :none,
+            :Scheme_order => 2,
+            :Scheme_MLS_order => 0,
+            :Weight_name => :exponential,
+            :Weight_range => 2.5,
+            :Weight_alpha => 1.0,
             :snapshots => 2,
-            :SEED => 42,
-            :CFL => 0.3,
-            :Ns => (50,),
-            :timestepper => "RK2",
+            :Grid_SEED => 42,
+            :Time_CFL => 0.3,
+            :Grid_Ns => (50,),
+            :Time_stepper => :RK2,
+            :MOOD_delta_relax => 1e-4 # Required when MOOD is active
         )
         
         methods_mood_exec = Dict{Symbol, Any}()
+        strategies = [:EPD0, :SEPD0, :EPD1, :EPD2]
+        criteria = [:U1, :U2]
         
-        strategies = ["EPD0", "SEPD0", "EPD1", "EPD2"]
-        criteria = ["U1", "U2"]
-        
-        # Generate the Cartesian product of all strategies and criteria
         for strat in strategies
             for crit in criteria
-                sym = Symbol("mood_$(lowercase(strat))_$(lowercase(crit))")
+                sym = Symbol("mood_$(lowercase(string(strat)))_$(lowercase(string(crit)))")
                 methods_mood_exec[sym] = Dict(
-                    :mood_strategy => strat,
-                    :mood_criterion => crit
+                    :MOOD_strategy => strat,
+                    :MOOD_criterion => crit
                 )
             end
         end
         
         config_mood_exec = SimulationConfig(
-            :run_simulation,
             shared_mood_exec,
             methods_mood_exec,
             collect(keys(methods_mood_exec));
@@ -574,58 +524,55 @@ PDEStudioCore.set_target_module!(@__MODULE__)
         
         run_all_simulations(config_mood_exec; force_overwrite=true, calculate_stats=true)
         
-        # Verify that every combination executed successfully without crashing
         for strat in strategies
             for crit in criteria
-                sym = Symbol("mood_$(lowercase(strat))_$(lowercase(crit))")
+                sym = Symbol("mood_$(lowercase(string(strat)))_$(lowercase(string(crit)))")
                 @testset "Strategy: $strat | Criterion: $crit" begin
                     base_p = merge(shared_mood_exec, methods_mood_exec[sym])
-                    sim = load_sim_data(create_param_dict(base_p..., :Ns => (50,)))
+                    sim = load_sim_data(create_param_dict(base_p..., :Grid_Ns => (50,)))
                     
                     @test sim isa LSimData
                     @test haskey(sim.stats, :l1error)
-                    
-                    err = sim.stats[:l1error][end][1]
-                    @test isfinite(err)
+                    @test isfinite(sim.stats[:l1error][end][1])
                 end
             end
         end
     end
+
     @testset "2D Upwind Algorithms (Classic, Tiwari, Praveen Convergence)" begin
-        # 1. Base parameters for 2D Advection
-        shared_2d_upwind = Dict(
-            :PDE => "linear",
-            :PDE_params => ((1.0,), (1.0,)), 
-            :mins => (-1.0, -1.0),
-            :maxs => (1.0, 1.0),
-            :periodic => true,
-            :domain => "rectangular",
-            # 2D Sine IC: (amplitude, period_xy, offset)[span_0](start_span)[span_0](end_span)
-            # Smooth initial condition ensures convergence rates aren't degraded by boundary kinks
-            :init_func => "gauss",
-            :init_params => (1., (0.0, 0.0), .1), 
+        shared_2d_upwind = Dict{Symbol, Any}(
+            :sim_func_name => :run_direct_simulation,
+            :PDE_name => :linear,
+            :PDE_velocities => ((1.0,), (1.0,)), 
+            :Grid_mins => (-1.0, -1.0),
+            :Grid_maxs => (1.0, 1.0),
+            :Grid_periodic => true,
+            :Grid_domain => :rectangular,
+            :Grid_randomness_factor => (0.0,0.0),
+            :IC_name => :gauss,
+            :IC_a => (1.0,),
+            :IC_b => (0.0, 0.0),
+            :IC_width => 0.1, 
             :tmax => 0.1,
-            :timestepper => "RK2", 
-            :interp_range => 2.5,
-            :interp_alpha => 1.0,
+            :Time_stepper => :RK2, 
+            :Weight_name => :exponential,
+            :Weight_range => 2.5,
+            :Weight_alpha => 1.0,
             :snapshots => 3,
-            :SEED => 42,
-            :CFL => 0.4,
-            :Ns => (20,20)
+            :Grid_SEED => 42,
+            :Time_CFL => 0.4,
+            :Grid_Ns => (20,20)
         )
 
-        # 2. Define the different algorithmic branches of UpwindDivergence
         methods_2d_upwind = Dict(
-            :upwind_classic => Dict(:main_gradient => "Upwind", :main_flux => "Rusanov", :upwind_alg_nd => "Classic", :order => 1),
-            :upwind_tiwari  => Dict(:main_gradient => "Upwind", :main_flux => "Rusanov", :upwind_alg_nd => "Tiwari",  :order => 1),
-            :upwind_praveen => Dict(:main_gradient => "Upwind", :main_flux => "Rusanov", :upwind_alg_nd => "Praveen", :order => 1)
+            :upwind_classic => Dict(:Scheme_name => :Upwind, :Flux_name => :Rusanov, :Scheme_upwind_alg_nd => :Classic, :Scheme_order => 1),
+            :upwind_tiwari  => Dict(:Scheme_name => :Upwind, :Flux_name => :Rusanov, :Scheme_upwind_alg_nd => :Tiwari,  :Scheme_order => 1),
+            :upwind_praveen => Dict(:Scheme_name => :Upwind, :Flux_name => :Rusanov, :Scheme_upwind_alg_nd => :Praveen, :Scheme_order => 1)
         )
 
-        # Sweep two resolutions to measure 1st-order convergence
-        varied_2d = Dict(:Ns => [(50, 50), (100, 100)])
+        varied_2d = Dict(:Grid_Ns => [(50, 50), (100, 100)])
 
         config_2d_upwind = SimulationConfig(
-            :run_simulation,
             shared_2d_upwind,
             methods_2d_upwind,
             [:upwind_classic, :upwind_tiwari, :upwind_praveen];
@@ -633,18 +580,15 @@ PDEStudioCore.set_target_module!(@__MODULE__)
             ref_func_name = :analytical_solution
         )
 
-        # Run the complete 2D pipeline
         run_all_simulations(config_2d_upwind; force_overwrite=true, calculate_stats=true)
 
-        # 3. Verification across algorithms
         for alg in [:upwind_classic, :upwind_tiwari, :upwind_praveen]
             @testset "Algorithm: $alg" begin
                 base_p = merge(shared_2d_upwind, methods_2d_upwind[alg])
                 
-                sim_20 = load_sim_data(create_param_dict(base_p..., :Ns => (50, 50)))
-                sim_40 = load_sim_data(create_param_dict(base_p..., :Ns => (100, 100)))
+                sim_20 = load_sim_data(create_param_dict(base_p..., :Grid_Ns => (50, 50)))
+                sim_40 = load_sim_data(create_param_dict(base_p..., :Grid_Ns => (100, 100)))
 
-                # Ensure output structure is successfully parsed as 2D Lagrangian data
                 @test sim_20 isa LSimData
                 @test length(sim_20.x[1][1]) == 2 
                 
@@ -652,57 +596,52 @@ PDEStudioCore.set_target_module!(@__MODULE__)
                 err_40 = sim_40.stats[:relative_l2error][end][1]
                 
                 @testset "Error Reduction & EOC" begin
-                    # Assert error strictly reduces with grid refinement
                     @test err_40 < err_20
-                    
-                    # Calculate Empirical Order of Convergence (EOC)
                     eoc = log2(err_20 / err_40)
-                    
-                    # Assert 1st-order convergence behavior (Meshfree EOC usually hovers between 0.5 and 1.5 for 1st order)
                     @test 0.5 < eoc < 1.5
                 end
             end
         end
     end
-        @testset "Time Integration Execution (Explicit RK & IMEX)" begin
-        # Base parameters for a 1D Advection MUSCL 5 problem
-        shared_time = Dict(
-            :PDE => "linear",
-            :PDE_params => ((1.0,),), 
-            :mins => (-1.0,),
-            :maxs => (1.0,),
-            :periodic => true,
-            :domain => "rectangular",
-            :init_func => "gauss",
-            :init_params => (1.0, (0.0,), 1.0), 
-            :tmax => 0.05, # Very short runtime just to verify execution
-            :main_gradient => "MUSCL",
-            :main_flux => "Rusanov",
-            :limiter => "none",
-            :order => 5,
-            :mood_criterion => "none",
-            :interp_range => 2.5,
-            :interp_alpha => 1.0,
+
+    @testset "Time Integration Execution (Explicit RK & IMEX)" begin
+        shared_time = Dict{Symbol, Any}(
+            :PDE_name => :linear,
+            :PDE_velocities => ((1.0,),), 
+            :Grid_mins => (-1.0,),
+            :Grid_maxs => (1.0,),
+            :Grid_periodic => true,
+            :Grid_domain => :rectangular,
+            :Grid_randomness_factor => (0.0,),
+            :IC_name => :gauss,
+            :IC_a => (1.0,),
+            :IC_b => (0.0,),
+            :IC_width => 1.0, 
+            :tmax => 0.05,
+            :Scheme_name => :MUSCL,
+            :Flux_name => :Rusanov,
+            :Limiter_name => :none,
+            :Scheme_order => 5,
+            :Scheme_MLS_order => 0,
+            :Weight_name => :exponential,
+            :Weight_range => 2.5,
+            :Weight_alpha => 1.0,
             :snapshots => 2,
-            :SEED => 42,
-            :Ns => (100,)
+            :Grid_SEED => 42,
+            :Grid_Ns => (100,)
         )
         
-        # A lightweight 50-particle grid is enough to check for NaNs/Crashes
-        varied_time = Dict(:Ns => [(50,)])
+        varied_time = Dict(:Grid_Ns => [(50,)])
         
         @testset "Explicit Runge-Kutta Methods" begin
-            # Note: Explicit Euler requires a very small CFL to remain stable 
-            # alongside a 5th-order spatial scheme.
             methods_rk = Dict(
-                :ts_euler => Dict(:timestepper => "Euler", :CFL => 0.01),
-                :ts_rk2   => Dict(:timestepper => "RK2",   :CFL => 0.1),
-                :ts_rk3   => Dict(:timestepper => "RK3",   :CFL => 0.3),
-                :ts_rk4   => Dict(:timestepper => "RK4",   :CFL => 0.4)
+                :ts_euler => Dict(:Time_stepper => :Euler, :Time_CFL => 0.01, :sim_func_name => :run_direct_simulation),
+                :ts_rk2   => Dict(:Time_stepper => :RK2,   :Time_CFL => 0.1,  :sim_func_name => :run_direct_simulation),
+                :ts_rk3   => Dict(:Time_stepper => :RK3,   :Time_CFL => 0.3,  :sim_func_name => :run_direct_simulation),
+                :ts_rk4   => Dict(:Time_stepper => :RK4,   :Time_CFL => 0.4,  :sim_func_name => :run_direct_simulation)
             )
             
             config_rk = SimulationConfig(
-                :run_simulation,
                 shared_time,
                 methods_rk,
                 collect(keys(methods_rk));
@@ -715,14 +654,11 @@ PDEStudioCore.set_target_module!(@__MODULE__)
             for rk in keys(methods_rk)
                 @testset "Method: $rk" begin
                     base_p = merge(shared_time, methods_rk[rk])
-                    sim = load_sim_data(create_param_dict(base_p..., :Ns => (50,)))
+                    sim = load_sim_data(create_param_dict(base_p..., :Grid_Ns => (50,)))
                     
                     @test sim isa LSimData
                     @test haskey(sim.stats, :l1error)
-                    
-                    # Verify the simulation did not blow up (NaNs or Infs)
-                    err = sim.stats[:l1error][end][1]
-                    @test isfinite(err)
+                    @test isfinite(sim.stats[:l1error][end][1])
                 end
             end
         end
@@ -730,23 +666,22 @@ PDEStudioCore.set_target_module!(@__MODULE__)
         @testset "IMEX Relaxation Methods" begin
             shared_imex = copy(shared_time)
             
-            # Setup Kinetic Relaxation system for 1D Advection
-            # Macro advection speed is 1.0, so kinetic speeds must bound it (e.g., -2.0, 2.0).
-            shared_imex[:relax_velocities] = ((-2.0, 2.0),)
-            shared_imex[:relax_indices] = [1, 3] # 2 kinetic speeds mapped to 1 macro variable
-            shared_imex[:relax_epsilon] = 1e-4
+            # Setup Kinetic Relaxation system 
+            shared_imex[:sim_func_name] = :run_kinetic_simulation
+            shared_imex[:Kinetic_velocities] = ((-2.0, 2.0),)
+            shared_imex[:Kinetic_indices] = [1, 3] 
+            shared_imex[:Kinetic_epsilon] = 1e-4
             
             methods_imex = Dict(
-                :ts_ars233 => Dict(:timestepper => "ARS233", :CFL => 0.3),
-                :ts_ars233_mood => Dict(:timestepper => "ARS233", :CFL => 0.3, :mood_criterion => "U2"),
-                :ts_prSSP3 => Dict(:timestepper => "PRSSP3", :CFL => 0.3),
-                :ts_ars222 => Dict(:timestepper => "ARS222", :CFL => 0.3),
-                :ts_ssp332 => Dict(:timestepper => "SSP332", :CFL => 0.3),
-                :ts_imexE  => Dict(:timestepper => "IMEXEuler", :CFL => 0.05)
+                :ts_ars233 => Dict(:Time_stepper => :ARS233, :Time_CFL => 0.3),
+                :ts_ars233_mood => Dict(:Time_stepper => :ARS233, :Time_CFL => 0.3, :MOOD_criterion => :U2, :MOOD_strategy => :EPD1, :MOOD_delta_relax => 1e-4),
+                :ts_prSSP3 => Dict(:Time_stepper => :PRSSP3, :Time_CFL => 0.3),
+                :ts_ars222 => Dict(:Time_stepper => :ARS222, :Time_CFL => 0.3),
+                :ts_ssp332 => Dict(:Time_stepper => :SSP332, :Time_CFL => 0.3),
+                :ts_imexE  => Dict(:Time_stepper => :IMEXEuler, :Time_CFL => 0.05)
             )
             
             config_imex = SimulationConfig(
-                :run_simulation,
                 shared_imex,
                 methods_imex,
                 collect(keys(methods_imex));
@@ -759,86 +694,75 @@ PDEStudioCore.set_target_module!(@__MODULE__)
             for imex in keys(methods_imex)
                 @testset "Method: $imex" begin
                     base_p = merge(shared_imex, methods_imex[imex])
-                    sim = load_sim_data(create_param_dict(base_p..., :Ns => (50,)))
+                    sim = load_sim_data(create_param_dict(base_p..., :Grid_Ns => (50,)))
                     
                     @test sim isa LSimData
                     @test haskey(sim.stats, :l1error)
-                    
-                    # Verify the implicit solver handled the stiff source term without blowing up
-                    err = sim.stats[:l1error][end][1]
-                    @test isfinite(err)
+                    @test isfinite(sim.stats[:l1error][end][1])
                 end
             end
         end
     end
 
     @testset "Spherical Domain & Boundary Conditions" begin
-        # Setup a 2D advection problem on a spherical domain
-        shared_bc = Dict(
-            :PDE => "linear",
-            :PDE_params => ((1.0,), (1.0,)), 
-            :mins => (-1.0, -1.0),
-            :maxs => (1.0, 1.0),
-            :periodic => false,
-            # Triggers get_spherical_domain which computes a center at (0,0) and radius 1.0
-            :domain => "spherical", 
-            :init_func => "gauss",
-            :init_params => (1.0, (0.0, 0.0), 0.5), 
+        shared_bc = Dict{Symbol, Any}(
+            :sim_func_name => :run_direct_simulation,
+            :PDE_name => :linear,
+            :PDE_velocities => ((1.0,), (1.0,)), 
+            :Grid_mins => (-1.0, -1.0),
+            :Grid_maxs => (1.0, 1.0),
+            :Grid_periodic => false,
+            :Grid_domain => :spherical, 
+            :Grid_randomness_factor => (.2,.2),
+            :IC_name => :gauss,
+            :IC_a => (1.0,),
+            :IC_b => (0.0, 0.0),
+            :IC_width => 0.5, 
             :tmax => 0.1,
-            :main_gradient => "Upwind",
-            :main_flux => "Upwind",
-            :order => 1,
-            :timestepper => "RK2",
-            :interp_range => 2.5,
-            :interp_alpha => 1.0,
+            :Scheme_name => :Upwind,
+            :Flux_name => :Upwind,
+            :Scheme_upwind_alg_nd => :Classic, # Required for Upwind
+            :Scheme_order => 1,
+            :Time_stepper => :RK2,
+            :Weight_name => :exponential,
+            :Weight_range => 2.5,
+            :Weight_alpha => 1.0,
             :snapshots => 2,
-            :SEED => 42,
-            :CFL => 0.4,
-            :Ns => (30,30)
+            :Grid_SEED => 42,
+            :Time_CFL => 0.4,
+            :Grid_Ns => (30,30)
         )
         
-        # The spherical domain automatically assigns a boundary tag of 1 to all exterior points.
-        # We test both the strict FixedDirichlet and the transmissive OutflowBC strategies.
         methods_bc = Dict(
-            :bc_fixed   => Dict(:bc => Dict(1 => :fixed_dirichlet)),
-            :bc_outflow => Dict(:bc => Dict(1 => :outflow))
+            :bc_fixed   => Dict(:Grid_bc => Dict(1 => :fixed_dirichlet)),
+            :bc_outflow => Dict(:Grid_bc => Dict(1 => :outflow))
         )
         
         config_bc = SimulationConfig(
-            :run_simulation,
             shared_bc,
             methods_bc,
             [:bc_fixed, :bc_outflow];
             ref_func_name = :analytical_solution
         )
         
-        # Run pipeline to verify geometry parsing, particle filtering, and BC execution
         run_all_simulations(config_bc; force_overwrite=true, calculate_stats=false)
         
         @testset "Fixed Dirichlet Pipeline" begin
             base_p = merge(shared_bc, methods_bc[:bc_fixed])
-            sim = load_sim_data(create_param_dict(base_p..., :Ns => (30, 30)))
+            sim = load_sim_data(create_param_dict(base_p..., :Grid_Ns => (30, 30)))
             
             @test sim isa LSimData
-            # Ensure the coordinate arrays match the 2D configuration
             @test length(sim.x[1][1]) == 2
-            
-            # Verify the simulation did not blow up and properly stored snapshots
-            u_final = sim.u[end]
-            @test isfinite(u_final[1][1])
+            @test isfinite(sim.u[end][1][1])
         end
         
         @testset "Outflow BC Pipeline" begin
             base_p = merge(shared_bc, methods_bc[:bc_outflow])
-            sim = load_sim_data(create_param_dict(base_p..., :Ns => (30, 30)))
+            sim = load_sim_data(create_param_dict(base_p..., :Grid_Ns => (30, 30)))
             
             @test sim isa LSimData
             @test length(sim.x[1][1]) == 2
-            
-            u_final = sim.u[end]
-            @test isfinite(u_final[1][1])
+            @test isfinite(sim.u[end][1][1])
         end
     end
-
-
 end

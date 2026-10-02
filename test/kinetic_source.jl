@@ -1,6 +1,3 @@
-struct NoSourceTerm <: AbstractSourceTerm end
-abstract type KineticSourceTerm <: AbstractSourceTerm end
-
 """
     Kin2Macro{NM, NK}
 
@@ -84,7 +81,7 @@ end
 # NON-LOCAL RELAXATION SOURCE TERM
 # =========================================================================
 
-mutable struct NonLocalRelaxationSourceTerm{D, NM, NK, T, MEQ <: HyperbolicPDE} <: KineticSourceTerm
+mutable struct NonLocalRelaxationSourceTerm{D, NM, NK, T, MEQ <: HyperbolicPDE} <: AbstractImplicitSourceTerm
     km::Kin2Macro{NM, NK}
     macro_eq::MEQ
     inv_epsilon::T
@@ -195,7 +192,68 @@ end
     end)
 end
 
-# Fulfill the core API for kinetic relaxation speeds
-@inline function kinetic_wave_speed(eq::LinearAdvection{D, NK, T, R}, d::Int, k::Int) where {D, NK, T, R}
-    return eq.vel[d][k]
+# =========================================================================
+# 1. SET INITIAL CONDITIONS
+# =========================================================================
+
+# --- LOCAL Relaxation Initialization ---
+function set_initial_conditions!(
+    pg::ParticleGrid{D, NK}, 
+    st::RelaxationSourceTerm{D, NM, NK},     
+    IC::InitialCondition,
+    eq_macro::HyperbolicPDE{D}
+) where {D, NM, NK}
+    
+    for p_idx in 1:pg.meta.N
+        u_val = IC(pg.core.positions[p_idx]) # Macro State{NM}
+        flux_vals = flux(eq_macro, u_val)    # Flux{D, NM}
+        
+        # Build the initial kinetic SVector component-by-component
+        pg.rhos[p_idx] = State{NK}(ntuple(Val(NK)) do k
+            m_idx = st.km(k)
+            f_dot_inv_lambda = flux_dot(flux_vals, m_idx, st.scaled_inv_speeds[k])
+            
+            # Inline Maxwellian Initialization
+            return st.coefficients[m_idx] * (u_val[m_idx] + f_dot_inv_lambda)
+        end)
+    end
+    return nothing
+end
+
+# --- NON-LOCAL Relaxation Initialization ---
+function set_initial_conditions!(
+    pg::ParticleGrid{D, NK},
+    st::NonLocalRelaxationSourceTerm{D, NM, NK},
+    IC::InitialCondition,
+    eq_macro::HyperbolicPDE{D}
+) where {D, NM, NK}
+    
+    N_particles = pg.meta.N
+    
+    # 1. Initialize grid to LOCAL equilibrium (V_k = c_m * U_m)
+    for p_idx in 1:N_particles
+        u_val = IC(pg.core.positions[p_idx]) 
+        pg.rhos[p_idx] = State{NK}(ntuple(Val(NK)) do k
+            st.coefficients[st.km(k)] * u_val[st.km(k)]
+        end)
+    end
+
+    # 2. Compute the true initial potential T_0 using current grid state
+    update_nonlocal_potential!(st, pg.rhos, pg, eq_macro)
+
+    # 3. Re-initialize kinetic grids to the NON-LOCAL equilibrium: V_0 = M(U_0, T_0)
+    for p_idx in 1:N_particles
+        u_val = IC(pg.core.positions[p_idx])
+        
+        pg.rhos[p_idx] = State{NK}(ntuple(Val(NK)) do k
+            m_idx = st.km(k)
+            T_val = st.T_potential[p_idx, m_idx]
+            T_dot_inv_lambda = T_val * st.scaled_inv_speeds[k][1]
+            
+            return st.coefficients[m_idx] * (u_val[m_idx] + T_dot_inv_lambda)
+        end)
+    end
+    
+    @info "Initialized Non-Local Equilibrium (Max Potential: $(maximum(abs.(st.T_potential))))"
+    return nothing
 end

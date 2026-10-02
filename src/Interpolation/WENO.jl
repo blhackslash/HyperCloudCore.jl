@@ -1,68 +1,51 @@
 export WENO
 
 """
-    WENO{D, M, T, I <: Interpolator}
+    WENO{D, M, T, MAX_ORDER, INTERPS}
 
 A divergence interpolator executing a Weighted Essentially Non-Oscillatory (WENO) reconstruction scheme.
-
-# Fields
-- `order::Int`: The numerical order of the interpolation.
-- `interpolator::I`: The underlying `Interpolator` instance.
+Dynamically tracks polynomial limits via `ParticleGridCore` and supports universal order degradation.
 """
-struct WENO{D, M, T, I <: Interpolator} <: DivergenceInterpolator
-    order::Int
-    interpolator::I
+struct WENO{D, M, T, MAX_ORDER, INTERPS} <: DivergenceInterpolator
+    interpolators::INTERPS
 end
+
 # =========================================================================
 # STATELESS WENO API
 # =========================================================================
 
 @inline update_size!(::WENO, ::Int) = nothing
 @inline update_content!(::WENO, args...) = nothing
-@inline _extract_order(g::WENO) = g.order
-"""
-    WENO(::Type{T}, dimension::Int, M::Int, order::Int; flux=RusanovFlux())
-
-Constructs a `WENO` divergence evaluator.
-
-# Details
-- Asserts that the `order` is at least 2, which is strictly required to capture the second derivatives used for the smoothness indicators.
-- Initializes the corresponding moving least squares interpolator for the spatial evaluations.
-"""
-function WENO(::Type{T}, dimension::Int, M::Int, order::Int; flux::NumericalFluxFunction = RusanovFlux()) where {T}
-    @assert order >= 2 "WENO requires order >= 2 for second derivatives."
-    
-    interpolator = Interpolator{dimension, order, 1}()
-    return WENO{dimension, M, T, typeof(interpolator)}(order, interpolator)
-end
+@inline _extract_order(::WENO{D, M, T, MAX_ORDER}) where {D, M, T, MAX_ORDER} = MAX_ORDER
 
 # =========================================================================
 # UNIVERSAL N-DIMENSIONAL WENO FUNCTOR
 # =========================================================================
-"""
-    (weno::WENO)(eq::HyperbolicPDE, i::Int, f_i, nb_slice, pg, ib)
 
-The primary functor execution for computing the N-dimensional WENO divergence update.
-
-# Details
-- Evaluates a fully centered neighborhood stencil to calculate the baseline central derivative (`resC`) and its associated smoothness indicator (`smoothC`).
-- The central smoothness indicator uses a scale weighting of `dx^2` for the first spatial dimensions and `dx^4` for higher-order basis terms.
-- Iterates over each spatial dimension to construct a strictly directional, upwind-biased stencil determined by the sign of the local velocity.
-- Computes the directional smoothness indicator (`smoothS`). If the constructed directional stencil lacks sufficient neighbors, it automatically falls back to utilizing the central derivative for that specific dimension.
-- Dynamically blends the central and directional stencils using non-linear weights (`wC` and `wS`) that are inversely proportional to their computed smoothness indicators.
-"""
-function (weno::WENO{D, M, T, I})(
+function (weno::WENO{D, M, T, MAX_ORDER, INTERPS})(
     eq::HyperbolicPDE, i::Int, f_i::State{M, T}, nb_slice::UnitRange{Int},       
     pg::ParticleGrid{D, M, T}, ib::InteractionBuffer{D, M, T}    
-) where {D, M, T, I}
+) where {D, M, T, MAX_ORDER, INTERPS}
 
     vel = velocity(eq, f_i, D)
-    interp = weno.interpolator
     dist_all = get_distances(pg)
     w_all = get_weights(pg)
 
     num_nb = length(nb_slice)
-    if num_nb < weno.order; return zero(State{M, T}); end
+    p_order = pg.core.particle_orders[i]
+
+    # Dynamically degrade order if the central neighborhood is starved
+    while p_order > 1
+        req_nb = typeof(basis_length(Val(D), Val(p_order))).parameters[1]
+        if num_nb >= req_nb
+            break
+        end
+        p_order -= 1
+    end
+
+    if num_nb < typeof(basis_length(Val(D), Val(p_order))).parameters[1]
+        return zero(State{M, T})
+    end
 
     scale_val = minimum(pg.meta.dx)
     dx2 = scale_val^2
@@ -72,7 +55,16 @@ function (weno::WENO{D, M, T, I})(
     # --- 1. Central Stencil Calculation ---
     @inbounds for global_idx in nb_slice; ib.mask[global_idx] = true; end
     
-    resC = interp(nb_slice, dist_all, w_all, ib.df, ib.mask; scale=scale_val)
+    # FIX: Degree maps directly to p_order for WENO
+    B_LEN_VAL = typeof(basis_length(Val(D), Val(p_order))).parameters[1]
+    
+    resC_raw = dispatch_interpolator(
+        weno.interpolators, p_order, 
+        nb_slice, dist_all, w_all, ib.df, ib.mask, scale_val, Val(B_LEN_VAL), State{M, T}
+    )
+    
+    # Truncate to just the required spatial components for the indicator
+    resC = SVector{D, State{M, T}}(ntuple(d -> resC_raw[d], Val(D)))
 
     smoothC = zero(State{M, T})
     @inbounds for k in 1:length(resC)
@@ -98,12 +90,27 @@ function (weno::WENO{D, M, T, I})(
             end
         end
 
-        if stencil_size < weno.order
+        p_order_d = p_order
+        while p_order_d > 1
+            req_nb = typeof(basis_length(Val(D), Val(p_order_d))).parameters[1]
+            if stencil_size >= req_nb
+                break
+            end
+            p_order_d -= 1
+        end
+
+        if stencil_size < typeof(basis_length(Val(D), Val(p_order_d))).parameters[1]
             div_total += resC[d] * vel[d]
             continue
         end
 
-        resS = interp(nb_slice, dist_all, w_all, ib.df, ib.mask; scale=scale_val)
+        # FIX: Degree maps directly to p_order_d for the directional stencil
+        B_LEN_D_VAL = typeof(basis_length(Val(D), Val(p_order_d))).parameters[1]
+        resS_raw = dispatch_interpolator(
+            weno.interpolators, p_order_d, 
+            nb_slice, dist_all, w_all, ib.df, ib.mask, scale_val, Val(B_LEN_D_VAL), State{M, T}
+        )
+        resS = SVector{D, State{M, T}}(ntuple(k -> resS_raw[k], Val(D)))
 
         smoothS = zero(State{M, T})
         @inbounds for k in 1:length(resS)

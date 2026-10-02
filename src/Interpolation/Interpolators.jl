@@ -1,5 +1,6 @@
 
-export Interpolator
+export Interpolator, dispatch_interpolator, compute_dynamic_divergence, ConstantReconstruction, basis_length
+
 """
     Interpolator{D, IO, DO}()
 
@@ -15,6 +16,62 @@ struct Interpolator{D, IO, DO}
         new{D, IO, DO}()
     end
 end
+
+struct ConstantReconstruction end
+
+# =========================================================================
+# UNIVERSAL DYNAMIC DISPATCH ROUTERS (Zero-Allocation)
+# =========================================================================
+
+@inline _pad_grad(g::SVector{L, T}, ::Val{MAX_L}) where {L, MAX_L, T} = SVector{MAX_L, T}(ntuple(i -> i <= L ? g[i] : zero(T), Val(MAX_L)))
+
+# --- 1. Standard (Unmasked) Evaluators used by MUSCL & Central ---
+@inline _compute_raw_grad(::ConstantReconstruction, nb_slice, dist_all, w_all, df, scale, ::Val{MAX_B_LEN}, ::Type{State{M, T}}) where {MAX_B_LEN, M, T} = zero(SVector{MAX_B_LEN, State{M, T}})
+
+@inline function _compute_raw_grad(interp::Interpolator, nb_slice, dist_all, w_all, df, scale, ::Val{MAX_B_LEN}, ::Type{State{M, T}}) where {MAX_B_LEN, M, T}
+    raw = interp(nb_slice, dist_all, w_all, df; scale=scale)
+    return _pad_grad(raw, Val(MAX_B_LEN))
+end
+
+# --- 2. Masked Evaluators used by WENO & Upwind(Tiwari) ---
+@inline _compute_raw_grad(::ConstantReconstruction, nb_slice, dist_all, w_all, df, mask::AbstractVector{Bool}, scale, ::Val{MAX_B_LEN}, ::Type{State{M, T}}) where {MAX_B_LEN, M, T} = zero(SVector{MAX_B_LEN, State{M, T}})
+
+@inline function _compute_raw_grad(interp::Interpolator, nb_slice, dist_all, w_all, df, mask::AbstractVector{Bool}, scale, ::Val{MAX_B_LEN}, ::Type{State{M, T}}) where {MAX_B_LEN, M, T}
+    raw = interp(nb_slice, dist_all, w_all, df, mask; scale=scale)
+    return _pad_grad(raw, Val(MAX_B_LEN))
+end
+
+# --- 3. The Generated Dispatchers ---
+@generated function dispatch_interpolator(interps::Tuple, order::Int, args...)
+    N = length(interps.parameters)
+    expr = :(error("Order out of bounds"))
+    for i in N:-1:1
+        expr = :(order == $i ? _compute_raw_grad(interps[$i], args...) : $expr)
+    end
+    return expr
+end
+
+@generated function compute_dynamic_divergence(interps::Tuple, div_idx::Int, nb_slice, dist_all, w_all, df_flux, df_scratch, scale)
+    N = length(interps.parameters)
+    expr = :(interps[$N](nb_slice, dist_all, w_all, df_flux, df_scratch; scale=scale))
+    
+    # CRITICAL FIX: The loop must go down to 1 to support 1st-order schemes 
+    # and deep polynomial starvation dynamically.
+    for i in (N-1):-1:1
+        expr = :(div_idx == $i ? interps[$i](nb_slice, dist_all, w_all, df_flux, df_scratch; scale=scale) : $expr)
+    end
+    return expr
+end
+
+# --- 4. Constant Reconstruction Functor ---
+# CRITICAL FIX: Extract M and T securely from the strongly-typed flux array 
+# to guarantee a valid 0-state return, regardless of the dimension of `scale`.
+@inline function (::ConstantReconstruction)(
+    nb_slice, dist_all, w_all, df_flux::AbstractVector{Flux{D, M, T}}, df_scratch; scale
+) where {D, M, T}
+    return zero(State{M, T})
+end
+
 # =========================================================================
 # COMPILE-TIME METADATA HELPERS
 # =========================================================================
@@ -294,7 +351,6 @@ include("Central.jl")
 
 include("MUSCL.jl")
 include("Limiter.jl")
-include("MOOD.jl")
 
 include("Upwind.jl")
 
