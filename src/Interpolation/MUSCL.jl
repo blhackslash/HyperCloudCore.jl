@@ -32,11 +32,13 @@ end
 @inline _extract_order(::MUSCL{D, M, T, B_LEN, MAX_ORDER}) where {D, M, T, B_LEN, MAX_ORDER} = MAX_ORDER
 
 function MUSCL(
-    ::Type{T}, dimension::Int, M::Int, max_order::Int;
-    div_order::Int=0, limiter=NoLimiter(), flux=RusanovFlux()
+    ::Type{T}, dimension::Int, M::Int, max_order::Int, 
+    limiter, flux; 
+    div_order::Int=0
 ) where {T}
     @assert max_order >= 1 "MUSCL must have a maximum order of at least 1."
     @assert div_order >= 0 "Divergence order only supports 0 (adaptive) or positive values!"
+    
     if div_order > max_order; div_order = max_order; end
     
     max_degree = max(1, max_order - 1) 
@@ -48,7 +50,7 @@ function MUSCL(
     end
     
     return MUSCL{dimension, M, T, B_LEN, max_order, div_order, typeof(interps), typeof(limiter), typeof(flux)}(
-        interps, limiter, flux, SVector{B_LEN,State{M, T}}[]
+        interps, limiter, flux, SVector{B_LEN, State{M, T}}[]
     )
 end
 

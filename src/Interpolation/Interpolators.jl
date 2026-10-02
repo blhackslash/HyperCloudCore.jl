@@ -55,8 +55,6 @@ end
     N = length(interps.parameters)
     expr = :(interps[$N](nb_slice, dist_all, w_all, df_flux, df_scratch; scale=scale))
     
-    # CRITICAL FIX: The loop must go down to 1 to support 1st-order schemes 
-    # and deep polynomial starvation dynamically.
     for i in (N-1):-1:1
         expr = :(div_idx == $i ? interps[$i](nb_slice, dist_all, w_all, df_flux, df_scratch; scale=scale) : $expr)
     end

@@ -8,12 +8,9 @@ abstract type NonLinearPraveenAlgorithm <: UpwindAlgorithm end
 abstract type ClassicAlgorithm <: UpwindAlgorithm end 
 
 """
-    UpwindDivergence{D, M, T, MAX_ORDER, B_LEN, INTERPS, Algorithm <: UpwindAlgorithm, NF}
-
-A divergence interpolator executing upwind numerical schemes.
-Dynamically tracks polynomial limits via `ParticleGridCore` and supports universal order degradation.
+    UpwindDivergence{D, M, T, MAX_ORDER, DIV_ORDER, B_LEN, INTERPS, Algorithm <: UpwindAlgorithm, NF}
 """
-struct UpwindDivergence{D, M, T, MAX_ORDER, B_LEN, INTERPS, Algorithm <: UpwindAlgorithm, NF} <: DivergenceInterpolator
+struct UpwindDivergence{D, M, T, MAX_ORDER, DIV_ORDER, B_LEN, INTERPS, Algorithm <: UpwindAlgorithm, NF} <: DivergenceInterpolator
     interpolators::INTERPS
     flux::NF
 end
@@ -22,24 +19,51 @@ end
 @inline update_content!(::UpwindDivergence, args...) = nothing
 @inline _extract_order(::UpwindDivergence{D, M, T, MAX_ORDER}) where {D, M, T, MAX_ORDER} = MAX_ORDER
 
-#==============================================================================
-  UPWIND GRADIENT FUNCTORS
-==============================================================================#
+function UpwindDivergence(
+    ::Type{T}, dimension::Int, M::Int, order::Int, 
+    algType::Symbol, flux::NumericalFluxFunction; 
+    div_order::Int=0
+) where {T}
+    @assert order == 1 "Upwind evaluates piecewise-constant states and is strictly 1st order."
+    if div_order > order; div_order = order; end
+    
+    local alg_type
+    if algType === :Classic
+        alg_type = ClassicAlgorithm
+    elseif algType === :Tiwari
+        alg_type = TiwariAlgorithm
+        @assert M == 1 "Tiwari Algorithm only supports Scalar Equations."
+    elseif algType === :Praveen
+        alg_type = PraveenAlgorithm 
+        @assert M == 1 "Praveen Algorithm only supports Scalar Equations."
+    else
+        error("Algorithm type $algType not fully configured for workspace selection.")
+    end
+
+    B_LEN_VAL = basis_length(Val(dimension), Val(order))
+    B_LEN = typeof(B_LEN_VAL).parameters[1] 
+
+    interps = ntuple(Val(order)) do k
+        Interpolator{dimension, k, 1}()
+    end
+
+    return UpwindDivergence{dimension, M, T, order, div_order, B_LEN, typeof(interps), alg_type, typeof(flux)}(
+        interps, flux
+    )
+end
 
 # --- Classic Algorithm ---
-function (upwind::UpwindDivergence{D, M, T, MAX_ORDER, B_LEN, INTERPS, ClassicAlgorithm, NF})(
+function (upwind::UpwindDivergence{D, M, T, MAX_ORDER, DIV_ORDER, B_LEN, INTERPS, ClassicAlgorithm, NF})(
     eq::HyperbolicPDE, i::Int, f_i::State{M, T}, nb_slice::UnitRange{Int},       
     pg::ParticleGrid{D, M, T}, ib::InteractionBuffer{D, M, T}    
-) where {D, M, T, MAX_ORDER, B_LEN, INTERPS, NF}
+) where {D, M, T, MAX_ORDER, DIV_ORDER, B_LEN, INTERPS, NF}
     
     num_nb = length(nb_slice)
     p_order = pg.core.particle_orders[i]
 
     while p_order > 1
         req_nb = typeof(basis_length(Val(D), Val(p_order))).parameters[1]
-        if num_nb >= req_nb
-            break
-        end
+        if num_nb >= req_nb; break; end
         p_order -= 1
     end
     
@@ -62,8 +86,10 @@ function (upwind::UpwindDivergence{D, M, T, MAX_ORDER, B_LEN, INTERPS, ClassicAl
         ib.df_flux[global_idx] = F_num - F_i + nc_jump
     end
     
+    div_idx = DIV_ORDER == 0 ? p_order : min(DIV_ORDER, p_order)
+    
     div = compute_dynamic_divergence(
-        upwind.interpolators, p_order, 
+        upwind.interpolators, div_idx, 
         nb_slice, dist_all, get_weights(pg), 
         ib.df_flux, ib.df_scratch, pg.meta.dx
     )
@@ -72,10 +98,10 @@ function (upwind::UpwindDivergence{D, M, T, MAX_ORDER, B_LEN, INTERPS, ClassicAl
 end
 
 # --- Tiwari Algorithm ---
-function (upwind::UpwindDivergence{D, 1, T, MAX_ORDER, B_LEN, INTERPS, TiwariAlgorithm, NF})(
+function (upwind::UpwindDivergence{D, 1, T, MAX_ORDER, DIV_ORDER, B_LEN, INTERPS, TiwariAlgorithm, NF})(
     eq::HyperbolicPDE, i::Int, f_i::State{1, T}, nb_slice::UnitRange{Int}, 
     pg::ParticleGrid{D, 1, T}, ib::InteractionBuffer{D, 1, T} 
-) where {D, T, MAX_ORDER, B_LEN, INTERPS, NF}
+) where {D, T, MAX_ORDER, DIV_ORDER, B_LEN, INTERPS, NF}
 
     dist_all = get_distances(pg)
     w_all = get_weights(pg) 
@@ -101,9 +127,7 @@ function (upwind::UpwindDivergence{D, 1, T, MAX_ORDER, B_LEN, INTERPS, TiwariAlg
         p_order_d = p_order_base
         while p_order_d > 1
             req_nb = typeof(basis_length(Val(D), Val(p_order_d))).parameters[1]
-            if stencil_size >= req_nb
-                break
-            end
+            if stencil_size >= req_nb; break; end
             p_order_d -= 1
         end
 
@@ -111,17 +135,14 @@ function (upwind::UpwindDivergence{D, 1, T, MAX_ORDER, B_LEN, INTERPS, TiwariAlg
             return zero(State{1, T})
         end
         
-        scale_d = scale[d]
-        
-        # FIX: Degree maps directly to p_order_d
-        B_LEN_D_VAL = typeof(basis_length(Val(D), Val(p_order_d))).parameters[1]
+        div_idx_d = DIV_ORDER == 0 ? p_order_d : min(DIV_ORDER, p_order_d)
+        B_LEN_D_VAL = typeof(basis_length(Val(D), Val(div_idx_d))).parameters[1]
         
         raw_grad = dispatch_interpolator(
-            upwind.interpolators, p_order_d, 
-            nb_slice, dist_all, w_all, ib.df, ib.mask, scale_d, Val(B_LEN_D_VAL), State{1, T}
+            upwind.interpolators, div_idx_d, 
+            nb_slice, dist_all, w_all, ib.df, ib.mask, scale[d], Val(B_LEN_D_VAL), State{1, T}
         )
         
-        # The first derivatives perfectly align with the leading D components
         dF_dx = raw_grad[d]
         return dF_dx * vel_d
     end
@@ -130,10 +151,10 @@ function (upwind::UpwindDivergence{D, 1, T, MAX_ORDER, B_LEN, INTERPS, TiwariAlg
 end
 
 # --- Praveen Algorithm (Strictly 1st Order, Stateless) ---
-function (upwind::UpwindDivergence{2, 1, T, MAX_ORDER, B_LEN, INTERPS, PraveenAlgorithm, NF})(
+function (upwind::UpwindDivergence{2, 1, T, MAX_ORDER, DIV_ORDER, B_LEN, INTERPS, PraveenAlgorithm, NF})(
     eq::HyperbolicPDE, i::Int, f_i::State{1, T}, nb_slice::UnitRange{Int}, 
     pg::ParticleGrid{2, 1, T}, ib::InteractionBuffer{2, 1, T} 
-) where {T, MAX_ORDER, B_LEN, INTERPS, NF}
+) where {T, MAX_ORDER, DIV_ORDER, B_LEN, INTERPS, NF}
 
     vel_x = velocity(eq, f_i, 1)[1, 1]
     vel_y = velocity(eq, f_i, 2)[1, 1]
