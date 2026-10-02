@@ -17,10 +17,40 @@ end
 # =========================================================================
 
 """
-    MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER, INTERPS, L, NF}
+    MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER, INTERPS, L, NF} <: DivergenceInterpolator
+    MUSCL(::Type{T}, dimension::Int, M::Int, max_order::Int, limiter, flux; div_order::Int=0)
+    (muscl::MUSCL)(eq, i, f_i, nb_slice, pg, ib)
 
-A divergence interpolator executing MUSCL-type interface reconstruction and flux evaluation.
-Dynamically tracks particle polynomial limits strictly via `ParticleGridCore`.
+A divergence interpolator executing MUSCL-type interface reconstruction and flux evaluation. It dynamically tracks particle polynomial limits strictly via the underlying grid core.
+
+# Constructors
+
+    MUSCL(::Type{T}, dimension::Int, M::Int, max_order::Int, limiter, flux; div_order::Int=0)
+
+- `T`: The numeric type (e.g., `Float64`).
+- `dimension`: Spatial dimension.
+- `M`: Number of state components.
+- `max_order`: Maximum reconstruction order. Must be `≥ 1`.
+- `limiter`: The slope/gradient limiter applied during the pre-gather pass to enforce monotonicity.
+- `flux`: The numerical flux function used to resolve interface states.
+- `div_order`: Target order for the final divergence calculation (defaults to `0`, adapting to the maximum available order).
+
+# Callable / Functor
+
+    (muscl::MUSCL)(eq, i, f_i, nb_slice, pg, ib) -> State{M, T}
+
+Computes the divergence of the flux at particle `i`. Note that `MUSCL` relies on a pre-calculation pass (`update_content!`) to compute and limit the local gradients beforehand. The execution follows these steps:
+- Retrieves the pre-calculated, limited gradients for particle `i` and its neighbors.
+- Evaluates the reconstructed states at the midpoint between particles using distance-scaled spatial basis polynomials.
+- Safely blends the interface reconstruction by capping the polynomial degrees to the minimum effective order between interacting particles.
+- Resolves the interface using the provided numerical flux function and evaluates non-conservative jumps.
+- Computes the final divergence using the dynamically resolved divergence order.
+
+# Fields
+- `interpolators`: Pre-allocated tuple of interpolators up to `MAX_ORDER`, using `ConstantReconstruction` for the first-order base.
+- `limiter`: The assigned slope limiter.
+- `flux`: The associated numerical flux function (`NF`).
+- `gradients`: A pre-allocated vector storing the reconstructed, limited spatial gradients for all particles.
 """
 struct MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER, INTERPS, L, NF} <: DivergenceInterpolator
     interpolators::INTERPS

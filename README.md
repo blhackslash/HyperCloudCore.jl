@@ -100,7 +100,7 @@ rho_initial = [pg.rhos[i][1] for i in 1:pg.meta.N]
 # =========================================================================
 # 4. CONFIGURE NUMERICS
 # =========================================================================
-main_grad = UpwindDivergence(Float64, 2, 1, 1; flux=UpwindFlux(), algType="Classic")
+main_grad = UpwindDivergence(Float64, 2, 1, 1, UpwindFlux(), :Classic)
 tableau = RK3_SSP_Tableau(Float64)
 time_stepper = GeneralRKTimeStepper(eq, main_grad, tableau)
 

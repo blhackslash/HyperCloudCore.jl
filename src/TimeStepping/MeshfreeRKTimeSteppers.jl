@@ -1,12 +1,38 @@
 """
-    GeneralRKTimeStepper
+    GeneralRKTimeStepper{D, M, T, PDE, G, MO, EST} <: TimeStepper
+    GeneralRKTimeStepper(pde::HyperbolicPDE, div_interp, mood, all_sources::Tuple, tableau::RKButcherTableau)
+    (rk::GeneralRKTimeStepper)(eq::HyperbolicPDE, pg::ParticleGrid, time::Real, dt::Real)
 
-A standard explicit Runge-Kutta time integration orchestrator.
+A standard explicit Runge-Kutta time integration orchestrator. It couples the physical PDE with the spatial divergence interpolator, MOOD adaptive logic, and an explicit Butcher tableau.
 
-# Details
-- Couples the physical PDE with the spatial divergence interpolator and explicit Butcher tableau.
-- Manages an explicitly-typed tuple of `AbstractExplicitSourceTerm`s.
-- Pre-allocates a primary `K_stages` buffer matrix for intermediate derivative evaluations.
+# Constructors
+
+    GeneralRKTimeStepper(pde, div_interp, mood, all_sources, tableau)
+    GeneralRKTimeStepper(pde, div_interp, mood, explicit_sources, tableau)
+    GeneralRKTimeStepper(pde, div_interp, mood, tableau)
+
+- `pde`: The physical `HyperbolicPDE` governing the system.
+- `div_interp`: The chosen spatial divergence interpolator.
+- `mood`: The configured MOOD orchestrator for adaptive spatial order reduction.
+- `sources`: Source term tuples. If `all_sources` is passed, it automatically filters out implicit terms (issuing a warning) to retain only `AbstractExplicitSourceTerm`s.
+- `tableau`: An `RKButcherTableau` defining the explicit stage weights.
+
+# Callable / Functor
+
+    (rk::GeneralRKTimeStepper)(eq, pg, time, dt)
+
+Advances the particle grid `pg` forward in time by `dt` using an explicit Runge-Kutta method. The execution follows these steps:
+- Pre-allocates or resizes stage buffers to match the current particle count.
+- Iterates through the Runge-Kutta stages, computing explicit flux divergences and explicit source terms.
+- Evaluates the MOOD criteria after each stage evaluation and dynamically re-triggers divergence computations for particles that require order degradation (propagating halos).
+- Applies boundary conditions at intermediate stages and at the final time step.
+
+# Fields
+- `pde`, `divergence_interpolator`, `mood`, `explicit_sources`, `tableau`: Core structural components.
+- `rho_n`: State buffer at the beginning of the time step.
+- `rho_stage`: Buffer for the intermediate stage candidate state.
+- `K_stages`: A vector of state arrays storing the combined divergence and explicit source evaluations for each RK stage.
+- `int_buffer`: A shared `InteractionBuffer` for gathering neighbor states during flux evaluations.
 """
 struct GeneralRKTimeStepper{D, M, T, PDE <: HyperbolicPDE, G <: DivergenceInterpolator, MO <: MOOD, EST <: Tuple{Vararg{AbstractExplicitSourceTerm}}} <: TimeStepper
     pde::PDE

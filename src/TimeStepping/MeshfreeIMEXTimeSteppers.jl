@@ -1,12 +1,40 @@
 """
-    GeneralIMEXTimeStepper
+    GeneralIMEXTimeStepper{D, M, T, PDE, G, MO, EST, IST} <: TimeStepper
+    GeneralIMEXTimeStepper(pde::HyperbolicPDE, div_interp, mood, all_sources::Tuple, tableau::IMEXButcherTableau)
+    (imex::GeneralIMEXTimeStepper)(eq::HyperbolicPDE, pg::ParticleGrid, time::Real, dt::Real)
 
-A comprehensive IMEX time integration orchestrator.
+A comprehensive IMEX (Implicit-Explicit) time integration orchestrator designed for systems requiring implicit treatment of stiff sources alongside explicit flux evaluations. 
 
-# Details
-- Manages the physical PDE, spatial divergence interpolator, and strongly-typed explicit/implicit source term tuples.
-- Automatically resolves the system dimensions (`M` and `D`) natively from the provided physical/kinetic PDE.
-- Allocates and maintains explicit (`K_E_stages`) and implicit (`K_I_stages`) evaluation buffers for all intermediate sub-steps.
+# Constructors
+
+    GeneralIMEXTimeStepper(pde, div_interp, mood, all_sources, tableau)
+    GeneralIMEXTimeStepper(pde, div_interp, mood, explicit_sources, implicit_sources, tableau)
+    GeneralIMEXTimeStepper(pde, div_interp, mood, tableau)
+
+- `pde`: The physical `HyperbolicPDE` governing the system.
+- `div_interp`: The chosen spatial divergence interpolator.
+- `mood`: The configured MOOD orchestrator.
+- `sources`: Source term tuples. A convenience constructor accepts a mixed tuple (`all_sources`) and automatically separates them into explicit (`EST`) and implicit (`IST`) tuples.
+- `tableau`: An `IMEXButcherTableau` containing the dual explicit (`a_t`, `b_t`) and implicit (`a`, `b`) weights.
+
+# Callable / Functor
+
+    (imex::GeneralIMEXTimeStepper)(eq, pg, time, dt)
+
+Advances the simulation by `dt` utilizing an IMEX scheme. The execution follows these steps:
+- Pre-allocates memory for both explicit (`K_E`) and implicit (`K_I`) evaluation stages.
+- Iterates through the tableau stages, initially forming an explicit predictor state `Y_local`.
+- Applies `pre_solve_updates!` for implicit sources, then triggers `implicit_solve` to invert stiff source components locally on the diagonal.
+- Accumulates the explicit flux divergence and source derivatives into `K_E_stages` and implicit evaluations into `K_I_stages`.
+- Actively evaluates MOOD limits against the combined IMEX candidate states, repeating divergence passes locally if order reduction is triggered.
+
+# Fields
+- `pde`, `divergence_interpolator`, `mood`, `explicit_sources`, `implicit_sources`, `tableau`, `num_stages`: Core structural properties.
+- `rho_n`: State buffer at the beginning of the time step.
+- `Y_stages`: Buffers holding intermediate combined predictor states for each stage.
+- `K_E_stages`: Buffers for explicit right-hand side evaluations (flux divergences + explicit sources).
+- `K_I_stages`: Buffers for implicit right-hand side evaluations.
+- `int_buffer`: The shared `InteractionBuffer` used during explicit neighbor gathering.
 """
 struct GeneralIMEXTimeStepper{D, M, T, PDE <: HyperbolicPDE, G <: DivergenceInterpolator, MO <: MOOD, EST <: Tuple{Vararg{AbstractExplicitSourceTerm}}, IST <: Tuple{Vararg{AbstractImplicitSourceTerm}}} <: TimeStepper
     pde::PDE

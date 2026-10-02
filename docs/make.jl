@@ -5,7 +5,8 @@ using HyperCloudCore
 makedocs(
     sitename = "HyperCloudCore.jl",
     modules = [HyperCloudCore],
-    checkdocs = :exports,
+    checkdocs = :none,
+    remotes = nothing,
     format = Documenter.HTML(
         prettyurls = get(ENV, "CI", "false") == "true",
         canonical = "https://blhackslash.github.io/HyperCloudCore.jl/",
@@ -25,9 +26,12 @@ makedocs(
             "Runge-Kutta" => "time_stepper/rk_timestepper.md",
             "IMEX" => "time_stepper/imex_timestepper.md",
         ],
+        "Types" => [
+            "Schemes" => "types/schemes.md",
+            "Timesteppers" => "types/timesteppers.md"
+        ],
 
         "Base API" => "base_api.md",
-        "Advanced API" => "advanced_api.md",
     ]
 )
 

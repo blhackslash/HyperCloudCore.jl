@@ -25,7 +25,9 @@ For each stage $k \in \{1, \dots, s\}$:
    If the grid is moving, the particles are advected for the incremental time $\Delta t_k = (c_k - c_{k-1}) \Delta t$. For the first stage, this is $c_1 \Delta t$.
 2. **Intermediate State Calculation:**
    The intermediate state $U_i^{(k)}$ is assembled using the divergence values $K_j$ computed in the previous stages:
+
    $$U_i^{(k)} = U_i^n - \Delta t \sum_{j=1}^{k-1} A_{k, j} K_j$$
+   
    *(Note: The negative sign arises because $K$ represents the numerical divergence $\nabla \cdot F$)*.
 3. **Boundary Conditions:**
    Physical boundary conditions are immediately applied to the intermediate state $U_i^{(k)}$.
@@ -39,7 +41,9 @@ After all $s$ stages are evaluated:
    The grid is moved for the remaining fractional timestep $(1 - c_s) \Delta t$, and the neighbor lists are updated to reflect the final particle topology.
 2. **State Update:**
    The final state at $t^{n+1}$ is constructed using the stage weights $b$:
+
    $$U_i^{n+1} = U_i^n - \Delta t \sum_{j=1}^s b_j K_j$$
+
 3. **Final Boundary Conditions:**
    Boundary conditions are applied to the finalized state vector.
 

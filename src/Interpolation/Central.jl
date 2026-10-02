@@ -1,7 +1,31 @@
 export CentralDivergence
 
 """
-    CentralDivergence{D, M, T, MAX_ORDER, DIV_ORDER, INTERPS}
+    CentralDivergence{D, M, T, MAX_ORDER, DIV_ORDER, INTERPS} <: DivergenceInterpolator
+    CentralDivergence(::Type{T}, dimension::Int, M::Int, order::Int; div_order::Int=0)
+    (central::CentralDivergence)(eq, i, f_i, nb_slice, pg, ib)
+
+Central divergence interpolator for evaluating flux derivatives in hyperbolic PDEs.
+
+# Constructors
+
+    CentralDivergence(::Type{T}, dimension::Int, M::Int, order::Int; div_order::Int=0)
+
+- `T`: The numeric type (e.g., `Float64`).
+- `dimension`: Spatial dimension.
+- `M`: Number of state components.
+- `order`: Maximum interpolation order (`≥ 1`).
+- `div_order`: Target order (defaults to `0`, dynamic/highest particle order).
+
+# Callable / Functor
+
+    (central::CentralDivergence)(eq, i, f_i, nb_slice, pg, ib) -> State{M, T}
+
+Computes the divergence of the flux at particle `i`. Dynamically degrades the interpolation 
+order if the particle has an insufficient number of neighbors.
+
+# Fields
+- `interpolators`: Pre-allocated tuple of `Interpolator` instances up to `MAX_ORDER`.
 """
 struct CentralDivergence{D, M, T, MAX_ORDER, DIV_ORDER, INTERPS} <: DivergenceInterpolator
     interpolators::INTERPS

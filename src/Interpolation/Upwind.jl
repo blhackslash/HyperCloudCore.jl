@@ -8,7 +8,36 @@ abstract type NonLinearPraveenAlgorithm <: UpwindAlgorithm end
 abstract type ClassicAlgorithm <: UpwindAlgorithm end 
 
 """
-    UpwindDivergence{D, M, T, MAX_ORDER, DIV_ORDER, B_LEN, INTERPS, Algorithm <: UpwindAlgorithm, NF}
+    UpwindDivergence{D, M, T, MAX_ORDER, DIV_ORDER, B_LEN, INTERPS, Algorithm <: UpwindAlgorithm, NF} <: DivergenceInterpolator
+    UpwindDivergence(::Type{T}, dimension::Int, M::Int, order::Int, algType::Symbol, flux::NumericalFluxFunction; div_order::Int=0)
+    (upwind::UpwindDivergence)(eq, i, f_i, nb_slice, pg, ib)
+
+Upwind divergence interpolator for evaluating flux derivatives in hyperbolic PDEs using directional physics-based algorithms.
+
+# Constructors
+
+    UpwindDivergence(::Type{T}, dimension::Int, M::Int, order::Int, algType::Symbol, flux::NumericalFluxFunction; div_order::Int=0)
+
+- `T`: The numeric type (e.g., `Float64`).
+- `dimension`: Spatial dimension.
+- `M`: Number of state components.
+- `order`: Maximum interpolation order. Must be `1` (upwind evaluates piecewise-constant states).
+- `algType`: Symbol specifying the upwind strategy. Accepts `:Classic`, `:Tiwari` (scalar only), or `:Praveen` (scalar 2D only).
+- `flux`: The numerical flux function instance to resolve interface states.
+- `div_order`: Target order (defaults to `0`, dynamically bound to the available particle order).
+
+# Callable / Functor
+
+    (upwind::UpwindDivergence)(eq, i, f_i, nb_slice, pg, ib) -> State{M, T}
+
+Evaluates the divergence at particle `i`. The behavior dispatched depends on the underlying `Algorithm`:
+- **Classic Algorithm**: Computes interface fluxes via standard Riemann solver logic and non-conservative jump evaluation. Dynamically degrades interpolation order based on neighbor count.
+- **Tiwari Algorithm**: Evaluates one-sided directional stencils masked by the advection velocity sign, calculating the divergence dimension-by-dimension.
+- **Praveen Algorithm**: Uses a strictly first-order, stateless approach computing upwind fluxes via local moment matrices and edge normal/tangential velocities.
+
+# Fields
+- `interpolators`: Pre-allocated tuple of `Interpolator` instances up to `MAX_ORDER`.
+- `flux`: The associated numerical flux function (`NF`).
 """
 struct UpwindDivergence{D, M, T, MAX_ORDER, DIV_ORDER, B_LEN, INTERPS, Algorithm <: UpwindAlgorithm, NF} <: DivergenceInterpolator
     interpolators::INTERPS

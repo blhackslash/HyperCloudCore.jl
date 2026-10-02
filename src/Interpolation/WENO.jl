@@ -1,7 +1,35 @@
 export WENO
 
 """
-    WENO{D, M, T, MAX_ORDER, DIV_ORDER, INTERPS}
+    WENO{D, M, T, MAX_ORDER, DIV_ORDER, INTERPS} <: DivergenceInterpolator
+    WENO(::Type{T}, dimension::Int, M::Int, order::Int; div_order::Int=0)
+    (weno::WENO)(eq, i, f_i, nb_slice, pg, ib)
+
+Weighted Essentially Non-Oscillatory (WENO) divergence interpolator for evaluating flux derivatives in hyperbolic PDEs. It dynamically blends central and directional stencils based on local solution smoothness to prevent oscillations near discontinuities.
+
+# Constructors
+
+    WENO(::Type{T}, dimension::Int, M::Int, order::Int; div_order::Int=0)
+
+- `T`: The numeric type (e.g., `Float64`).
+- `dimension`: Spatial dimension.
+- `M`: Number of state components.
+- `order`: Maximum interpolation order, which must be `≥ 2` to support the second derivatives required for evaluating smoothness indicators.
+- `div_order`: Target order (defaults to `0`, dynamically bound to the available particle order).
+
+# Callable / Functor
+
+    (weno::WENO)(eq, i, f_i, nb_slice, pg, ib) -> State{M, T}
+
+Computes the divergence of the flux at particle `i`. The execution follows these steps:
+- Evaluates a full central stencil using all available neighbors within the interaction buffer.
+- Evaluates directional one-sided stencils for each spatial dimension, selecting neighbors based on the sign of the local advection velocity.
+- Computes smoothness indicators for both the central and directional stencils using locally scaled spatial derivatives.
+- Calculates non-linear weights to heavily penalize stencils crossing discontinuities.
+- Blends the central and directional interpolations using these weights to form the final stable divergence computation.
+
+# Fields
+- `interpolators`: Pre-allocated tuple of `Interpolator` instances ranging up to `MAX_ORDER` to support dynamic order degradation.
 """
 struct WENO{D, M, T, MAX_ORDER, DIV_ORDER, INTERPS} <: DivergenceInterpolator
     interpolators::INTERPS
