@@ -1,6 +1,6 @@
 using Test
 using HyperCloudCore
-import HyperCloudCore: flux, velocity, max_eigenvalue, prim2cons, cons2prim, implicit_solve, evaluate_source, math_min, math_max, basis_length
+import HyperCloudCore: flux, velocity, max_eigenvalue, prim2cons, cons2prim, implicit_solve, evaluate_source, pre_solve_update!, math_min, math_max, basis_length, param2vel
 using PDEStudioCore
 using StaticArrays
 using LinearAlgebra
@@ -106,7 +106,79 @@ PDEStudioCore.set_target_module!(@__MODULE__)
 
     # Run the complete pipeline (Generation + Stats)
     run_all_simulations(config; force_overwrite=true, calculate_stats=true)
+    # Minimal concrete types required to instantiate the abstract API hierarchies[cite: 5]
+    struct DummyPDE <: HyperbolicPDE{1, 1, Float64, Conservative} end 
+    struct DummyExplicitSource <: AbstractExplicitSourceTerm end 
+    struct DummyImplicitSource <: AbstractImplicitSourceTerm end 
+    struct DummyInterpolator <: DivergenceInterpolator end 
+    struct DummyTimeStepper <: TimeStepper end 
 
+    @testset "API Contracts & Fallbacks" begin
+        # Setup dummy state variables
+        eq = DummyPDE()
+        u_state = SVector{1, Float64}(1.5)
+        pg_dummy = nothing # Placeholder for ParticleGrid where type is untyped in signatures
+        
+        @testset "1. PDE API (Physical Equations)" begin
+            # Abstract throws[cite: 4]
+            @test_throws ErrorException flux(eq, u_state)
+            @test_throws ErrorException max_eigenvalue(eq, u_state, 1)
+            @test_throws ErrorException velocity(eq, u_state, 1)
+            
+            # Identity mappings[cite: 4]
+            @test prim2cons(eq, u_state) == u_state 
+            @test cons2prim(eq, u_state) == u_state 
+            
+            # Non-conservative jump for Conservative PDEs[cite: 4]
+            f_L = SVector{1, SVector{1, Float64}}((SVector{1, Float64}(1.0),))
+            f_R = SVector{1, SVector{1, Float64}}((SVector{1, Float64}(2.0),))
+            dist = SVector{1, Float64}(0.5)
+            
+            nc_jump = evaluate_nc_jump(eq, f_L, f_R, dist) 
+            @test nc_jump isa SVector{1, SVector{1, Float64}}
+            @test nc_jump[1][1] == 0.0 
+        end
+        
+        @testset "2. Source Term API" begin
+            exp_st = DummyExplicitSource()
+            imp_st = DummyImplicitSource()
+            no_exp = NoExplicitSource() #[cite: 5]
+            no_imp = NoImplicitSource() #[cite: 5]
+            
+            # Explicit sources[cite: 4]
+            @test_throws ErrorException evaluate_source(exp_st, u_state, 1, pg_dummy, 0.0) 
+            @test evaluate_source(no_exp, u_state, 1, pg_dummy, 0.0) == zero(u_state) 
+            
+            # Implicit sources[cite: 4]
+            @test_throws ErrorException evaluate_source(imp_st, u_state, 1, pg_dummy, 0.0) 
+            @test evaluate_source(no_imp, u_state, 1, pg_dummy, 0.0) == zero(u_state) 
+            
+            # Global updates[cite: 4]
+            @test pre_solve_update!(imp_st, nothing, pg_dummy, 0.0) === nothing 
+            
+            # Implicit solve operations[cite: 4]
+            @test_throws ErrorException implicit_solve(imp_st, u_state, 0.1, 1, pg_dummy, 0.0) 
+            @test implicit_solve(no_imp, u_state, 0.1, 1, pg_dummy, 0.0) == u_state 
+        end
+        
+        @testset "3. Divergence Interpolator API" begin
+            interp = DummyInterpolator()
+            
+            # Missing required implementations[cite: 4]
+            @test_throws ErrorException update_size!(interp, 100) 
+            @test_throws ErrorException _extract_order(interp) 
+            
+            # Default no-ops[cite: 4]
+            @test update_content!(interp, 1, u_state, 1:5, pg_dummy, nothing) === nothing 
+        end
+        
+        @testset "4. TimeStepper API" begin
+            ts = DummyTimeStepper()
+            
+            # Missing required implementation[cite: 4]
+            @test_throws ErrorException update_size!(ts, 100, 50) 
+        end
+    end
     @testset "Dynamic Grid Resizing (ensure_capacity!)" begin
         geom = get_rectangular_domain(Float64, (0.0,), (1.0,); is_periodic = true)
         pg = ParticleGrid(geom, (0.1,), ExponentialWeightFunction(1.,2.5), 1)
@@ -218,6 +290,11 @@ PDEStudioCore.set_target_module!(@__MODULE__)
             u_arr = param2uvec([4.0, 5.0])
             @test u_arr isa SVector{2, Float64}
             @test u_arr == SVector(4.0, 5.0)
+
+            # Added to cover param2uvec(::SVector)[cite: 1]
+            u_svec = param2uvec(SVector(6.0, 7.0))
+            @test u_svec isa SVector{2, Float64}
+            @test u_svec == SVector(6.0, 7.0)
         end
         
         @testset "param2xvec (Space Conversions)" begin
@@ -226,6 +303,13 @@ PDEStudioCore.set_target_module!(@__MODULE__)
             
             x_tuple = param2xvec((0.0, 1.0))
             @test x_tuple isa SVector{2, Float64}
+
+            # Added to cover param2xvec(::AbstractVector) and param2xvec(::SVector)[cite: 1]
+            x_arr = param2xvec([2.0, 3.0])
+            @test x_arr isa SVector{2, Float64}
+            
+            x_svec = param2xvec(SVector(4.0, 5.0))
+            @test x_svec isa SVector{2, Float64}
         end
         
         @testset "param2fvec (Flux Conversions)" begin
@@ -241,6 +325,15 @@ PDEStudioCore.set_target_module!(@__MODULE__)
             f_vec_arr = param2fvec([[5.0], [6.0], [7.0]])
             @test f_vec_arr isa SVector{3, SVector{1, Float64}}
             @test f_vec_arr[3][1] == 7.0
+
+            # Added to cover param2fvec(::NTuple{D, NTuple{M, T}})[cite: 1]
+            f_tuple_tuple = param2fvec(((1.0, 2.0), (3.0, 4.0)))
+            @test length(f_tuple_tuple) == 2
+
+            # Added to cover param2fvec(::Vector{T})[cite: 1]
+            f_flat_arr = param2fvec([8.0, 9.0])
+            @test length(f_flat_arr) == 1
+            @test length(f_flat_arr[1]) == 2
         end
         
         @testset "param2svec (Nested State Conversions)" begin
@@ -248,6 +341,32 @@ PDEStudioCore.set_target_module!(@__MODULE__)
             @test s_tuple isa SVector{2, SVector{1, Float64}}
             @test s_tuple[1][1] == 1.5
             @test s_tuple[2][1] == 2.5
+
+            # Added to cover param2svec(::Real)[cite: 1]
+            s_scalar = param2svec(3.14)
+            @test s_scalar isa SVector{1, SVector{1, Float64}}
+            @test s_scalar[1][1] == 3.14
+            
+            # Added to cover param2svec(::Flux) / identity fallthrough[cite: 1]
+            f_val = param2fvec(2.5) 
+            s_flux = param2svec(f_val)
+            @test s_flux == f_val
+        end
+
+        # Added entirely missing testset to cover param2vel (lines 78, 81, 84)[cite: 1]
+        @testset "param2vel (Velocity Casting)" begin
+            # 1. Single scalar[cite: 1]
+            vel_scalar = param2vel(2.5)
+            @test vel_scalar isa SVector{1, SMatrix{1, 1, Float64, 1}}
+            @test vel_scalar[1][1, 1] == 2.5
+            
+            # 2. Tuple of scalars[cite: 1]
+            vel_tuple = param2vel((1.0, 2.0))
+            @test vel_tuple isa SVector{2, SMatrix{1, 1, Float64, 1}}
+            
+            # 3. Tuple of Tuples (Diagonals)[cite: 1]
+            vel_diag = param2vel(((1.0, 2.0), (3.0, 4.0)))
+            @test length(vel_diag) == 2
         end
         
         @testset "Branchless SIMD Math (math_max / math_min)" begin
