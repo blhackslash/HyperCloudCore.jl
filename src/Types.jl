@@ -1,8 +1,8 @@
 export MLSWeightFunction, AbstractBoundaryCondition, NoGridMover, GridMover
 export AbstractSlopeLimiter, DivergenceInterpolator, NumericalFluxFunction
-export HyperbolicPDE, EquationRepresentation, Conservative
+export HyperbolicPDE
 export AbstractSourceTerm, AbstractExplicitSourceTerm, AbstractImplicitSourceTerm, NoExplicitSource, NoImplicitSource
-export TimeStepper, MOODStrategy, MOODCriterion, Halo, MOOD
+export TimeStepper, MOODStrategy, MOODCriterion, Halo, MOOD, NoMOOD, NoStrategy
 
 """
     MLSWeightFunction
@@ -105,26 +105,19 @@ Central component for executing spatial reconstruction and computing the flux di
 abstract type DivergenceInterpolator end
 
 """
-    EquationRepresentation
-
-Tag system defining the formulation of the equations (e.g., `Conservative`, `Primitive`, `Lagrangian`).
-"""
-abstract type EquationRepresentation end
-struct Conservative <: EquationRepresentation end
-
-"""
-    HyperbolicPDE{D, M, T, R <: EquationRepresentation}
+    HyperbolicPDE{D, M, T}
 
 The pure physical system of equations. 
-Defines the spatial dimensions `D`, number of equations `M`, numeric type `T`, and formulation `R`.
+Defines the spatial dimensions `D`, number of equations `M` and numeric type `T`.
 
 # API Requirements
 - `flux(eq::HyperbolicPDE, U::State)`: Returns the analytical `Flux{D, M, T}`.
 - `max_eigenvalue(eq::HyperbolicPDE, U::State, d::Int)`: Returns the maximum local wave speed in dimension `d`.
 - `velocity(eq::HyperbolicPDE, U::State, d::Int)`: Returns the `M x M` Jacobian/Velocity matrix.
+# Optional API
 - `prim2cons(eq, U)` / `cons2prim(eq, U)`: Conversion utilities between state representations.
 """
-abstract type HyperbolicPDE{D, M, T, R <: EquationRepresentation} end
+abstract type HyperbolicPDE{D, M, T} end
 
 """
     AbstractSourceTerm

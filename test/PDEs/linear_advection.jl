@@ -1,12 +1,11 @@
 # Notice the addition of the L parameter in the struct and the vel field
-struct LinearAdvection{D, M, T, L, R} <: HyperbolicPDE{D, M, T, R}
+struct LinearAdvection{D, M, T, L} <: HyperbolicPDE{D, M, T}
     vel::Velocity{D, M, T, L}
     max_eigs::SVector{D, T}
-    rep::R
 end
 
 # Smart constructor
-function LinearAdvection(velocities, ::Type{T}=eltype(velocities[1]); rep::R = Conservative()) where {T, R <: EquationRepresentation}
+function LinearAdvection(velocities, ::Type{T}=eltype(velocities[1])) where {T}
     vel_svec = param2vel(velocities, T)
     
     D = length(vel_svec)
@@ -16,7 +15,7 @@ function LinearAdvection(velocities, ::Type{T}=eltype(velocities[1]); rep::R = C
     # Precompute the exact spectral radius
     max_eigs = SVector{D, T}(ntuple(d -> T(maximum(abs.(eigvals(Matrix(vel_svec[d]))))), Val(D)))
     
-    return LinearAdvection{D, M, T, L, R}(vel_svec, max_eigs, rep)
+    return LinearAdvection{D, M, T, L}(vel_svec, max_eigs)
 end
 
 @inline prim2cons(::LinearAdvection, U::State) = U
@@ -36,16 +35,15 @@ end
 @inline velocity(eq::LinearAdvection, U::State, d::Int) = eq.vel[d]
 
 # Fulfill the core API for kinetic relaxation speeds
-@inline function kinetic_wave_speed(eq::LinearAdvection{D, NK, T, R}, d::Int, k::Int) where {D, NK, T, R}
+@inline function kinetic_wave_speed(eq::LinearAdvection{D, NK, T}, d::Int, k::Int) where {D, NK, T}
     return eq.vel[d][k,k]
 end
 
 function build_equation(::Val{:linear}, pde_conf::Dict, context::Dict)
-    rep = parse_representation(pde_conf)
     T = context[:Type]::DataType
     
     # We pass T securely, and the smart constructor utilizes param2vel internally
-    return LinearAdvection(pde_conf[:velocities], T; rep=rep) 
+    return LinearAdvection(pde_conf[:velocities], T) 
 end
 
 # ---------------------------------------------------------

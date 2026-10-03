@@ -71,14 +71,14 @@ The primary simulation orchestrator governing the main time-stepping loop.
 """
 function solve_equation(
     timestepper::TimeStepper, 
-    eq::HyperbolicPDE{D, M, T, R}, 
+    eq::HyperbolicPDE{D, M, T}, 
     pg::ParticleGrid{D, M, T},
     tmax::Real,
     dt::Real;
     is_cfl::Bool = false,
     snapshots::Integer = 10,
     remove_ghosts::Bool = false,
-) where {D, M, T, R}
+) where {D, M, T}
     
     xs = Vector{Vector{Space{D, T}}}(undef, snapshots + 1)
     us = Vector{Vector{State{M, T}}}(undef, snapshots + 1)

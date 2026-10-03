@@ -107,7 +107,7 @@ PDEStudioCore.set_target_module!(@__MODULE__)
     # Run the complete pipeline (Generation + Stats)
     run_all_simulations(config; force_overwrite=true, calculate_stats=true)
     # Minimal concrete types required to instantiate the abstract API hierarchies
-    struct DummyPDE <: HyperbolicPDE{1, 1, Float64, Conservative} end 
+    struct DummyPDE <: HyperbolicPDE{1, 1, Float64} end 
     struct DummyExplicitSource <: AbstractExplicitSourceTerm end 
     struct DummyImplicitSource <: AbstractImplicitSourceTerm end 
     struct DummyInterpolator <: DivergenceInterpolator end 

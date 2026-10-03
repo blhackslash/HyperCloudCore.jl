@@ -13,7 +13,7 @@ Computes the maximum wave speed (eigenvalue) between left and right reconstructe
 # Returns
 - `SVector{D, T}`: Dimensional vector containing `max(|λ_L|, |λ_R|)` for each spatial axis.
 """
-@inline function max_eigenvalues(eq::HyperbolicPDE{D, M, T, R}, f_L::Flux{D, M, T}, f_R::Flux{D, M, T}) where {D, M, T, R}
+@inline function max_eigenvalues(eq::HyperbolicPDE{D, M, T}, f_L::Flux{D, M, T}, f_R::Flux{D, M, T}) where {D, M, T}
     return SVector{D, T}(ntuple(Val(D)) do d
         lamL = max_eigenvalue(eq, f_L[d], d)
         lamR = max_eigenvalue(eq, f_R[d], d)
@@ -64,8 +64,8 @@ Evaluates the Rusanov (local Lax-Friedrichs) interface flux across all spatial d
 - `eq`: The hyperbolic PDE system.
 """
 @inline function (rusanov::RusanovFlux)(
-    f_L::Flux{D, M, T}, f_R::Flux{D, M, T}, F_L::Flux{D, M, T}, F_R::Flux{D, M, T}, eq::HyperbolicPDE{D, M, T, R}
-) where {D, M, T, R}
+    f_L::Flux{D, M, T}, f_R::Flux{D, M, T}, F_L::Flux{D, M, T}, F_R::Flux{D, M, T}, eq::HyperbolicPDE{D, M, T}
+) where {D, M, T}
     
     s_vec = max_eigenvalues(eq, f_L, f_R)
     
@@ -88,15 +88,15 @@ Evaluates the numerical flux using the upwind scheme. Dispatches to `RusanovFlux
 - `eq`: The hyperbolic PDE system.
 """
 @inline function (upwind::UpwindFlux)(
-    f_L::Flux{D, M, T}, f_R::Flux{D, M, T}, F_L::Flux{D, M, T}, F_R::Flux{D, M, T}, eq::HyperbolicPDE{D, M, T, R}
-) where {D, M, T, R}
+    f_L::Flux{D, M, T}, f_R::Flux{D, M, T}, F_L::Flux{D, M, T}, F_R::Flux{D, M, T}, eq::HyperbolicPDE{D, M, T}
+) where {D, M, T}
     
     return RusanovFlux()(f_L, f_R, F_L, F_R, eq)
 end
 
 @inline function (upwind::UpwindFlux)(
-    f_L::Flux{D, 1, T}, f_R::Flux{D, 1, T}, F_L::Flux{D, 1, T}, F_R::Flux{D, 1, T}, eq::HyperbolicPDE{D, 1, T, R}
-) where {D, T, R}
+    f_L::Flux{D, 1, T}, f_R::Flux{D, 1, T}, F_L::Flux{D, 1, T}, F_R::Flux{D, 1, T}, eq::HyperbolicPDE{D, 1, T}
+) where {D, T}
     
     return Flux{D, 1, T}(ntuple(Val(D)) do d
         du = f_R[d][1] - f_L[d][1]

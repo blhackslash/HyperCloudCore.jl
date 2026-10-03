@@ -8,7 +8,7 @@ export update_size!, update_content!, _extract_order
 # =========================================================================
 
 """
-    flux(eq::HyperbolicPDE{D, M, T, R}, U::State{M, T})
+    flux(eq::HyperbolicPDE{D, M, T}, U::State{M, T})
 
 Computes the physical flux vector for a given state across all spatial dimensions. 
 
@@ -22,7 +22,7 @@ Computes the physical flux vector for a given state across all spatial dimension
 @inline flux(eq::HyperbolicPDE, u::State) = error("`flux` not implemented for $(typeof(eq))")
 
 """
-    max_eigenvalue(eq::HyperbolicPDE{D, M, T, R}, U::State{M, T}, d::Int)
+    max_eigenvalue(eq::HyperbolicPDE{D, M, T}, U::State{M, T}, d::Int)
 
 Calculates the maximum absolute wave speed of the system along a specific spatial axis.
 
@@ -65,7 +65,7 @@ Converts a state vector from conservative to primitive variables. Defaults to id
 @inline cons2prim(eq::HyperbolicPDE, u::State) = u
 
 """
-    velocity(eq::HyperbolicPDE{D, M, T, R}, U::State{M, T}, d::Int)
+    velocity(eq::HyperbolicPDE{D, M, T}, U::State{M, T}, d::Int)
 
 Evaluates the exact advective velocity matrix (the flux Jacobian) for a specified spatial dimension. Required for Upwind flux algorithms.
 
@@ -82,7 +82,7 @@ Evaluates the exact advective velocity matrix (the flux Jacobian) for a specifie
 """
     evaluate_nc_jump(eq::HyperbolicPDE, f_L, f_R, dist_k)
 
-Evaluates the non-conservative path integral jump across an interface.
+Evaluates the non-conservative path integral jump across an interface. Has to be overwritten explicitly for non-conservative PDEs.
 
 # Arguments
 - `eq::HyperbolicPDE`: The physical equation system.
@@ -90,10 +90,10 @@ Evaluates the non-conservative path integral jump across an interface.
 - `dist_k::Space`: The spatial distance vector between the two points.
 
 # Returns
-- A `Flux{D, M, T}` representing the path-dependent non-conservative jump. Defaults to strictly zero for `Conservative` PDEs.
+- A `Flux{D, M, T}` representing the path-dependent non-conservative jump. Defaults to strictly zero.
 """
 @inline function evaluate_nc_jump(
-    eq::HyperbolicPDE{D, M, T, Conservative}, f_L::Flux{D, M, T}, f_R::Flux{D, M, T}, dist_k::Space{D, T}
+    eq::HyperbolicPDE{D, M, T,}, f_L::Flux{D, M, T}, f_R::Flux{D, M, T}, dist_k::Space{D, T}
 ) where {D, M, T}
     return Flux{D, M, T}(ntuple(Val(D)) do d
         zero(State{M, T})
