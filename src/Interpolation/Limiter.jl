@@ -12,16 +12,16 @@ Slope limiters used to enforce monotonicity during MUSCL interface reconstructio
 - `MinmodLimiter`: A 1D-focused limiter returning the minimum modulus of the local slopes.
 - All limiters can be instantiated with a specific `Mode` (such as `:soft` or `:hard`).
 """
-struct BarthJespersenLimiter{Mode} <: RealSlopeLimiter 
+struct BarthJespersenLimiter{Mode} <: AbstractSlopeLimiter 
     BarthJespersenLimiter(mode::Symbol=:soft) = new{mode}()
 end
-struct VenkatakrishnanLimiter{Mode} <: RealSlopeLimiter 
+struct VenkatakrishnanLimiter{Mode} <: AbstractSlopeLimiter 
     VenkatakrishnanLimiter(mode::Symbol=:soft) = new{mode}()
 end
-struct SuperbeeLimiter{Mode} <: RealSlopeLimiter 
+struct SuperbeeLimiter{Mode} <: AbstractSlopeLimiter 
     SuperbeeLimiter(mode::Symbol=:soft) = new{mode}()
 end
-struct MinmodLimiter{Mode} <: RealSlopeLimiter 
+struct MinmodLimiter{Mode} <: AbstractSlopeLimiter 
     MinmodLimiter(mode::Symbol=:soft) = new{mode}()
 end
 struct NoLimiter <: AbstractSlopeLimiter end

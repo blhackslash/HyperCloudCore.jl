@@ -27,6 +27,7 @@ makedocs(
             "IMEX" => "time_stepper/imex_timestepper.md",
         ],
         "Types" => [
+            "Interfaces" => "types/interfaces.md",
             "Schemes" => "types/schemes.md",
             "Timesteppers" => "types/timesteppers.md"
         ],

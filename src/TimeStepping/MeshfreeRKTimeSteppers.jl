@@ -1,3 +1,4 @@
+export GeneralRKTimeStepper
 """
     GeneralRKTimeStepper{D, M, T, PDE, G, MO, EST} <: TimeStepper
     GeneralRKTimeStepper(pde::HyperbolicPDE, div_interp, mood, all_sources::Tuple, tableau::RKButcherTableau)

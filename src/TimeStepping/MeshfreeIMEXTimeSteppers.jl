@@ -1,3 +1,4 @@
+export GeneralIMEXTimeStepper
 """
     GeneralIMEXTimeStepper{D, M, T, PDE, G, MO, EST, IST} <: TimeStepper
     GeneralIMEXTimeStepper(pde::HyperbolicPDE, div_interp, mood, all_sources::Tuple, tableau::IMEXButcherTableau)

@@ -1,7 +1,7 @@
 
 export RK1_Euler_Tableau, RK2_Ralston_Tableau, RK3_SSP_Tableau, RK4_Classical_Tableau
 export IMEX_Euler_Tableau, IMEX_ARS233_Tableau, IMEX_ARS222_Tableau, IMEX_PRSSP3_Tableau, IMEX_SSP2332_Tableau
-
+export RKButcherTableau, IMEXButcherTableau
 
 """
     RKButcherTableau{T}

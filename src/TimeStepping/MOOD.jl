@@ -7,7 +7,6 @@ export MOODu1, MOODu2, NoMOOD, OnlyMOOD, EPD1, EPD2, EPD0, StrictEPD0, NoStrateg
 # Halo{0}: Completely local order reduction (no neighbor effects)
 struct EPD0 <: Halo{0} end
 struct EPD1 <: Halo{0} end
-struct NoStrategy <: Halo{0} end
 
 # Halo{1}: Order reduction forces neighbors to fall down and recalculate
 struct StrictEPD0 <: Halo{1} end
@@ -59,11 +58,10 @@ struct MOODu2{T} <: MOODCriterion
     d::T
 end
 
-struct NoMOOD <: MOODCriterion end
+
 struct OnlyMOOD <: MOODCriterion end
 
 MOOD(criterion::MOODCriterion) = MOOD(EPD1(), criterion)
-MOOD() = MOOD(NoStrategy(), NoMOOD())
 
 
 # =========================================================================
