@@ -1,7 +1,5 @@
 module HyperCloudCore
 
-export DEBUG_TARGET_PARTICLE, DEBUG_TARGET_STEP
-
 using LinearAlgebra
 using Logging
 using Printf
@@ -15,20 +13,31 @@ export Space, State, Flux, Velocity
 
 """
     Space{D, T}
-    State{M, T}
-    Flux{D, M, T}
-    Velocity{D, M, T, L}
 
-The core domain-specific `SVector` aliases used pervasively throughout the `HyperCloud` module.
-- `Space`: Represents `D`-dimensional spatial coordinates.
-- `State`: Represents `M`-dimensional equation variables for a single particle.
-- `Flux`: Represents the evaluated fluxes across all `D` dimensions for all `M` equations.
-- `Velocity`: Represents the evaluated Jacobians across all `D` dimensions for all `M` equations.
+Static vector alias representing `D`-dimensional spatial coordinates with element type `T`.
 """
 const Space{D, T} = SVector{D, T}
+
+"""
+    State{M, T}
+
+Static vector alias representing an `M`-dimensional vector of equation variables for a single particle with element type `T`.
+"""
 const State{M, T} = SVector{M, T}
+
+"""
+    Flux{D, M, T}
+
+Static vector alias representing evaluated fluxes across all `D` spatial dimensions for an `M`-variable system (`SVector{D, State{M, T}}`).
+"""
 const Flux{D, M, T} = SVector{D, State{M, T}}
-const Velocity{D, M, T, L} = SVector{D, SMatrix{M,M,T,L}}
+
+"""
+    Velocity{D, M, T, L}
+
+Static vector alias representing flux Jacobians across all `D` spatial dimensions for an `M`-variable system (`SVector{D, SMatrix{M, M, T, L}}`), where `L = M * M`.
+"""
+const Velocity{D, M, T, L} = SVector{D, SMatrix{M, M, T, L}}
 
 include("Utils.jl")
 include("Types.jl")

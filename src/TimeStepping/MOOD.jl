@@ -1,23 +1,56 @@
-export MOODu1, MOODu2, NoMOOD, OnlyMOOD, EPD1, EPD2, EPD0, StrictEPD0, NoStrategy
-
+export MOODu1, MOODu2, OnlyMOOD, EPD1, EPD2, EPD0, StrictEPD0, Halo
 # =========================================================================
-# HALO STRATEGIES (Depth-based Order Reduction)
+# THE HALO STRATEGIES (Force_Depth, Recalc_Depth)
 # =========================================================================
 
-# Halo{0}: Completely local order reduction (no neighbor effects)
-struct EPD0 <: Halo{0} end
-struct EPD1 <: Halo{0} end
+"""
+    Halo{Force_N, Recalc_N} <: MOODStrategy
 
-# Halo{1}: Order reduction forces neighbors to fall down and recalculate
-struct StrictEPD0 <: Halo{1} end
-struct EPD2 <: Halo{1} end
+A MOOD strategy parameterizing how local order degradation cascades.
+- `Force_N`: The topological depth (hops) to which neighboring particles are aggressively forced to drop their structural order.
+- `Recalc_N`: The topological depth to which particles are flagged for recalculation in the next phase.
+"""
+abstract type Halo{Force_N, Recalc_N} <: MOODStrategy end
 
-# --- Generic Node Recalculation Dispatch ---
-# Dispatches purely on the depth parameter N, ensuring absolute type stability
+"""
+    EPD0 <: Halo{0, 0}
 
-@inline trigger_halo!(::Halo{0}, p_idx, pg, needs_recalc, orders) = nothing
+Strictly local Edge Polynomial Degree strategy. 
+If a particle drops its order, it does not affect its neighbors' orders or trigger any recalculations.
+"""
+struct EPD0 <: Halo{0, 0} end
 
-@inline function trigger_halo!(::Halo{1}, p_idx, pg, needs_recalc, orders)
+"""
+    EPD1 <: Halo{0, 1}
+
+Symmetric minimum Edge Polynomial Degree strategy.
+If a particle drops its order, its immediate neighbors (1-hop) are flagged for recalculation to ensure shared symmetric interfaces are properly updated. No structural order forcing is applied.
+"""
+struct EPD1 <: Halo{0, 1} end
+
+"""
+    EPD2 <: Halo{0, 2}
+
+Neighborhood minimum Edge Polynomial Degree strategy.
+If a particle drops its order, recalculation flags cascade to immediate and next-nearest neighbors (2-hop) to accommodate the wider effective stencil evaluation. No structural order forcing is applied.
+"""
+struct EPD2 <: Halo{0, 2} end
+
+"""
+    StrictEPD0 <: Halo{1, 2}
+
+Aggressive local Edge Polynomial Degree strategy.
+If a particle drops its order, it violently forces all immediate neighbors (1-hop) to drop their structural order to match. This triggers recalculation flags up to next-nearest neighbors (2-hop).
+"""
+struct StrictEPD0 <: Halo{1, 2} end
+
+# --- Depth-Based Trigger Dispatch ---
+
+# Halo{0, 0}: Strictly local. No neighbors affected.
+@inline trigger_halo!(::Halo{0, 0}, p_idx, pg, needs_recalc, orders) = nothing
+
+# Halo{0, 1}: 1-Hop Recalculation (No Forcing). Used by EPD1.
+@inline function trigger_halo!(::Halo{0, 1}, p_idx, pg, needs_recalc, orders)
     nb_slices = pg.neighbor.ranges
     nb_indices = pg.neighbor.indices
     is_boundary = pg.core.is_boundary
@@ -26,9 +59,48 @@ struct EPD2 <: Halo{1} end
         j = nb_indices[k]
         if !is_boundary[j]
             needs_recalc[j] = true
+        end
+    end
+    return nothing
+end
+
+# Halo{0, 2}: 2-Hop Recalculation (No Forcing). Used by EPD2.
+@inline function trigger_halo!(::Halo{0, 2}, p_idx, pg, needs_recalc, orders)
+    nb_slices = pg.neighbor.ranges
+    nb_indices = pg.neighbor.indices
+    is_boundary = pg.core.is_boundary
+    
+    @inbounds for k in nb_slices[p_idx]
+        j = nb_indices[k]
+        if !is_boundary[j]
+            needs_recalc[j] = true
+            
+            # Cascade flag to next-nearest neighbors
+            for m in nb_slices[j]
+                nj = nb_indices[m]
+                if !is_boundary[nj]
+                    needs_recalc[nj] = true
+                end
+            end
+        end
+    end
+    return nothing
+end
+
+# Halo{1, 2}: 1-Hop Forcing + 2-Hop Recalculation. Used by StrictEPD0.
+@inline function trigger_halo!(::Halo{1, 2}, p_idx, pg, needs_recalc, orders)
+    nb_slices = pg.neighbor.ranges
+    nb_indices = pg.neighbor.indices
+    is_boundary = pg.core.is_boundary
+    
+    @inbounds for k in nb_slices[p_idx]
+        j = nb_indices[k]
+        if !is_boundary[j]
+            needs_recalc[j] = true
+            # Force order drop on neighbor
             orders[j] = min(orders[j], orders[p_idx])
             
-            # Cascade recalculation flag to neighbors of j
+            # Cascade flag to next-nearest neighbors
             for m in nb_slices[j]
                 nj = nb_indices[m]
                 if !is_boundary[nj]
@@ -41,7 +113,7 @@ struct EPD2 <: Halo{1} end
 end
 
 # --- MUSCL-Exclusive Interface Evaluators ---
-# These specific fallbacks only ever execute inside the MUSCL flux functor
+# Used strictly during the flux pass to resolve the interface polynomials
 @inline _get_interface_orders(::EPD1, oi, oj) = (min(oi, oj), min(oi, oj)) 
 @inline _get_interface_orders(::EPD2, oi, oj) = (min(oi, oj), min(oi, oj)) 
 @inline _get_interface_orders(::MOODStrategy, oi, oj) = (oi, oj) # Default for EPD0 / StrictEPD0
@@ -50,19 +122,27 @@ end
 # MOOD CRITERIA
 # =========================================================================
 
+"""
+    MOODu1{T} <: MOODCriterion
+
+The standard Discrete Maximum Principle (DMP) check. Flags a particle if its updated state falls outside the extrema of its spatial neighborhood, padded by a relaxation threshold `d`.
+"""
 struct MOODu1{T} <: MOODCriterion 
     d::T
 end
 
+"""
+    MOODu2{T} <: MOODCriterion
+
+A MUSCL-optimized physical admissibility check. Acts as `MOODu1`, but if the strict DMP fails, it analyzes the magnitudes and ratios of the local spatial gradients. If the gradients indicate a smooth physical extremum (rather than a numerical oscillation), it overrides the DMP and permits the state.
+"""
 struct MOODu2{T} <: MOODCriterion 
     d::T
 end
 
-
 struct OnlyMOOD <: MOODCriterion end
 
 MOOD(criterion::MOODCriterion) = MOOD(EPD1(), criterion)
-
 
 # =========================================================================
 # STATE{M, T} EXTREMA FINDERS
@@ -153,12 +233,11 @@ function (m::MOOD{<:MOODStrategy, MOODu2{T}})(
     
     if !dmp_fail; return false; end
 
-    # g.particle_orders is now universally accessible on the ParticleGridCore!
+    # g.particle_orders is universally accessible on the ParticleGridCore!
     if _extract_order(g) < 3 || pg.core.particle_orders[p_idx] < 3
         return true 
     end
     
-    # Check if the scheme has stored gradients for MUSCL-specific u2 checks
     if !hasproperty(g, :gradients)
         return true
     end

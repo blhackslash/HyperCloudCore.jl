@@ -99,33 +99,6 @@ function update_size!(ts::GeneralRKTimeStepper, N_particles::Int, M_neighbors::I
     return nothing
 end
 
-"""
-    update_content!(ib::InteractionBuffer, nb_indices, f_i, nb_slice, fVec)
-
-Populates the interaction buffer for a given target particle.
-
-# Details
-- Retrieves neighbor states from `fVec` using the provided `nb_indices`.
-- Directly stores the neighbor state into `ib.f` and computes the raw difference (`f_j - f_i`) into `ib.df` for immediate access during flux evaluation.
-"""
-@inline function update_content!(
-    ib::InteractionBuffer{D, M, T},
-    nb_indices::AbstractVector{Int}, 
-    f_i::State{M, T}, 
-    nb_slice::UnitRange{Int}, 
-    fVec::AbstractVector{State{M, T}}
-) where {D, M, T}
-    
-    @inbounds for k in nb_slice
-        j = nb_indices[k]
-        f_j = fVec[j] 
-        
-        ib.f[k]  = f_j
-        ib.df[k] = f_j - f_i 
-    end
-    return nothing
-end
-
 # =========================================================================
 # UNIVERSAL STAGE DERIVATIVE EVALUATOR
 # =========================================================================
@@ -152,7 +125,7 @@ end
     end
     fill!(needs_recalc, true)
     
-    use_threads = _use_threads()
+    use_threads = get_use_threads()
     iteration = 0
     
     while true

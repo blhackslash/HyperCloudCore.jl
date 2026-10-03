@@ -1,39 +1,12 @@
 
 # Conversions
-export param2uvec, param2xvec, param2svec, param2fvec, prim2cons, cons2prim, param2vel
-export set_threads!, _use_threads
-export set_threads!, @pebug, DEBUG_TARGET_PARTICLE, set_thread_tolerance!
+export param2uvec, param2xvec, param2svec, param2fvec, param2vel
+export set_threads!, get_use_threads
 
-
-const IS_DEBUG = Ref(false)
-const DEBUG_TARGET_PARTICLE = Ref(-1)
-const DEBUG_TARGET_STEP = Ref(-1)
-
-function __init__()    
-    IS_DEBUG[] = Logging.min_enabled_level(Logging.current_logger()) <= Logging.Debug
-end
-
-"""
-    @pebug p_idx msg args...
-
-A targeted debugging macro that conditionally prints debug information.
-- Only executes if the global `IS_DEBUG` flag is active and the provided `p_idx` strictly matches the globally set `DEBUG_TARGET_PARTICLE`.
-"""
-macro pebug(p_idx, msg, args...)
-    debug_call = Expr(:macrocall, Symbol("@debug"), __source__, msg, args...)
-    return quote
-        if IS_DEBUG[] && $(esc(p_idx)) == DEBUG_TARGET_PARTICLE[]
-            $(esc(debug_call))
-        end
-    end
-end
-
-const _THREAD_THRESHOLD = Ref(50000)
 const _THREAD_TOLERANCE = Ref(100)
 const _USE_THREADS      = Ref(false)
 
-_use_threads() = _USE_THREADS[]
-set_threads!(N::Int) = _THREAD_THRESHOLD[] < N ? _USE_THREADS[] = true : nothing
+get_use_threads() = _USE_THREADS[]
 set_threads!(B::Bool) = (_USE_THREADS[] = B)
 
 """
@@ -56,14 +29,6 @@ macro smart_parallel(condition, loop)
     end)
 end
 
-
-function safe_resize!(vec::AbstractVector, N::Int)
-    if length(vec) < N
-        N_new = N + N ÷ 4
-        resize!(vec, N_new)
-    end
-end
-
 @inline function ensure_capacity!(vec::AbstractVector, req_capacity::Int)
     if length(vec) < req_capacity
         resize!(vec, ceil(Int, req_capacity * 1.25))
@@ -73,16 +38,7 @@ end
 # =========================================================================
 # PARAMETER CASTING (Fully Parameterized)
 # =========================================================================
-"""
-    param2uvec(v)
-    param2xvec(v)
-    param2svec(v)
-    param2fvec(v)
-    param2vel(v, [TOut])
 
-Type-casting utilities that convert generalized user inputs into the highly optimized, strictly typed `StaticArrays` utilized internally by the solver.
-- `param2vel`: Safely converts scalar tuples into `SVector{D, SMatrix{M, M, T}}` diagonal matrices required by multi-dimensional linear advection.
-"""
 @inline param2svec(v::T) where {T <: Real} = SVector{1, SVector{1, T}}((SVector{1, T}(v),))
 @inline param2svec(v::NTuple{D, T}) where {D, T <: Real} = SVector{D, SVector{1, T}}(ntuple(i -> SVector{1, T}(v[i]), Val(D)))
 

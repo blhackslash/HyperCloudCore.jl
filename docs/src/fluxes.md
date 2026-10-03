@@ -28,3 +28,11 @@ If the denominator approaches zero, the speed defaults to the local advection ve
 *   **`UpwindFlux`:** 
     *   **Scalar Execution:** Computes the Rankine-Hugoniot wave speed $s$. To avoid division by zero, if the state jump $\Delta u < 10^{-14}$, it falls back to the absolute advection velocity.
     *   **System Fallback:** Because a pure Upwind scheme requires a full Roe matrix or characteristic decomposition for systems, calling `UpwindFlux` on any system ($M > 1$) gracefully and automatically falls back to executing the `RusanovFlux`.
+
+## 3. Documentation
+
+```@autodocs
+Modules = [HyperCloudCore]
+Pages   = ["Interpolation/FluxFunctions.jl"]
+Private = false
+```

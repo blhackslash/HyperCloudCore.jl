@@ -59,3 +59,10 @@ The `UpwindDivergence` struct provides a strictly stateless execution API where 
     *   Assembles a 2D velocity vector and constructs an inverse moment matrix $N_s$ scaled by the local particle spacing.
     *   Automatically falls back to returning a zero state if the neighbor count drops below 3, if the local spacing scale is below `1e-14`, or if the determinant of $N_s$ is less than `1e-14`.
     *   Evaluates downwind-rejecting minimum bounds on the normal and shear velocities, accumulates the stabilized divergence, and scales the final tensor by 2.0.
+
+
+ ## 4. Documentation
+
+```@docs
+UpwindDivergence
+```

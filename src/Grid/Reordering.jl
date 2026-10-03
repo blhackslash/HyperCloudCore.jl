@@ -1,6 +1,3 @@
-reorder_particles!(pg::ParticleGrid) = pg.reorder(pg)
-sort_particles!(pg::ParticleGrid) = pg.reorder(pg) 
-
 # =========================================================================
 # MORTON Z-ORDER CURVE GENERATORS (For 2D and 3D Spatial Hashing)
 # =========================================================================

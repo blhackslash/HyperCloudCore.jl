@@ -29,3 +29,9 @@ The `CentralDivergence` functor is built to natively support systems of equation
 1.  **Local Flux Evaluation:** The conservative flux $F_i$ for the target particle is evaluated once.
 2.  **Neighbor Loop:** The algorithm iterates over a provided `nb_slice`, calculating the physical jump and accumulating the raw flux difference directly into a mutually-exclusive slot in the interaction buffer (`ib.df_flux`).
 3.  **Interpolation:** The accumulated flux differences, along with pre-calculated distances and weights, are fed into the interpolator (scaled by `dx`) to yield the final numerical divergence.
+
+## 3. Documentation
+
+```@docs
+CentralDivergence
+```

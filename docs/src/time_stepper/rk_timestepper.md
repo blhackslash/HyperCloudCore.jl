@@ -32,7 +32,7 @@ For each stage $k \in \{1, \dots, s\}$:
 3. **Boundary Conditions:**
    Physical boundary conditions are immediately applied to the intermediate state $U_i^{(k)}$.
 4. **Spatial Derivative Evaluation:**
-   The spatial divergence $K_k = \nabla \cdot F(U^{(k)})$ is computed by dispatching to `evaluate_stage_derivatives!`.
+   The spatial divergence $K_k = \nabla \cdot F(U^{(k)})$ is computed by dispatching to the `evaluate_stage_derivatives!` routine.
 
 ### Final Assembly
 After all $s$ stages are evaluated:
@@ -51,19 +51,34 @@ After all $s$ stages are evaluated:
 
 ## 3. Spatial Derivative Evaluation (`evaluate_stage_derivatives!`)
 
-The calculation of the spatial divergence $K$ uses multiple dispatch to seamlessly handle standard methods (like Upwind or WENO) as well as dynamic, iterative methods (like MOOD).
+The calculation of the spatial divergence $K$ handles both standard stateless evaluations and dynamic, iterative methods globally orchestrated by the `TimeStepper`.
 
 ### Standard Evaluation (Generic / Non-MOOD)
-For fixed-stencil methods, the evaluation requires exactly two parallel passes over the particle grid:
+For methods executing without an active MOOD configuration, the evaluation requires exactly two parallel passes over the particle grid:
 
-*   **Phase 1 (Pre-Gather):** Iterates over all interior particles to compute and cache localized data, such as slopes or moving-least-squares gradients.
+*   **Phase 1 (Pre-Gather):** Iterates over all interior particles to compute and cache localized data (e.g., slopes, basis functions, or moving-least-squares gradients) via `update_content!`.
 *   **Phase 2 (Divergence):** Iterates over the grid a second time to construct interface fluxes and compute the final divergence $K_k$.
 
 ### MOOD Evaluation (Multi-Dimensional Optimal Order Detection)
-For high-order `MUSCL` schemes equipped with a `MOOD` strategy, the derivative evaluation is wrapped in a `while true` loop (capped at 20 iterations) to allow for dynamic order-dropping:
+When configured with an active `MOOD` strategy, the derivative evaluation is wrapped in a dynamic loop to support per-particle order degradation. Polynomial limits are tracked globally within `ParticleGridCore`, decoupling the MOOD logic from any specific spatial scheme:
 
-1.  **Initialization:** At the very first RK stage ($stage = 1$), all particles are reset to the maximum polynomial order (`MAX_ORDER`). A boolean buffer (`needs_recalc`) flags all particles as requiring calculation.
-2.  **Phase 1 (Pre-Gather):** Gradients are computed only for particles flagged in `needs_recalc`.
-3.  **Phase 1.5 (Effective Order Precomputation):** To guarantee symmetric stencils (the Halo effect), every particle determines its effective order by querying the minimum polynomial order among its direct neighbors.
-4.  **Phase 2 (Divergence):** Interface fluxes and the resulting divergence $K_k$ are calculated for the flagged particles.
-5.  **Phase 3 (MOOD & Halo Reduction):** The updated candidate states are passed to the MOOD evaluator. If a particle violates admissibility criteria (e.g., negative density or oscillations), its polynomial order is decremented, and it—along with its halo neighbors—is flagged for recalculation. The loop continues until all particles are admissible or the iteration cap is reached.
+1.  **Initialization:** At the first RK stage ($stage = 1$), all particle polynomial orders are reset to the scheme's maximum order (`MAX_ORDER`). A boolean buffer (`needs_recalc`) flags all particles for calculation.
+2.  **Phase 1 (Pre-Gather):** Gradients and internal states are computed only for particles flagged in `needs_recalc`.
+3.  **Phase 2 (Divergence):** Interface fluxes and the resulting divergence $K_k$ are calculated for the flagged particles using their active polynomial order.
+4.  **Phase 3 (Candidate Evaluation & Halo Propagation):** A full prospective candidate state is assembled and passed to the `MOODCriterion`. If a particle violates admissibility (e.g., negative density or non-physical oscillations) **and** its current order is $> 1$, its polynomial order is decremented. The particle and its spatial neighbors (dictated by the `MOODStrategy`) are flagged for recalculation.
+5.  **Termination:** The loop continues until no new order drops occur—either because all particles satisfy the physical criteria, or the problematic particles have gracefully bottomed out at order 1 (piecewise constant).
+
+## 4. Documentation
+
+### General Timestepper
+
+```@docs
+GeneralRKTimeStepper
+```
+
+### Butcher Tableaus
+
+```@autodocs
+Modules = [HyperCloudCore]
+Pages   = ["TimeStepping/RKButcherTableaus.jl"]
+```

@@ -1,4 +1,4 @@
-export createParticleGrid, ParticleGrid, get_time_step
+export ParticleGrid, get_time_step
 
 include("Domains.jl")
 

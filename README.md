@@ -159,3 +159,7 @@ fig = plot(p1, p2, layout=(1, 2), size=(900, 400))
 savefig(fig, "advection_comparison.png")
 display(fig)
 ```
+
+---
+
+Portions of this codebase and documentation were drafted with the assistance of large language models (LLMs). All code has been human-reviewed, verified, and tested. If you notice any inaccuracies or unexpected behavior, please open an issue.

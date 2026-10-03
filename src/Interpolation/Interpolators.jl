@@ -1,6 +1,4 @@
 
-export Interpolator, dispatch_interpolator, compute_dynamic_divergence, ConstantReconstruction, basis_length
-
 """
     Interpolator{D, IO, DO}()
 

@@ -131,7 +131,7 @@ end
     end
     fill!(needs_recalc, true)
     
-    use_threads = _use_threads()
+    use_threads = get_use_threads()
     iteration = 0
     
     while true

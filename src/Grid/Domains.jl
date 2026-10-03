@@ -6,11 +6,13 @@ export GeometricDomain, get_rectangular_domain, get_spherical_domain
 """
     GeometricDomain{GEO, D, T, F_Interior, F_Tag}
 
-A pure mathematical abstraction representing the physical shape of the problem space.
+A pure mathematical abstraction representing the physical shape and boundary regions of the problem space. 
 
 # Fields
-- `label::GEO`: The geometric identifier.
-- `mins::Space{D, T}`, `maxs::Space{D, T}`: The minimal and maximal bounding box coordinates.
+- `label::GEO`: The geometric identifier (e.g., `Val(:rectangular)` or `Val(:spherical)`).
+- `mins::Space{D, T}`: The minimal bounding box coordinates.
+- `maxs::Space{D, T}`: The maximal bounding box coordinates.
+- `is_periodic::SVector{D, Bool}`: Periodic boundary flags for each spatial dimension.
 - `is_interior::F_Interior`: A function evaluating whether a given coordinate resides strictly within the geometry.
 - `get_tag::F_Tag`: A function generating integer boundary tags based on spatial location.
 - `bc_map::Dict{Int, AbstractBoundaryCondition}`: A mapping of integer tags to specific boundary condition evaluators.
@@ -107,9 +109,27 @@ function get_spherical_domain(
     return GeometricDomain(Val(:spherical), mins_f, maxs_f, is_per_svec, is_interior_func, tag_func, bc_map)
 end
 
-# =========================================================================
-# 2. THE NUMERICAL WRAPPER (COMPUTATIONAL DOMAIN)
-# =========================================================================
+"""
+    ComputationalDomain{D, T}
+    ComputationalDomain(geom::GeometricDomain, nominal_dx, interp_range_factor)
+
+A numerical wrapper surrounding the `GeometricDomain` that manages computational padding, canvas expansion, and periodic limits.
+
+# Constructors
+
+    ComputationalDomain(geom, nominal_dx, interp_range_factor)
+
+Constructs the domain by extending the baseline mathematical boundaries out by a specified ghost layer width (dictated by `interp_range_factor`), unless periodicity is explicitly activated. It calculates and stores inverse lengths to assist with rapid periodic distance computations downstream.
+
+# Fields
+- `canvas_mins::Space{D, T}`: Expanded minimal coordinates including ghost layers.
+- `canvas_maxs::Space{D, T}`: Expanded maximal coordinates including ghost layers.
+- `is_periodic::SVector{D, Bool}`: Dimensional periodicity flags.
+- `L::Space{D, T}`: The physical lengths of the domain.
+- `L_inv::Space{D, T}`: Pre-computed inverse lengths.
+- `L_wrap::Space{D, T}`: Pre-computed wrap lengths for periodic distance evaluation.
+- `invL_wrap::Space{D, T}`: Pre-computed inverse wrap lengths.
+"""
 struct ComputationalDomain{D, T}
     canvas_mins::Space{D, T}
     canvas_maxs::Space{D, T}
@@ -120,15 +140,6 @@ struct ComputationalDomain{D, T}
     invL_wrap::Space{D, T}
 end
 
-"""
-    ComputationalDomain{D, T}
-
-A numerical wrapper surrounding the `GeometricDomain` that manages computational padding, canvas expansion, and periodic limits.
-
-# Details
-- Extends the baseline mathematical boundaries out by a specified ghost layer width unless periodicity is explicitly activated.
-- Calculates and stores inverse lengths (`L_inv`, `invL_wrap`) to assist with rapid periodic distance computations downstream.
-"""
 function ComputationalDomain(
     geom::GeometricDomain{GEO, D, T, FI, FT}, 
     nominal_dx::NTuple{D, Real}, 

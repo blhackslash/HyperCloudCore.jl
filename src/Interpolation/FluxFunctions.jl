@@ -1,12 +1,17 @@
 export UpwindFlux, RusanovFlux
 
 """
-    max_eigenvalues(eq::HyperbolicPDE, f_L::Flux, f_R::Flux)
+    max_eigenvalues(eq::HyperbolicPDE, f_L::Flux, f_R::Flux) -> SVector{D, T}
 
-Computes the maximum eigenvalue across all spatial dimensions for a given set of left and right fluxes.
+Computes the maximum wave speed (eigenvalue) between left and right reconstructed states across each spatial dimension.
+
+# Arguments
+- `eq`: The hyperbolic PDE system being solved.
+- `f_L`: Reconstructed state values at the left of the interface across each dimension.
+- `f_R`: Reconstructed state values at the right of the interface across each dimension.
 
 # Returns
-- An `SVector{D, T}` containing the maximum observed eigenvalue between the left and right states for each respective dimension.
+- `SVector{D, T}`: Dimensional vector containing `max(|λ_L|, |λ_R|)` for each spatial axis.
 """
 @inline function max_eigenvalues(eq::HyperbolicPDE{D, M, T, R}, f_L::Flux{D, M, T}, f_R::Flux{D, M, T}) where {D, M, T, R}
     return SVector{D, T}(ntuple(Val(D)) do d
@@ -18,25 +23,45 @@ end
 
 
 # =========================================================================
-# NUMERICAL FLUXES (Fully Unified)
+# NUMERICAL FLUXES
 # =========================================================================
-"""
-    UpwindFlux
-    RusanovFlux
 
-Struct definitions for generalized numerical flux functions utilized by the solver.
+"""
+    UpwindFlux <: NumericalFluxFunction
+
+An upwind numerical interface flux evaluator.
+
+# Details
+- **Scalar Systems (`M = 1`)**: Evaluates the Rankine-Hugoniot shock speed `s = |ΔF / Δu|`. If states are nearly coincident (`|Δu| < 1e-14`), it extracts the wave speed directly from the scalar flux Jacobian.
+- **Vector Systems (`M > 1`)**: Automatically falls back to dispatching `RusanovFlux`
 """
 struct UpwindFlux <: NumericalFluxFunction end
+
+"""
+    RusanovFlux <: NumericalFluxFunction
+
+A Rusanov (local Lax-Friedrichs) numerical interface flux evaluator.
+
+# Details
+Evaluates the interface flux with localized numerical dissipation scaled by the maximum characteristic wave speed:
+
+    F_num = 0.5 * (F_L + F_R - s_max * (u_R - u_L))
+
+where `s_max = max(|λ_L|, |λ_R|)` is evaluated along each spatial dimension via `max_eigenvalues`
+"""
 struct RusanovFlux <: NumericalFluxFunction end
 
 """
-    (rusanov::RusanovFlux)(f_L, f_R, F_L, F_R, eq)
+    (rusanov::RusanovFlux)(f_L, f_R, F_L, F_R, eq) -> Flux{D, M, T}
 
-Functor evaluating the Rusanov (local Lax-Friedrichs) numerical flux.
+Evaluates the Rusanov (local Lax-Friedrichs) interface flux across all spatial dimensions.
 
-# Details
-- Calculates numerical dissipation using the maximum eigenvalue bounded by the left and right states. 
-- Returns the flux evaluation as `0.5 * (F_L + F_R - dissipation)` for each spatial dimension.
+# Arguments
+- `f_L`: Reconstructed left states across all spatial dimensions.
+- `f_R`: Reconstructed right states across all spatial dimensions.
+- `F_L`: Physical fluxes evaluated at `f_L`.
+- `F_R`: Physical fluxes evaluated at `f_R`.
+- `eq`: The hyperbolic PDE system.
 """
 @inline function (rusanov::RusanovFlux)(
     f_L::Flux{D, M, T}, f_R::Flux{D, M, T}, F_L::Flux{D, M, T}, F_R::Flux{D, M, T}, eq::HyperbolicPDE{D, M, T, R}
@@ -51,13 +76,16 @@ Functor evaluating the Rusanov (local Lax-Friedrichs) numerical flux.
 end
 
 """
-    (upwind::UpwindFlux)(f_L, f_R, F_L, F_R, eq)
+    (upwind::UpwindFlux)(f_L, f_R, F_L, F_R, eq) -> Flux{D, M, T}
 
-Functor evaluating the Upwind numerical flux. 
+Evaluates the numerical flux using the upwind scheme. Dispatches to `RusanovFlux` for general systems (`M > 1`), or exact scalar upwinding when `M == 1`.
 
-# Details
-- **Scalar Execution:** For scalar equations, it calculates the wave speed `s`. If the difference between left and right states is computationally zero (`< 1e-14`), it extracts the speed directly from the 1x1 Jacobian `SMatrix`. Otherwise, it computes the ratio of flux differences to state differences.
-- **System Fallback:** If `UpwindFlux` is executed on a system of equations, it automatically falls back to dispatching the `RusanovFlux` algorithm.
+# Arguments
+- `f_L`: Reconstructed left states across all spatial dimensions.
+- `f_R`: Reconstructed right states across all spatial dimensions.
+- `F_L`: Physical fluxes evaluated at `f_L`.
+- `F_R`: Physical fluxes evaluated at `f_R`.
+- `eq`: The hyperbolic PDE system.
 """
 @inline function (upwind::UpwindFlux)(
     f_L::Flux{D, M, T}, f_R::Flux{D, M, T}, F_L::Flux{D, M, T}, F_R::Flux{D, M, T}, eq::HyperbolicPDE{D, M, T, R}
@@ -74,7 +102,7 @@ end
         du = f_R[d][1] - f_L[d][1]
         
         if abs(du) < T(1e-14)
-            # NEW: Extract the scalar speed from the 1x1 Jacobian SMatrix
+            # Extract the scalar speed from the 1x1 Jacobian SMatrix
             s = abs(velocity(eq, f_L[d], d)[1, 1])
         else
             s = abs((F_R[d][1] - F_L[d][1]) / du)

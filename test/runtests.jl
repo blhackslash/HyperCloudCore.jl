@@ -1,6 +1,6 @@
 using Test
 using HyperCloudCore
-import HyperCloudCore: flux, velocity, max_eigenvalue, prim2cons, cons2prim, implicit_solve, evaluate_source, math_min, math_max
+import HyperCloudCore: flux, velocity, max_eigenvalue, prim2cons, cons2prim, implicit_solve, evaluate_source, math_min, math_max, basis_length
 using PDEStudioCore
 using StaticArrays
 using LinearAlgebra

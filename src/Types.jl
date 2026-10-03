@@ -54,13 +54,7 @@ Base type dictating how polynomial order degradation cascades through the spatia
 """
 abstract type MOODStrategy end
 
-"""
-    Halo{N} <: MOODStrategy
-
-A specific MOOD strategy dictating an `N`-hop neighborhood cascading order degradation.
-"""
-abstract type Halo{N} <: MOODStrategy end
-struct NoStrategy <: Halo{0} end
+struct NoStrategy <: MOODStrategy end
 
 """
     MOODCriterion

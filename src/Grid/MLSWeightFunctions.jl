@@ -1,12 +1,22 @@
 export ExponentialWeightFunction, InverseWeightFunction
 
 """
-    ExponentialWeightFunction{T}
-    InverseWeightFunction{T}
+    ExponentialWeightFunction{T} <: MLSWeightFunction
+    ExponentialWeightFunction(alpha::T, range::T)
+    (w::ExponentialWeightFunction)(dist_sq::Real) -> T
 
-Weighting function definitions utilized by the moving least squares (MLS) algorithms.
-- `ExponentialWeightFunction`: Requires a scaling `alpha` and spatial `range`, pre-computing the inverse square of the range upon instantiation.
-- `InverseWeightFunction`: Provides an inverse distance weighting scaled by a parameter and minimal offset to prevent singularities.
+An exponential weighting function for Moving Least Squares (MLS) algorithms. It pre-computes the inverse square of the spatial `range` upon instantiation to optimize repeated distance evaluations.
+
+# Constructors
+    
+    ExponentialWeightFunction(alpha::T, range::T)
+
+- `alpha`: Scaling parameter controlling the decay rate.
+- `range`: The spatial cutoff radius.
+
+# Callable / Functor
+
+Evaluates the weight for a given squared distance `dist_sq`. It dispatches through a highly accurate, stable 4th-order polynomial approximation of `exp(x)` tailored strictly for negative inputs (`x <= 0`), shifting the expansion entirely into the denominator to eliminate standard library overhead.
 """
 struct ExponentialWeightFunction{T} <: MLSWeightFunction
     alpha::T
@@ -14,6 +24,24 @@ struct ExponentialWeightFunction{T} <: MLSWeightFunction
     inv_range_sq::T
 end
 
+"""
+    InverseWeightFunction{T} <: MLSWeightFunction
+    InverseWeightFunction(alpha::T, range::T)
+    (w::InverseWeightFunction)(dist_sq::Real) -> T
+
+An inverse distance weighting function for Moving Least Squares (MLS) algorithms. 
+
+# Constructors
+
+    InverseWeightFunction(alpha::T, range::T)
+
+- `alpha`: Scaling parameter.
+- `range`: The spatial cutoff radius.
+
+# Callable / Functor
+
+Evaluates the weight for a given squared distance `dist_sq`. It uses a fixed `1e-12` tolerance offset in the denominator to prevent singularities and guarantee numerical stability upon coincident particle distances.
+"""
 struct InverseWeightFunction{T} <: MLSWeightFunction
     alpha::T
     range::T

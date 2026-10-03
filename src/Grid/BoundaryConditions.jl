@@ -1,13 +1,30 @@
 export FixedDirichlet, OutflowBC
-"""
-    FixedDirichlet
-    OutflowBC
 
-Abstract structures designating boundary condition strategies. 
-- `FixedDirichlet`: A strict, unchanging boundary condition.
-- `OutflowBC`: A zero-gradient, transmissive boundary condition.
+"""
+    FixedDirichlet <: AbstractBoundaryCondition
+    (::FixedDirichlet)(pg::ParticleGrid, rhos_buffer, tag::Int, ts, eq, t)
+
+A strict, unchanging boundary condition strategy.
+
+# Callable / Functor
+
+Enforces a static Dirichlet condition upon boundary particles. Iterates over the grid and resets the state of any boundary particle matching the specified `tag` back to its initial original state stored in `pg.rhos`.
 """
 struct FixedDirichlet <: AbstractBoundaryCondition end
+
+"""
+    OutflowBC <: AbstractBoundaryCondition
+    (::OutflowBC)(pg::ParticleGrid, rhos_buffer, tag::Int, ts, eq, t)
+
+A zero-gradient, transmissive boundary condition strategy.
+
+# Callable / Functor
+
+Enforces a zero-gradient outflow utilizing a multi-pass nearest-donor algorithm. 
+- Initiates all active interior particles as valid state donors.
+- Executes up to 5 symmetrical passes outward, dynamically locating the nearest resolved neighbor using squared distances and copying its state to the target particle.
+- Safely falls back to the original initial state for any completely orphaned boundary particles that fail to resolve a donor.
+"""
 struct OutflowBC <: AbstractBoundaryCondition end
 
 # =========================================================================

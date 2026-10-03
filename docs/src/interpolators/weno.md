@@ -49,3 +49,9 @@ The `WENO` struct provides a completely stateless API (`update_size!` and `updat
     If the masked upwind stencil contains fewer neighbors than the required interpolation order (`stencil_size < weno.order`), the algorithm cannot safely perform an MLS inversion. It bypasses the WENO blending for that dimension and safely falls back to purely using the central gradient `resC[d] * vel[d]`.
 4.  **Directional Evaluation and Blending:**
     If the upwind stencil is sufficiently populated, the MLS interpolator is called again using the masked interaction buffer to yield the directional derivatives `resS`. The directional smoothness indicator `smoothS` and the non-linear weights (`wS`, `wC`) are calculated. A small tolerance `e_tol = 1e-12` is added to the denominators to prevent division by zero in perfectly uniform regions. Finally, the gradients are blended and accumulated into `div_total`.
+
+## 4. Documentation
+
+```@docs
+WENO
+```
