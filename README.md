@@ -80,8 +80,15 @@ domain = get_rectangular_domain(Float64, (0.0, 0.0), (1.0, 1.0); bc_map=bc_map)
 # 3. GENERATE THE PARTICLE GRID & INITIALIZE
 # =========================================================================
 nominal_dx = (0.025, 0.025)
+
+# The grid now strictly requires a fully instantiated weight function 
+# containing the exact physical cutoff radius
 interp_range_factor = 2.5
-pg = ParticleGrid(domain, nominal_dx, interp_range_factor, 1)
+cutoff_radius = interp_range_factor * maximum(nominal_dx)
+weight_func = ExponentialWeightFunction(1.0, cutoff_radius) # alpha = 1.0
+
+# Build grid (Domain, nominal_dx, weight_func, Number of Equations M)
+pg = ParticleGrid(domain, nominal_dx, weight_func, 1)
 
 positions = HyperCloudCore.get_positions(pg)
 x_coords = [pos[1] for pos in positions]
@@ -100,19 +107,26 @@ rho_initial = [pg.rhos[i][1] for i in 1:pg.meta.N]
 # =========================================================================
 # 4. CONFIGURE NUMERICS
 # =========================================================================
-main_grad = UpwindDivergence(Float64, 2, 1, 1, UpwindFlux(), :Classic)
-tableau = RK3_SSP_Tableau(Float64)
-time_stepper = GeneralRKTimeStepper(eq, main_grad, tableau)
+# Upwind strictly requires (T, D, M, order, algType, flux)
+main_grad = UpwindDivergence(Float64, 2, 1, 1, :Classic, UpwindFlux())
+
+# The TimeStepper now universally orchestrates MOOD (NoMOOD by default)
+mood = MOOD() 
+
+# Utilizing a simple Forward Euler explicit tableau
+tableau = RK1_Euler_Tableau(Float64)
+time_stepper = GeneralRKTimeStepper(eq, main_grad, mood, tableau)
 
 # =========================================================================
 # 5. EXECUTE MAIN INTEGRATION LOOP
 # =========================================================================
 t = 0.0
 t_end = 0.5
+cfl = 0.4 # Stability factor for explicit Euler
 
 println("Starting simulation...")
 while t < t_end
-    dt = get_time_step(pg, eq, main_grad)
+    dt = cfl * get_time_step(pg, eq, main_grad)
     dt = min(dt, t_end - t)
     
     time_stepper(eq, pg, t, dt)
