@@ -1,6 +1,6 @@
 # HyperCloudCore.jl
 
-[![DOI](https://zenodo.org/badge/1395561442.svg)](https://doi.org/10.5281/zenodo.23124663)
+[![DOI](https://zenodo.org/badge/23124663.svg)](https://doi.org/10.5281/zenodo.23124663)
 [![Build Status](https://github.com/blhackslash/HyperCloudCore.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/blhackslash/HyperCloudCore.jl/actions/workflows/CI.yml)
 [![Coverage](https://codecov.io/gh/blhackslash/HyperCloudCore.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/blhackslash/HyperCloudCore.jl)
 [![Stable Docs](https://img.shields.io/badge/docs-stable-blue.svg)](https://blhackslash.github.io/HyperCloudCore.jl/stable/)
