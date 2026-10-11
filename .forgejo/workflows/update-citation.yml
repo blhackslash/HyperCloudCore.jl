@@ -1,0 +1,65 @@
+name: Sync CITATION.cff Version
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "Project.toml"
+  workflow_dispatch:
+
+jobs:
+  update-citation:
+    runs-on: docker
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Update CITATION.cff
+        run: |
+          node - << 'EOF'
+          const fs = require('fs');
+
+          // 1. Read Project.toml version
+          const proj = fs.readFileSync('Project.toml', 'utf8');
+          const verMatch = proj.match(/^version\s*=\s*"([^"]+)"/m);
+          if (!verMatch) {
+            console.log('No version found in Project.toml');
+            process.exit(0);
+          }
+          const newVer = verMatch[1];
+
+          // 2. Read CITATION.cff
+          if (!fs.existsSync('CITATION.cff')) {
+            console.error('CITATION.cff not found.');
+            process.exit(1);
+          }
+          let cff = fs.readFileSync('CITATION.cff', 'utf8');
+
+          // 3. Skip if already updated
+          const curMatch = cff.match(/^version:\s*([^\s\n]+)/m);
+          if (curMatch && curMatch[1].replace(/['"]/g, '') === newVer) {
+            console.log(`CITATION.cff is already at version ${newVer}. No change needed.`);
+            process.exit(0);
+          }
+
+          // 4. Update version and release date
+          const today = new Date().toISOString().split('T')[0];
+          cff = cff.replace(/^version:\s*.*$/m, `version: ${newVer}`);
+          cff = cff.replace(/^date-released:\s*.*$/m, `date-released: ${today}`);
+
+          fs.writeFileSync('CITATION.cff', cff, 'utf8');
+          console.log(`Updated CITATION.cff to version ${newVer} (${today})`);
+          EOF
+
+      - name: Commit and push changes
+        run: |
+          git config --local user.name "forgejo-actions[bot]"
+          git config --local user.email "actions@forgejo.local"
+          if [ -n "$(git status --porcelain CITATION.cff)" ]; then
+            git add CITATION.cff
+            git commit -m "chore: bump version in CITATION.cff [skip ci]"
+            git push origin HEAD:${{ github.ref_name }}
+          else
+            echo "No changes to commit."
+          fi
