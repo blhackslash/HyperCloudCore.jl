@@ -18,9 +18,16 @@ abstract type MLSWeightFunction end
 """
     GridMover
 
-Base type for Arbitrary Lagrangian-Eulerian (ALE) or dynamic grid adjustment strategies.
+Base type for Arbitrary Lagrangian-Eulerian (ALE) grid motion. The time stepper integrates the
+particle positions with the explicit part of its tableau and adds the ALE term `w·∇ρ` to the
+state equation, so the coupled system keeps the tableau's order.
+
+# API Requirements
+- `grid_velocity(mover, eq, p_idx, U, pg, t) -> Space{D, T}`.
+- `NoGridMover` is the static grid and compiles the moving-grid path away.
 """
 abstract type GridMover end
+"Static grid: zero grid velocity, moving-grid code paths compiled away."
 struct NoGridMover <: GridMover end
 
 """
@@ -50,10 +57,15 @@ abstract type NumericalFluxFunction end
 Base type dictating how polynomial order degradation cascades through the spatial neighborhood during Multi-Dimensional Optimal Order Detection (MOOD).
 
 # API Requirements
-- Must implement `trigger_halo!(strategy::MOODStrategy, p_idx, pg, needs_recalc, orders)` to propagate the degradation flag to neighboring particles.
+- `_get_interface_orders(strategy, pg, i, j) -> (o_i, o_j)`: interface degrees of the edge `(i, j)` (MUSCL).
+- `trigger_halo!(strategy, p_idx, pg, orders, snapshot, changed)`: optional forcing of neighbours
+  after `p_idx` dropped its order; must mark every lowered particle in `changed`. Defaults to a no-op.
+- `_order_reach(interp, strategy)` on the interpolator side declares how far (hops) fluxes depend
+  on neighbours' orders, so the stepper can recompute only `C ⊕ reach`.
 """
 abstract type MOODStrategy end
 
+"Strategy without interface rules or forcing; used by `MOOD()`."
 struct NoStrategy <: MOODStrategy end
 
 """
@@ -62,10 +74,11 @@ struct NoStrategy <: MOODStrategy end
 Base type for discrete maximum principles (DMP) and physical admissibility checks.
 
 # API Requirements
-- Must implement the functor: `(::MOODCriterion)(main_grad, p_idx, f_i, nb_slice, f_new, pg, f_all) -> Bool`
+- Must implement the functor: `(m::MOOD{<:MOODStrategy, C})(interp, p_idx, U_prev, nb_slice, U_cand, pg, f_neighbours) -> Bool`
 - Returns `true` if the locally updated state `f_new` violates the criterion, triggering an order drop.
 """
 abstract type MOODCriterion end
+"Criterion that never flags; `MOOD()` disables order reduction."
 struct NoMOOD <: MOODCriterion end
 
 """
@@ -97,10 +110,12 @@ abstract type AbstractSlopeLimiter end
 Central component for executing spatial reconstruction and computing the flux divergence.
 
 # API Requirements
-- Must implement the primary execution functor: `(::DivergenceInterpolator)(eq::HyperbolicPDE, i::Int, f_i::State, nb_slice::UnitRange, pg::ParticleGrid, ib::InteractionBuffer) -> State{M, T}`. (Note: The return value is typically scaled by 2.0 depending on the internal integration rules).
+- Must implement the primary execution functor: `(::DivergenceInterpolator)(eq::HyperbolicPDE, i::Int, f_i::State, nb_slice::UnitRange, pg::ParticleGrid, ib::InteractionBuffer, strategy::MOODStrategy) -> State{M, T}`. (Note: The return value is typically scaled by 2.0 depending on the internal integration rules).
 - Must implement `update_size!(interp, N_particles)` for memory allocation.
 - Must implement `update_content!(interp, i, f_i, nb_slice, pg, ib)` for pre-gather passes (e.g., caching gradients).
-- Must implement `@inline _extract_order(interp) -> Int` to expose the maximum polynomial order.
+- Must implement `@inline _extract_order(interp) -> Int`: the maximum **consistency order**. Every
+  scheme reads `pg.core.particle_orders` in this convention (MUSCL: reconstruction degree = order − 1).
+- Optional: `_divergence_degree(interp)`, `_order_reach(interp, strategy)` (see `API.jl`); on moving grids the interpolator receives the PDE wrapped in an `ALEFrame`.
 """
 abstract type DivergenceInterpolator end
 
@@ -156,7 +171,7 @@ struct NoImplicitSource <: AbstractImplicitSourceTerm end
 The global orchestrator advancing the PDE over time. 
 
 # API Requirements
-- Must implement the primary execution functor: `(::TimeStepper)(eq::HyperbolicPDE, pg::ParticleGrid, t::Real, dt::Real)` which updates the grid in-place.
+- Must implement the primary execution functor: `(::TimeStepper)(eq::HyperbolicPDE, pg::ParticleGrid, t::Real, dt::T)` which updates the grid in-place.
 - Must manage intermediate allocations and buffer sizing internally via `update_size!`.
 """
 abstract type TimeStepper end

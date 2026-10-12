@@ -31,8 +31,16 @@ end
     return eq.max_eigs[d]
 end
 
+# Exact shifted wave speed for scalar advection (ALEFrame): |c_d − w_d|
+@inline max_eigenvalue(eq::LinearAdvection{D, 1, T}, U::State, d::Int, shift::Real) where {D, T} = abs(eq.vel[d][1, 1] - T(shift))
+
 # API implementation returning the strict M x M matrix
 @inline velocity(eq::LinearAdvection, U::State, d::Int) = eq.vel[d]
+
+# Transport velocity for Lagrangian grid movers (scalar systems only: the velocity is unambiguous)
+@inline function fluid_velocity(eq::LinearAdvection{D, 1, T}, U::State) where {D, T}
+    return Space{D, T}(ntuple(d -> eq.vel[d][1, 1], Val(D)))
+end
 
 # Fulfill the core API for kinetic relaxation speeds
 @inline function kinetic_wave_speed(eq::LinearAdvection{D, NK, T}, d::Int, k::Int) where {D, NK, T}

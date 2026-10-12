@@ -1,7 +1,8 @@
-export flux, max_eigenvalue, prim2cons, cons2prim, velocity
+export flux, max_eigenvalue, prim2cons, cons2prim, velocity, fluid_velocity
 export evaluate_nc_jump
 export pre_solve_update!, evaluate_source, implicit_solve
-export update_size!, update_content!, _extract_order
+export update_size!, update_content!, _extract_order, _divergence_degree, _order_reach
+export has_cached_gradients, cached_gradients
 
 # =========================================================================
 # 1. PDE API (Physical Equations)
@@ -35,6 +36,16 @@ Calculates the maximum absolute wave speed of the system along a specific spatia
 - A scalar of type `T` representing the highest observed eigenvalue for that dimension.
 """
 @inline max_eigenvalue(eq::HyperbolicPDE, u::State, dim::Int) = error("`max_eigenvalue` not implemented for $(typeof(eq))")
+
+"""
+    max_eigenvalue(eq::HyperbolicPDE, U::State, d::Int, shift::Real)
+
+Maximum absolute eigenvalue of the flux Jacobian along `d` after shifting the spectrum by
+`-shift` (used by `ALEFrame` on moving grids). The default `max_eigenvalue(eq, U, d) + |shift|`
+is a safe bound; PDEs whose spectrum is known can override it with the exact `max |λ - shift|`
+to recover the full dissipation reduction of a Lagrangian frame.
+"""
+@inline max_eigenvalue(eq::HyperbolicPDE, u::State, dim::Int, shift::Real) = max_eigenvalue(eq, u, dim) + abs(shift)
 
 """
     prim2cons(eq::HyperbolicPDE, U::State)
@@ -78,6 +89,14 @@ Evaluates the exact advective velocity matrix (the flux Jacobian) for a specifie
 - An `SMatrix{M, M, T, M*M}` representing the exact flux Jacobian. 
 """
 @inline velocity(eq::HyperbolicPDE, u::State, d::Int) = error("`velocity` not implemented for $(typeof(eq))")
+
+"""
+    fluid_velocity(eq::HyperbolicPDE{D, M, T}, U::State{M, T}) -> Space{D, T}
+
+The material (transport) velocity of the state. Only required by Lagrangian-type grid movers
+(`LagrangianMover`, `ScaledLagrangianMover`).
+"""
+@inline fluid_velocity(eq::HyperbolicPDE, u::State) = error("`fluid_velocity` not implemented for $(typeof(eq))")
 
 """
     evaluate_nc_jump(eq::HyperbolicPDE, f_L, f_R, dist_k)
@@ -177,6 +196,45 @@ Executes pre-gather computations (such as resolving MLS gradients or limiting sl
 Returns the maximum structural polynomial order of the configured spatial scheme.
 """
 @inline _extract_order(::DivergenceInterpolator) = error("`_extract_order` not implemented!")
+
+"""
+    _divergence_degree(interp::DivergenceInterpolator) -> Int
+
+Polynomial degree of the MLS fit used for the divergence at the maximum order (CFL estimate).
+Defaults to the consistency order; MUSCL overrides with `order - 1`.
+"""
+@inline _divergence_degree(g::DivergenceInterpolator) = _extract_order(g)
+
+"""
+    _order_reach(interp::DivergenceInterpolator, strategy::MOODStrategy) -> Int
+
+Hops to which the flux of a particle depends on neighbours' *orders*. Drives the MOOD recompute
+set `C ⊕ reach`. Defaults to 0; MUSCL overrides (1, or 2 for `EPD2`).
+"""
+@inline _order_reach(::DivergenceInterpolator, ::MOODStrategy) = 0
+
+"""
+    has_cached_gradients(interp) -> Bool
+    cached_gradients(interp) -> AbstractVector{SVector{B_LEN, State}}
+
+Trait for schemes that keep per-particle reconstruction coefficients between the pre-gather and
+flux passes (MUSCL). `MOODu2` uses the second-order coefficients `D+1 … 2D` for its curvature test.
+"""
+@inline has_cached_gradients(::DivergenceInterpolator) = false
+cached_gradients(g::DivergenceInterpolator) = error("`cached_gradients` not implemented for $(typeof(g))")
+
+
+# =========================================================================
+# 3b. GRID MOVER API
+# =========================================================================
+
+"""
+    grid_velocity(mover::GridMover, eq, p_idx, U, pg, t) -> Space{D, T}
+
+Velocity of particle `p_idx` under the mover, evaluated at the current stage geometry and state.
+`NoGridMover` returns zero and disables the moving-grid machinery at compile time.
+"""
+function grid_velocity end
 
 
 # =========================================================================

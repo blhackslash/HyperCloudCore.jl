@@ -30,19 +30,19 @@ A divergence interpolator executing MUSCL-type interface reconstruction and flux
 - `T`: The numeric type (e.g., `Float64`).
 - `dimension`: Spatial dimension.
 - `M`: Number of state components.
-- `max_order`: Maximum reconstruction order. Must be `≥ 1`.
+- `max_order`: Maximum consistency order; the reconstruction has degree `max_order - 1.
 - `limiter`: The slope/gradient limiter applied during the pre-gather pass to enforce monotonicity.
 - `flux`: The numerical flux function used to resolve interface states.
 - `div_order`: Target order for the final divergence calculation (defaults to `0`, adapting to the maximum available order).
 
 # Callable / Functor
 
-    (muscl::MUSCL)(eq, i, f_i, nb_slice, pg, ib) -> State{M, T}
+    (muscl::MUSCL)(eq, i, f_i, nb_slice, pg, ib, strat) -> State{M, T}
 
 Computes the divergence of the flux at particle `i`. Note that `MUSCL` relies on a pre-calculation pass (`update_content!`) to compute and limit the local gradients beforehand. The execution follows these steps:
 - Retrieves the pre-calculated, limited gradients for particle `i` and its neighbors.
 - Evaluates the reconstructed states at the midpoint between particles using distance-scaled spatial basis polynomials.
-- Safely blends the interface reconstruction by capping the polynomial degrees to the minimum effective order between interacting particles.
+- Interface degrees are chosen by the MOOD strategy via `_get_interface_orders` (EPD0/StrictEPD0: own order per side; EPD1: edge minimum; EPD2: neighbourhood minimum).
 - Resolves the interface using the provided numerical flux function and evaluates non-conservative jumps.
 - Computes the final divergence using the dynamically resolved divergence order.
 
@@ -130,59 +130,58 @@ end
 # =========================================================================
 
 function (muscl::MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER})(
-    eq::HyperbolicPDE, i::Int, f_i::State{M, T}, nb_slice::UnitRange{Int},       
-    pg::ParticleGrid{D, M, T}, ib::InteractionBuffer{D, M, T}    
+    eq::HyperbolicPDE, i::Int, f_i::State{M, T}, nb_slice::UnitRange{Int},
+    pg::ParticleGrid{D, M, T}, ib::InteractionBuffer{D, M, T}, strategy::MOODStrategy
 ) where {D, M, T, B_LEN, MAX_ORDER, DIV_ORDER}
 
     if isempty(nb_slice)
         return zero(State{M, T})
     end
 
-    grad_i = muscl.gradients[i]
-    F_i    = flux(eq, f_i)
-    dist_all = get_distances(pg)
+    grad_i     = muscl.gradients[i]
+    F_i        = flux(eq, f_i)
+    dist_all   = get_distances(pg)
     nb_indices = pg.neighbor.indices
-    
+
     eff_order_i = pg.core.particle_orders[i]
-    
+
     @inbounds for global_idx in nb_slice
         dist_k = dist_all[global_idx]
         f_j    = ib.f[global_idx]
         j_idx  = nb_indices[global_idx]
-        
         grad_j = muscl.gradients[j_idx]
-        eff_order_j = pg.core.particle_orders[j_idx]
-        
+
         p_interface_i_raw = build_basis(Val(MAX_ORDER-1),  T(0.5) * dist_k)
         p_interface_j_raw = build_basis(Val(MAX_ORDER-1), -T(0.5) * dist_k)
 
-        # Standard MUSCL Interface blending (safe min intersection of allowed orders)
-        interface_order_i = min(eff_order_i, eff_order_j)
-        interface_order_j = interface_order_i
-        
+        # Interface degrees resolved by the MOOD strategy (EPD0 / EPD1 / EPD2 / ...)
+        interface_order_i, interface_order_j = _get_interface_orders(strategy, pg, i, j_idx)
+
         p_interface_i = mask_basis(p_interface_i_raw, interface_order_i, Val(D))
         p_interface_j = mask_basis(p_interface_j_raw, interface_order_j, Val(D))
 
         fij = f_i + sum(grad_i .* p_interface_i)
         fji = f_j + sum(grad_j .* p_interface_j)
-        
+
         F_ij = flux(eq, fij)
         F_ji = flux(eq, fji)
-        
+
         f_L, f_R, F_L, F_R = sort_flux(fij, fji, F_ij, F_ji, dist_k)
-        F_num = muscl.flux(f_L, f_R, F_L, F_R, eq)
+        F_num   = muscl.flux(f_L, f_R, F_L, F_R, eq)
         nc_jump = evaluate_nc_jump(eq, f_L, f_R, dist_k)
-        
+
         ib.df_flux[global_idx] = F_num - F_i + nc_jump
     end
 
     div_idx = _resolve_div_idx(Val(DIV_ORDER), eff_order_i)
-    
+
     div = compute_dynamic_divergence(
-        muscl.interpolators, div_idx, 
-        nb_slice, dist_all, get_weights(pg), 
+        muscl.interpolators, div_idx,
+        nb_slice, dist_all, get_weights(pg),
         ib.df_flux, ib.df_scratch, pg.meta.dx
     )
-    
+
     return T(2.0) * div
 end
+
+include("MUSCL_hooks.jl")

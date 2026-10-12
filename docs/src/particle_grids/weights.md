@@ -1,42 +1,43 @@
 # MLS Weight Functions
 
-Weight functions dictate the spatial decay of influence between neighboring particles within the Moving Least Squares (MLS) interpolator. They are essential for computing local polynomial approximations and managing the interaction radius of the meshfree topology.
+A weight function sets how strongly a neighbour influences the MLS fit at a particle, and its cutoff radius defines the neighbourhood. Weights are evaluated once per neighbour pair during the neighbour search (and again by `refresh_geometry!` on moving grids) and stored in `pg.neighbor.weights`.
 
-## Built-In Weight Functions
+## Built-in weights
 
-The solver provides two heavily optimized weighting strategies:
+**`ExponentialWeightFunction(alpha, range)`** approximates
 
-*   **`ExponentialWeightFunction`**: An exponential weighting function parameterized by a scaling factor `alpha` and a spatial cutoff `range`. 
-    *   **Optimization**: Upon instantiation, it pre-computes the inverse square of the spatial range to optimize repeated distance evaluations. 
-    *   **Logic**: When evaluating a squared distance, it bypasses the standard library `exp()` function, instead dispatching through a highly accurate, stable 4th-order polynomial approximation of `exp(x)` tailored strictly for negative inputs (`x <= 0`). This shifts the expansion entirely into the denominator to eliminate standard library overhead.
-*   **`InverseWeightFunction`**: An inverse distance weighting function, also parameterized by `alpha` and a spatial `range`.
-    *   **Logic**: Evaluates the weight natively for a given squared distance, utilizing a fixed `1e-12` tolerance offset in the denominator. This prevents singularities and guarantees numerical stability upon coincident particle distances.
+```math
+w(r) \approx \exp\!\left(-\alpha\, \frac{r^2}{R^2}\right), \qquad R = \texttt{range}.
+```
 
-## Custom Weight Functions (API Contract)
+The inverse range squared is precomputed. The exponential is evaluated as the reciprocal of a fourth-order Taylor polynomial of $e^{y}$, $y = \alpha r^2/R^2 \ge 0$. This is positive, monotonically decreasing and cheap, but it decays more slowly than the true exponential for large $\alpha r^2/R^2$.
 
-To introduce a new weighting scheme, you must define a struct that subtypes the abstract `MLSWeightFunction` type and implement two specific methods to satisfy the internal API contract.
+**`InverseWeightFunction(alpha, range)`** evaluates $w(r) = 1/(r^2 + 10^{-12})$. The offset keeps coincident particles finite. `alpha` is stored but not used by the current implementation.
 
-### 1. The Functor (Distance Evaluation)
-Your struct must be callable and accept a **squared distance** (`dist_sq::Real`) as its only argument, returning the computed scalar weight.
+For both, `range` is the absolute cutoff radius $R$. A common choice is $R \approx 2.5$–$3.5\,\Delta x$. Higher-order schemes need more neighbours: a degree-$p$ fit in $D$ dimensions needs at least $\binom{p+D}{D} - 1$ neighbours, and schemes drop to a lower degree when a neighbourhood is too small.
+
+## Writing your own
+
+Subtype `MLSWeightFunction` and provide two methods:
 
 ```julia
-@inline function (w::YourCustomWeightFunction{T})(dist_sq::Real) where {T}
-    # Custom decay logic here using dist_sq
-    return computed_weight
+struct MyWeight{T} <: MLSWeightFunction
+    range::T
 end
+
+# Called with the SQUARED distance
+@inline (w::MyWeight{T})(dist_sq::Real) where {T} = ...
+
+# Cutoff radius used for the neighbour search and bins
+@inline HyperCloudCore.get_cutoff(w::MyWeight) = w.range
 ```
 
-### 2. The Cutoff Radius Accessor
-The spatial hashing and neighbor search algorithms require strict knowledge of the maximum interaction radius. You must overload the `get_cutoff` method to return your weight function's defined spatial range.
+The weight must be positive within the cutoff. It does not need to vanish at the cutoff, since pairs beyond `R` are never listed. On moving grids, `refresh_geometry!` sets the weight of pairs that drift beyond `R` to exactly zero.
 
-```julia
-@inline get_cutoff(wf::YourCustomWeightFunction) = wf.range
-```
-
-## Documentation
+## Reference
 
 ```@autodocs
 Modules = [HyperCloudCore]
-Pages   = ["Grid/MLSWeightFunctions.jl"]
+Pages   = ["MLSWeightFunctions.jl"]
 Private = false
 ```

@@ -8,7 +8,7 @@ build_tableau(name::Val, conf::Dict, ctx::Dict) = error("Unknown Time Stepper Ta
 
 # Explicit RK Tableaus
 build_tableau(::Val{:Euler}, conf::Dict, ctx::Dict) = RK1_Euler_Tableau(ctx[:Type])
-build_tableau(::Val{:RK2}, conf::Dict, ctx::Dict)   = RK2_Ralston_Tableau(ctx[:Type])
+build_tableau(::Val{:RK2}, conf::Dict, ctx::Dict)   = RK2_SSP_Tableau(ctx[:Type])
 build_tableau(::Val{:RK3}, conf::Dict, ctx::Dict)   = RK3_SSP_Tableau(ctx[:Type])
 build_tableau(::Val{:RK4}, conf::Dict, ctx::Dict)   = RK4_Classical_Tableau(ctx[:Type])
 
@@ -23,17 +23,6 @@ build_tableau(::Val{:IMEXEuler}, conf::Dict, ctx::Dict) = IMEX_Euler_Tableau(ctx
 function build_timestepper(context::Dict)
     tableau = context[:Tableau]
     return _build_timestepper(tableau, context)
-end
-
-# Deduce Explicit RK Stepper from the RKButcherTableau
-function _build_timestepper(tableau::RKButcherTableau, context::Dict)
-    return GeneralRKTimeStepper(
-        context[:Equation], 
-        context[:Scheme], 
-        context[:MOOD],
-        context[:ExplicitSources], 
-        tableau
-    )
 end
 
 # Deduce IMEX Stepper from the IMEXButcherTableau

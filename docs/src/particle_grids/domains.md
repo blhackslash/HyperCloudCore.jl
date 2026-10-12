@@ -1,35 +1,50 @@
 # Geometric Domains
 
-The `GeometricDomain` serves as a pure mathematical abstraction representing the physical shape and boundary regions of the problem space. It isolates the exact physical boundaries from the broader computational canvas used for numerical padding and ghost particle generation.
+A `GeometricDomain` describes the physical problem region and nothing else: its bounding box, which points are inside, how boundary points are tagged, which axes are periodic, and which boundary condition belongs to which tag. Numerical padding (ghost layers) and point generation are handled separately when the `ParticleGrid` is built.
 
-## Core Logic and Boundary Tagging
+## Fields
 
-The `GeometricDomain` operates by encapsulating functional closures that continuously evaluate spatial coordinates. The internal logic relies on two primary functions:
-*   **Interior Evaluation (`is_interior`)**: A function evaluating whether a given coordinate resides strictly within the mathematical geometry.
-*   **Tag Generation (`get_tag`)**: A function generating integer boundary tags based on spatial location for any point that falls outside the interior.
+| Field | Meaning |
+|---|---|
+| `mins`, `maxs` | Bounding box of the physical region |
+| `is_periodic::SVector{D,Bool}` | Periodicity per axis |
+| `is_interior(x)` | `true` if `x` lies in the physical region |
+| `get_tag(x)` | `0` for interior points, a positive integer boundary tag otherwise |
+| `bc_map::Dict{Int,AbstractBoundaryCondition}` | Boundary condition per tag |
 
-These integer tags are stored within a `bc_map` dictionary, which maps specific geometric edges to user-defined physical boundary condition evaluators.
+## Built-in shapes
 
-## Rectangular Domains
+### Rectangular
 
-Constructed using `get_rectangular_domain`, this geometry models Cartesian boxes. 
+```julia
+get_rectangular_domain(T, mins, maxs; bc_map = Dict(), is_periodic = false)
+```
 
-*   **Inputs**: Requires the minimal bounding box coordinates (`mins`) and maximal bounding box coordinates (`maxs`) defined as spatial tuples. It also accepts keyword arguments for periodicity (`is_periodic`) and the boundary condition dictionary (`bc_map`).
-*   **Logic**: The interior evaluation function enforces strict Cartesian bounding box constraints across all spatial dimensions.
-*   **Tagging**: In 2D space, the domain automatically evaluates the nearest distance to the bounding edges, assigning a tag of 1 to the Left edge, 2 to the Right, 3 to the Bottom, and 4 to the Top. For other dimensions, it defaults to a uniform tag of 1.
+`is_periodic` is either one `Bool` for all axes or an `NTuple{D,Bool}`. Tags in 2-D are assigned by the nearest edge: 1 left, 2 right, 3 bottom, 4 top. In 1-D and 3-D every boundary point has tag 1.
 
-## Spherical Domains
+### Spherical
 
-Constructed using `get_spherical_domain`, this geometry models circles in 2D or spheres in 3D.
+```julia
+get_spherical_domain(T, center, radius; bc_map = Dict(), is_periodic = false)
+```
 
-*   **Inputs**: Requires a spatial tuple defining the `center` point and a singular `radius` value. Like the rectangular domain, it accepts `is_periodic` and `bc_map` keyword arguments.
-*   **Logic**: Employs a squared-distance interior evaluation against the defined center point and radius to determine if a point resides inside the volume.
-*   **Tagging**: The boundary tag generation is uniform, assigning a boundary tag of 1 to all exterior points.
+A disc (2-D) or ball (3-D); every exterior point gets tag 1.
 
-## Documentation
+## Point generation
+
+When a `ParticleGrid` is constructed, the domain is wrapped in a `ComputationalDomain`, and points are generated as follows:
+
+1. **Canvas.** On non-periodic axes the bounding box is extended by $\lceil R/\Delta x_{\max}\rceil$ spacings on each side to host ghost particles. As soon as *any* axis is periodic, no padding is added on any axis.
+2. **Lattice.** A Cartesian lattice with spacing `nominal_dx` (plus optional jitter `randomness`) covers the canvas. A non-periodic axis gets `round(L/dx) + 1` points, endpoints included. A periodic axis gets `round(L/dx)` points, because the endpoint coincides with the start point after wrapping.
+3. **Narrow band.** Lattice points outside the physical region are kept only if they lie within $R + \Delta x_{\max}$ of an interior point. These become the boundary (ghost) particles.
+4. **Tags.** `get_tag` sets `tags` and `is_boundary = (tag != 0)`.
+
+Boundary particles carry the boundary condition and are never updated by the spatial scheme; see [Boundary Conditions](@ref).
+
+## Reference
 
 ```@autodocs
 Modules = [HyperCloudCore]
-Pages   = ["Grid/Domains.jl"]
+Pages   = ["Domains.jl"]
 Private = false
 ```

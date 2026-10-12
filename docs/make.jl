@@ -10,32 +10,35 @@ makedocs(
         prettyurls = get(ENV, "CI", "false") == "true",
         canonical = "https://blhackslash.github.io/HyperCloudCore.jl/",
         assets = String[],
+        mathengine = Documenter.MathJax3(),
     ),
     pages = [
         "Home" => "index.md",
         "Particle Grid" => [
-            "Overview" => "particle_grids/overview.md",
-            "Domains" => "particle_grids/domains.md",
+            "Overview"            => "particle_grids/overview.md",
+            "Domains"             => "particle_grids/domains.md",
             "Boundary Conditions" => "particle_grids/boundary_conditions.md",
-            "Weight Functions" => "particle_grids/weights.md"
+            "Weight Functions"    => "particle_grids/weights.md",
         ],
-        "Flux Functions" => "fluxes.md",
-        "MLS Interpolation" => "mls_interpolation.md",
-        "MOOD" => "mood.md",
-        
-        "Divergence Interpolators" => [
-            "Central" => "interpolators/central.md",
-            "Upwind" => "interpolators/upwind.md",
-            "MUSCL" => "interpolators/muscl.md",
-            "WENO" => "interpolators/weno.md",
+        "Spatial Discretization" => [
+            "MLS Interpolation" => "spatial/mls_interpolation.md",
+            "Numerical Fluxes"  => "spatial/fluxes.md",
+            "Central"           => "spatial/central.md",
+            "Upwind"            => "spatial/upwind.md",
+            "MUSCL"             => "spatial/muscl.md",
+            "WENO"              => "spatial/weno.md",
         ],
-        "Time Stepper" => [
-            "Runge-Kutta" => "time_stepper/rk_timestepper.md",
-            "IMEX" => "time_stepper/imex_timestepper.md",
+        "Time Integration" => [
+            "Time Stepper"     => "time_integration/time_stepper.md",
+            "Butcher Tableaus" => "time_integration/tableaus.md",
+            "MOOD"             => "time_integration/mood.md",
+            "Moving Grids"     => "time_integration/moving_grids.md",
         ],
-        "Types" => "types.md",
-        "API" => "api.md",
-    ]
+        "Extending" => [
+            "API Contracts"  => "extending/api.md",
+            "Abstract Types" => "extending/types.md",
+        ],
+    ],
 )
 
 deploydocs(

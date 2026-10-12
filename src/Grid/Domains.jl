@@ -190,8 +190,11 @@ function get_points(
     dxs_f = Space{D, T}(nominal_dx...)
     rand_f = Space{D, T}(randomness...)
     
+    # Points per axis. On a periodic axis the end point coincides with the start point after
+    # wrapping, so it is not generated (otherwise the seam particle would exist twice).
     Ns_total = ntuple(Val(D)) do d
-        max(1, round(Int, (cd.canvas_maxs[d] - cd.canvas_mins[d]) / dxs_f[d])) + 1
+        n = max(1, round(Int, (cd.canvas_maxs[d] - cd.canvas_mins[d]) / dxs_f[d]))
+        cd.is_periodic[d] ? n : n + 1
     end
     
     inner_points = Space{D, T}[]

@@ -86,10 +86,10 @@ mutable struct ParticleGridCore{D, T}
     is_boundary::Vector{Bool}
     volumes::Vector{T}
     tags::Vector{Int}
-    
-    # Universal Adaptive Order Tracking
+
+    # Per-particle consistency order (read by every spatial scheme, written by MOOD in the stepper).
+    # All other MOOD state lives in the time stepper (`MOODWork`).
     particle_orders::Vector{Int}
-    mood_triggered::Vector{Bool}
 end
 """
     ParticleGrid{D, M, T, WF, GM, N_OFF, Geom}
@@ -121,6 +121,7 @@ include("MLSWeightFunctions.jl")
 include("NeighborLogic.jl")
 include("BoundaryConditions.jl")
 include("Reordering.jl")
+
 
 export get_positions, get_weights, get_distances, get_neighbors
 
@@ -183,11 +184,7 @@ function ParticleGrid(
     
     meta = GridMetadata{D, T}(N, N_interior, N_ghost, R, max_dx, dxs_f, interp_range_factor, 0)
     
-    # NEW: Initialize order tracking arrays
-    core = ParticleGridCore{D, T}(
-        positions, is_boundary, volumes, tags, 
-        zeros(Int, N), zeros(Bool, N)
-    )
+    core = ParticleGridCore{D, T}(positions, is_boundary, volumes, tags, zeros(Int, N))
     
     shared = SharedBuffers{D, M, T}(zeros(State{M, T}, N), similar(positions), zeros(T, N), zeros(Bool, N), zeros(Int, N))
     reorder = ReorderData{D}(collect(1:N), collect(1:N), zeros(Int, N), zeros(Bool, N))
@@ -289,17 +286,16 @@ end
     end
 end
 
-@generated function dispatch_cfl(order::Int, ::Val{D}, nb_slice, dist_vec, w_vec, invL, ::Type{T}) where {D, T}
-    expr = :(zero(SVector{D, T}))
-    for o in 5:-1:2
-        IO = o - 1
-        B_LEN = typeof(basis_length(Val(D), Val(IO))).parameters[1]
-        call = :(_compute_cfl_coeffs(Val($D), Val($IO), Val($B_LEN), nb_slice, dist_vec, w_vec, invL, T))
-        expr = :(order == $o ? $call : $expr)
+# Dispatch on the polynomial DEGREE of the divergence MLS (1..4; higher degrees clamp to 4,
+# which slightly over-estimates dt for such schemes).
+@generated function dispatch_cfl(degree::Int, ::Val{D}, nb_slice, dist_vec, w_vec, invL, ::Type{T}) where {D, T}
+    MAX_DEG = 4
+    B = typeof(basis_length(Val(D), Val(MAX_DEG))).parameters[1]
+    expr = :(_compute_cfl_coeffs(Val($D), Val($MAX_DEG), Val($B), nb_slice, dist_vec, w_vec, invL, T))
+    for deg in (MAX_DEG - 1):-1:1
+        B = typeof(basis_length(Val(D), Val(deg))).parameters[1]
+        expr = :(degree <= $deg ? _compute_cfl_coeffs(Val($D), Val($deg), Val($B), nb_slice, dist_vec, w_vec, invL, T) : $expr)
     end
-    B_LEN_1 = typeof(basis_length(Val(D), Val(1))).parameters[1]
-    call_fallback = :(_compute_cfl_coeffs(Val($D), Val(1), Val($B_LEN_1), nb_slice, dist_vec, w_vec, invL, T))
-    expr = :(order <= 2 ? $call_fallback : $expr)
     return expr
 end
 
@@ -331,7 +327,7 @@ Computes the exact geometric CFL-restricted time step dynamically across the act
     dim = D 
     invL = one(T) / minimum(pg.meta.dx)
     
-    p_order = _extract_order(main_grad)
+    degree = _divergence_degree(main_grad)
 
     @batch for i in 1:pg.meta.N
         if pg.core.is_boundary[i]
@@ -346,7 +342,7 @@ Computes the exact geometric CFL-restricted time step dynamically across the act
         U_i = pg.rhos[i]
         Lambda = _get_Lambda(eq, U_i, valD)
 
-        sum_c_vec = dispatch_cfl(p_order, valD, nb_slice, dist_vec, w_vec, invL, T)
+        sum_c_vec = dispatch_cfl(degree, valD, nb_slice, dist_vec, w_vec, invL, T)
         sum_c = dot(Lambda, sum_c_vec)
 
         if sum_c > T(1e-14)
@@ -388,7 +384,6 @@ end
         resize!(core.volumes, new_cap)
         resize!(core.tags, new_cap)
         resize!(core.particle_orders, new_cap)
-        resize!(core.mood_triggered, new_cap)
     end
     return nothing
 end

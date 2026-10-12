@@ -27,11 +27,13 @@ function build_particle_grid(grid_conf::Dict, context::Dict)
     # Strict SEED extraction
     rng = MersenneTwister(grid_conf[:SEED]::Int)
 
-    # 5. Construct the Particle Grid
+    # 5. Grid mover (static by default) and Particle Grid
+    mover = build_mover(grid_conf, context)
     pg = ParticleGrid(
         geom, nominal_dx, weight_func, M;
         randomness = randomness,
         rng = rng,
+        mover = mover,
     )
     
     return pg
@@ -44,3 +46,4 @@ include("weights.jl")
 include("kinetic.jl")
 include("domains.jl")
 include("timestepper.jl")
+include("movers.jl")

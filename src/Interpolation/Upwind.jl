@@ -28,7 +28,7 @@ Upwind divergence interpolator for evaluating flux derivatives in hyperbolic PDE
 
 # Callable / Functor
 
-    (upwind::UpwindDivergence)(eq, i, f_i, nb_slice, pg, ib) -> State{M, T}
+    (upwind::UpwindDivergence)(eq, i, f_i, nb_slice, pg, ib, strat) -> State{M, T}
 
 Evaluates the divergence at particle `i`. The behavior dispatched depends on the underlying `Algorithm`:
 - **Classic Algorithm**: Computes interface fluxes via standard Riemann solver logic and non-conservative jump evaluation. Dynamically degrades interpolation order based on neighbor count.
@@ -83,8 +83,8 @@ end
 
 # --- Classic Algorithm ---
 function (upwind::UpwindDivergence{D, M, T, MAX_ORDER, DIV_ORDER, B_LEN, INTERPS, ClassicAlgorithm, NF})(
-    eq::HyperbolicPDE, i::Int, f_i::State{M, T}, nb_slice::UnitRange{Int},       
-    pg::ParticleGrid{D, M, T}, ib::InteractionBuffer{D, M, T}    
+    eq::HyperbolicPDE, i::Int, f_i::State{M, T}, nb_slice::UnitRange{Int},
+    pg::ParticleGrid{D, M, T}, ib::InteractionBuffer{D, M, T}, ::MOODStrategy
 ) where {D, M, T, MAX_ORDER, DIV_ORDER, B_LEN, INTERPS, NF}
     
     num_nb = length(nb_slice)
@@ -128,8 +128,8 @@ end
 
 # --- Tiwari Algorithm ---
 function (upwind::UpwindDivergence{D, 1, T, MAX_ORDER, DIV_ORDER, B_LEN, INTERPS, TiwariAlgorithm, NF})(
-    eq::HyperbolicPDE, i::Int, f_i::State{1, T}, nb_slice::UnitRange{Int}, 
-    pg::ParticleGrid{D, 1, T}, ib::InteractionBuffer{D, 1, T} 
+    eq::HyperbolicPDE, i::Int, f_i::State{1, T}, nb_slice::UnitRange{Int},
+    pg::ParticleGrid{D, 1, T}, ib::InteractionBuffer{D, 1, T}, ::MOODStrategy
 ) where {D, T, MAX_ORDER, DIV_ORDER, B_LEN, INTERPS, NF}
 
     dist_all = get_distances(pg)
@@ -181,8 +181,8 @@ end
 
 # --- Praveen Algorithm (Strictly 1st Order, Stateless) ---
 function (upwind::UpwindDivergence{2, 1, T, MAX_ORDER, DIV_ORDER, B_LEN, INTERPS, PraveenAlgorithm, NF})(
-    eq::HyperbolicPDE, i::Int, f_i::State{1, T}, nb_slice::UnitRange{Int}, 
-    pg::ParticleGrid{2, 1, T}, ib::InteractionBuffer{2, 1, T} 
+    eq::HyperbolicPDE, i::Int, f_i::State{1, T}, nb_slice::UnitRange{Int},
+    pg::ParticleGrid{2, 1, T}, ib::InteractionBuffer{2, 1, T}, ::MOODStrategy
 ) where {T, MAX_ORDER, DIV_ORDER, B_LEN, INTERPS, NF}
 
     vel_x = velocity(eq, f_i, 1)[1, 1]

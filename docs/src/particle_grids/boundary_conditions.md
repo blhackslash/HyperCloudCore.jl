@@ -1,44 +1,48 @@
 # Boundary Conditions
 
-Boundary conditions in the meshfree solver are managed via a flexible `AbstractBoundaryCondition` strategy pattern. During time integration, the `apply_boundary_conditions!` function iterates over the active boundary condition map stored in the grid's geometry configuration (`pg.geometry.bc_map`) and dispatches the corresponding strategy for each registered domain tag.
+Boundary conditions act on the boundary (ghost) particles of the narrow band around the physical region. They are registered per boundary tag in the domain's `bc_map` and applied by `apply_boundary_conditions!`, which iterates over the map and calls each condition's functor.
 
-## Built-In Strategies
+The time stepper applies them to **every state it builds**: each stage state $Y_i$ (after the implicit solve) and the final state. MOOD re-forms a candidate after an order drop, and the boundary conditions are re-applied to that candidate as well. Interior particles are never touched by a boundary condition, and boundary particles are never updated by the spatial scheme; their right-hand side is zero.
 
-The solver provides two primary concrete boundary condition strategies out of the box:
+On moving grids, boundary particles keep their positions (their grid velocity is zero).
 
-*   **`FixedDirichlet`**: A strict, unchanging boundary condition strategy. When called, it iterates over the grid and enforces a static Dirichlet condition by resetting the state of any boundary particle matching the specified tag back to its initial original state stored in `pg.rhos`.
-*   **`OutflowBC`**: A zero-gradient, transmissive boundary condition strategy. It enforces outflow utilizing a multi-pass nearest-donor algorithm. It initiates all active interior particles as valid state donors, then executes up to 5 symmetrical passes outward, dynamically locating the nearest resolved neighbor using squared distances and copying its state to the target particle. It safely falls back to the original initial state for any completely orphaned boundary particles that fail to resolve a donor.
+## Built-in conditions
 
-## Custom Boundary Conditions (API Contract)
+- **`FixedDirichlet`** sets every boundary particle with the given tag back to its value in `pg.rhos`. Because boundary particles are never advanced, this is their initial state.
+- **`OutflowBC`** is a zero-gradient (transmissive) condition using a nearest-donor sweep. Interior particles act as donors; in up to five passes, each unresolved boundary particle with the tag copies the state of its nearest already-resolved neighbour. A boundary particle that finds no donor keeps its initial state.
 
-You can easily extend the solver with custom boundary behaviors. To do this, you must define a new struct that subtypes `AbstractBoundaryCondition` and implement its functor (callable struct) method.
+## Writing your own
 
-The mandatory API contract requires your functor to match the following signature:
+Subtype `AbstractBoundaryCondition` and implement the functor:
 
 ```julia
-function (::YourCustomBC)(pg::ParticleGrid, rhos_buffer, tag::Int, ts, eq, t)
-    # Custom logic here
+struct MyBC <: AbstractBoundaryCondition end
+
+function (::MyBC)(pg::ParticleGrid, rhos_buffer, tag::Int, ts, eq, t)
+    @inbounds for i in 1:pg.meta.N
+        if pg.core.is_boundary[i] && pg.core.tags[i] == tag
+            rhos_buffer[i] = ...   # write in place
+        end
+    end
     return nothing
 end
 ```
 
-### Input Parameters
-*   **`pg` (`ParticleGrid`)**: The main execution context, providing access to the underlying topology, metadata, and core arrays like `pg.core.tags` and `pg.core.is_boundary`.
-*   **`rhos_buffer` (`AbstractVector{State}`)**: The active state vector buffer that the timestepper is currently writing to. This is the array your function **must modify in place**.
-*   **`tag` (`Int`)**: The specific integer tag associated with the boundary region you are evaluating.
-*   **`ts`**: The active time stepping functor (e.g., Runge-Kutta or IMEX).
-*   **`eq` (`HyperbolicPDE`)**: The current equation system being solved.
-*   **`t` (`Real`)**: The current continuous simulation time.
+| Argument | Meaning |
+|---|---|
+| `pg` | The grid; positions, tags, flags and neighbour lists are available |
+| `rhos_buffer` | The state vector being built (a stage buffer, the MOOD candidate, or the final state). **Modify this one**, not `pg.rhos`. |
+| `tag` | The boundary tag this call is responsible for |
+| `ts` | The time stepper (useful for type-based dispatch) |
+| `eq` | The PDE |
+| `t` | Time of the state being built (stage time, or `t + dt`) |
 
-### Expected Output and Behavior
-*   The functor must iterate over the grid and conditionally evaluate particles (typically checking if `pg.core.tags[i] == tag` and `pg.core.is_boundary[i]`).
-*   The functor must modify the target states inside `rhos_buffer` directly (in-place mutation).
-*   The function must return `nothing` upon completion.
+Register the condition with `get_rectangular_domain(...; bc_map = Dict(1 => MyBC()))`. Use `pg.shared` buffers for scratch space (as `OutflowBC` does with `pg.shared.int_buffer`) rather than allocating.
 
-## Documentation
+## Reference
 
 ```@autodocs
 Modules = [HyperCloudCore]
-Pages   = ["Grid/BoundaryConditions.jl"]
+Pages   = ["BoundaryConditions.jl"]
 Private = false
 ```

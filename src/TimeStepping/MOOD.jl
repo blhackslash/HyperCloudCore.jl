@@ -1,277 +1,257 @@
-export MOODu1, MOODu2, OnlyMOOD, EPD1, EPD2, EPD0, StrictEPD0, Halo
+export MOODu1, MOODu2, OnlyMOOD, EPD0, EPD1, EPD2, StrictEPD0, Halo
+
 # =========================================================================
-# THE HALO STRATEGIES (Force_Depth, Recalc_Depth)
+# STRATEGIES
 # =========================================================================
-
 """
-    Halo{Force_N, Recalc_N} <: MOODStrategy
+    Halo{Force_N} <: MOODStrategy
 
-A MOOD strategy parameterizing how local order degradation cascades.
-- `Force_N`: The topological depth (hops) to which neighboring particles are aggressively forced to drop their structural order.
-- `Recalc_N`: The topological depth to which particles are flagged for recalculation in the next phase.
+`Force_N` is the number of hops to which neighbours of a dropped particle are forced down to its
+order. There is no recalculation depth: the stepper derives the recompute set from
+`_order_reach(interp, strategy)` (see below).
+
+Strategies differ in how the interface degrees of an edge `(i, j)` are resolved
+(`_get_interface_orders`):
+- `EPD0`      : `(o_i, o_j)` — mismatched reconstruction allowed, no forcing
+- `EPD1`      : `(min, min)` over the edge
+- `EPD2`      : `(min, min)` over `N(i) ∪ N(j)`
+- `StrictEPD0`: `(o_i, o_j)` + 1-hop forcing
 """
-abstract type Halo{Force_N, Recalc_N} <: MOODStrategy end
+abstract type Halo{Force_N} <: MOODStrategy end
+"Edge degrees `(k_i, k_j)`: each side of an edge reconstructs at its own order. No forcing."
+struct EPD0       <: Halo{0} end
+"Edge degrees `min(k_i, k_j)` on both sides. No forcing."
+struct EPD1       <: Halo{0} end
+"Edge degrees: minimum order over `N(i) ∪ N(j) ∪ {i, j}` on both sides. No forcing."
+struct EPD2       <: Halo{0} end
+"Edge degrees `(k_i, k_j)`; when a particle drops, its neighbours are lowered to its order (one hop, no cascade)."
+struct StrictEPD0 <: Halo{1} end
 
-"""
-    EPD0 <: Halo{0, 0}
+# --- Forcing: NoStrategy and Halo{0} land on the no-op ---
+@inline trigger_halo!(::MOODStrategy, p_idx, pg, orders, snapshot, changed) = nothing
 
-Strictly local Edge Polynomial Degree strategy. 
-If a particle drops its order, it does not affect its neighbors' orders or trigger any recalculations.
-"""
-struct EPD0 <: Halo{0, 0} end
-
-"""
-    EPD1 <: Halo{0, 1}
-
-Symmetric minimum Edge Polynomial Degree strategy.
-If a particle drops its order, its immediate neighbors (1-hop) are flagged for recalculation to ensure shared symmetric interfaces are properly updated. No structural order forcing is applied.
-"""
-struct EPD1 <: Halo{0, 1} end
-
-"""
-    EPD2 <: Halo{0, 2}
-
-Neighborhood minimum Edge Polynomial Degree strategy.
-If a particle drops its order, recalculation flags cascade to immediate and next-nearest neighbors (2-hop) to accommodate the wider effective stencil evaluation. No structural order forcing is applied.
-"""
-struct EPD2 <: Halo{0, 2} end
-
-"""
-    StrictEPD0 <: Halo{1, 2}
-
-Aggressive local Edge Polynomial Degree strategy.
-If a particle drops its order, it violently forces all immediate neighbors (1-hop) to drop their structural order to match. This triggers recalculation flags up to next-nearest neighbors (2-hop).
-"""
-struct StrictEPD0 <: Halo{1, 2} end
-
-# --- Depth-Based Trigger Dispatch ---
-
-# Halo{0, 0}: Strictly local. No neighbors affected.
-@inline trigger_halo!(::Halo{0, 0}, p_idx, pg, needs_recalc, orders) = nothing
-
-# Halo{0, 1}: 1-Hop Recalculation (No Forcing). Used by EPD1.
-@inline function trigger_halo!(::Halo{0, 1}, p_idx, pg, needs_recalc, orders)
-    nb_slices = pg.neighbor.ranges
-    nb_indices = pg.neighbor.indices
+# Reads the post-decrement snapshot so a forced particle never cascades further.
+@inline function trigger_halo!(::Halo{1}, p_idx, pg, orders, snapshot, changed)
+    nb_slices   = pg.neighbor.ranges
+    nb_indices  = pg.neighbor.indices
     is_boundary = pg.core.is_boundary
-    
+    o_p = snapshot[p_idx]
     @inbounds for k in nb_slices[p_idx]
         j = nb_indices[k]
-        if !is_boundary[j]
-            needs_recalc[j] = true
+        if !is_boundary[j] && orders[j] > o_p
+            orders[j]  = o_p
+            changed[j] = true
         end
     end
     return nothing
 end
 
-# Halo{0, 2}: 2-Hop Recalculation (No Forcing). Used by EPD2.
-@inline function trigger_halo!(::Halo{0, 2}, p_idx, pg, needs_recalc, orders)
-    nb_slices = pg.neighbor.ranges
-    nb_indices = pg.neighbor.indices
-    is_boundary = pg.core.is_boundary
-    
-    @inbounds for k in nb_slices[p_idx]
-        j = nb_indices[k]
-        if !is_boundary[j]
-            needs_recalc[j] = true
-            
-            # Cascade flag to next-nearest neighbors
-            for m in nb_slices[j]
-                nj = nb_indices[m]
-                if !is_boundary[nj]
-                    needs_recalc[nj] = true
-                end
-            end
-        end
+# --- Interface degree resolution (used by MUSCL) ---
+@inline function _nb_min_order(pg, idx)
+    orders = pg.core.particle_orders
+    nb_idx = pg.neighbor.indices
+    o = orders[idx]
+    @inbounds for k in pg.neighbor.ranges[idx]
+        o = min(o, orders[nb_idx[k]])
     end
-    return nothing
+    return o
 end
 
-# Halo{1, 2}: 1-Hop Forcing + 2-Hop Recalculation. Used by StrictEPD0.
-@inline function trigger_halo!(::Halo{1, 2}, p_idx, pg, needs_recalc, orders)
-    nb_slices = pg.neighbor.ranges
-    nb_indices = pg.neighbor.indices
-    is_boundary = pg.core.is_boundary
-    
-    @inbounds for k in nb_slices[p_idx]
-        j = nb_indices[k]
-        if !is_boundary[j]
-            needs_recalc[j] = true
-            # Force order drop on neighbor
-            orders[j] = min(orders[j], orders[p_idx])
-            
-            # Cascade flag to next-nearest neighbors
-            for m in nb_slices[j]
-                nj = nb_indices[m]
-                if !is_boundary[nj]
-                    needs_recalc[nj] = true
-                end
-            end
-        end
-    end
-    return nothing
+@inline _get_interface_orders(::MOODStrategy, pg, i, j) =
+    (pg.core.particle_orders[i], pg.core.particle_orders[j])          # EPD0, StrictEPD0, NoStrategy
+
+@inline function _get_interface_orders(::EPD1, pg, i, j)
+    o = min(pg.core.particle_orders[i], pg.core.particle_orders[j])
+    return (o, o)
 end
 
-# --- MUSCL-Exclusive Interface Evaluators ---
-# Used strictly during the flux pass to resolve the interface polynomials
-@inline _get_interface_orders(::EPD1, oi, oj) = (min(oi, oj), min(oi, oj)) 
-@inline _get_interface_orders(::EPD2, oi, oj) = (min(oi, oj), min(oi, oj)) 
-@inline _get_interface_orders(::MOODStrategy, oi, oj) = (oi, oj) # Default for EPD0 / StrictEPD0
+@inline function _get_interface_orders(::EPD2, pg, i, j)
+    o = min(_nb_min_order(pg, i), _nb_min_order(pg, j))
+    return (o, o)
+end
+
+# Locality (`_order_reach`), CFL degree (`_divergence_degree`) and cached-gradient access
+# (`has_cached_gradients`, `cached_gradients`) have generic defaults in API.jl; the scheme-specific
+# overrides live next to the scheme (MUSCL block at the end of MUSCL.jl), so this file loads first.
 
 # =========================================================================
-# MOOD CRITERIA
+# CRITERIA
 # =========================================================================
-
 """
     MOODu1{T} <: MOODCriterion
 
-The standard Discrete Maximum Principle (DMP) check. Flags a particle if its updated state falls outside the extrema of its spatial neighborhood, padded by a relaxation threshold `d`.
+Discrete Maximum Principle: flags a particle whose candidate leaves the extrema of its
+neighbourhood (padded by `d`).
 """
-struct MOODu1{T} <: MOODCriterion 
+struct MOODu1{T} <: MOODCriterion
     d::T
 end
 
 """
     MOODu2{T} <: MOODCriterion
 
-A MUSCL-optimized physical admissibility check. Acts as `MOODu1`, but if the strict DMP fails, it analyzes the magnitudes and ratios of the local spatial gradients. If the gradients indicate a smooth physical extremum (rather than a numerical oscillation), it overrides the DMP and permits the state.
+`MOODu1` plus a smooth-extremum override based on the curvature coefficients cached by MUSCL
+(consistency order ≥ 3). Falls back to `MOODu1` for interpolators without gradients.
 """
-struct MOODu2{T} <: MOODCriterion 
+struct MOODu2{T} <: MOODCriterion
     d::T
 end
 
+"Criterion that flags every particle (testing: one step drives all orders to 1)."
 struct OnlyMOOD <: MOODCriterion end
 
 MOOD(criterion::MOODCriterion) = MOOD(EPD1(), criterion)
 
-# =========================================================================
-# STATE{M, T} EXTREMA FINDERS
-# =========================================================================
-
 @inline function findLocalExtrema(rho_i::State{M, T}, nb_slice::UnitRange{Int}, neighbor_fs::AbstractVector{State{M, T}}) where {M, T}
-    minU = rho_i
-    maxU = rho_i
-    
-    @inbounds for k in nb_slice 
+    minU = rho_i; maxU = rho_i
+    @inbounds for k in nb_slice
         rho_j = neighbor_fs[k]
         minU = math_min.(minU, rho_j)
         maxU = math_max.(maxU, rho_j)
     end
-    
     return minU, maxU
 end
 
-@inline function findLocalExtremaAbs(
-    c_i::State{M, T}, curve_idx::Int, nb_slice::UnitRange{Int}, 
-    neighbor_indices::AbstractVector{Int}, grad_vec::AbstractVector
-) where {M, T}
-    mini = c_i
-    maxi = c_i
-    
-    minAbs = abs.(c_i)
-    maxAbs = minAbs
-    
+@inline function findLocalExtremaAbs(c_i::State{M, T}, curve_idx::Int, nb_slice::UnitRange{Int},
+                                     neighbor_indices::AbstractVector{Int}, grad_vec::AbstractVector) where {M, T}
+    mini = c_i; maxi = c_i
+    minAbs = abs.(c_i); maxAbs = minAbs
     @inbounds for k in nb_slice
-        j = neighbor_indices[k]
-        c_j = grad_vec[j][curve_idx]
-        
+        c_j = grad_vec[neighbor_indices[k]][curve_idx]
         abs_cj = abs.(c_j)
-        
-        mini = math_min.(mini, c_j)
-        maxi = math_max.(maxi, c_j)
-        minAbs = math_min.(minAbs, abs_cj)
-        maxAbs = math_max.(maxAbs, abs_cj)
+        mini = math_min.(mini, c_j);     maxi = math_max.(maxi, c_j)
+        minAbs = math_min.(minAbs, abs_cj); maxAbs = math_max.(maxAbs, abs_cj)
     end
-    
     return mini, maxi, minAbs, maxAbs
 end
 
-# =========================================================================
-# MOOD CRITERIA FUNCTORS
-# =========================================================================
-
-(m::MOOD{<:MOODStrategy, NoMOOD})(args...) = false
-(m::MOOD{<:MOODStrategy, OnlyMOOD})(args...) = true
-
-# --- MOODu1 (Standard DMP) ---
-function (m::MOOD{<:MOODStrategy, MOODu1{T}})(
-    g::Any, p_idx::Int, rho_i::State{M, T}, nb_slice::UnitRange{Int}, 
-    newRho::State{M, T}, pg::ParticleGrid{D, M, T}, int_buffer_f::AbstractVector{State{M, T}}
-) where {D, M, T}
-    
+@inline function _dmp_fails(δ::T, rho_i::State{M, T}, nb_slice, newRho::State{M, T}, int_buffer_f) where {M, T}
     minU, maxU = findLocalExtrema(rho_i, nb_slice, int_buffer_f)
-    δ = m.criterion.d 
-    
-    for m_idx in 1:M
-        if abs(maxU[m_idx] - minU[m_idx]) >= δ^3
-            if newRho[m_idx] < minU[m_idx] - δ || newRho[m_idx] > maxU[m_idx] + δ
-                return true
-            end
+    for m in 1:M
+        if abs(maxU[m] - minU[m]) >= δ^3 && (newRho[m] < minU[m] - δ || newRho[m] > maxU[m] + δ)
+            return true
         end
     end
     return false
 end
 
-# --- MOODu2 (N-Dimensional MUSCL Optimization) ---
-function (m::MOOD{<:MOODStrategy, MOODu2{T}})(
-    g::DivergenceInterpolator, p_idx::Int, rho_i::State{M, T}, nb_slice::UnitRange{Int}, 
+(m::MOOD{<:MOODStrategy, NoMOOD})(args...) = false
+(m::MOOD{<:MOODStrategy, OnlyMOOD})(args...) = true
+
+function (m::MOOD{<:MOODStrategy, MOODu1{T}})(
+    g::Any, p_idx::Int, rho_i::State{M, T}, nb_slice::UnitRange{Int},
     newRho::State{M, T}, pg::ParticleGrid{D, M, T}, int_buffer_f::AbstractVector{State{M, T}}
 ) where {D, M, T}
-    
-    minU, maxU = findLocalExtrema(rho_i, nb_slice, int_buffer_f)
-    δ = m.criterion.d
-    
-    dmp_fail = false
-    for m_idx in 1:M
-        if abs(maxU[m_idx] - minU[m_idx]) >= δ^3
-            if newRho[m_idx] < minU[m_idx] - δ || newRho[m_idx] > maxU[m_idx] + δ
-                dmp_fail = true
-                break
-            end
-        end
-    end
-    
-    if !dmp_fail; return false; end
-
-    # g.particle_orders is universally accessible on the ParticleGridCore!
-    if _extract_order(g) < 3 || pg.core.particle_orders[p_idx] < 3
-        return true 
-    end
-    
-    if !hasproperty(g, :gradients)
-        return true
-    end
-    
-    grad_vec = g.gradients
-    neighbors = pg.neighbor.indices
-    
-    u2_satisfied = true
-    
-    for d in 1:D
-        curve_idx = D + d 
-        c_i = grad_vec[p_idx][curve_idx]
-        
-        mini, maxi, minAbs, maxAbs = findLocalExtremaAbs(c_i, curve_idx, nb_slice, neighbors, grad_vec)
-        
-        for m in 1:M
-            ratio = maxAbs[m] < T(1e-12) ? one(T) : minAbs[m] / maxAbs[m]
-            valid = (mini[m] * maxi[m] > -δ) && (ratio >= T(0.5) || maxAbs[m] < δ)
-            
-            if !valid
-                u2_satisfied = false
-                break
-            end
-        end
-        if !u2_satisfied; break; end
-    end
-    
-    return !u2_satisfied 
+    return _dmp_fails(m.criterion.d, rho_i, nb_slice, newRho, int_buffer_f)
 end
 
-# Fallback for schemes without gradients
 function (m::MOOD{<:MOODStrategy, MOODu2{T}})(
-    g::Any, p_idx::Int, rho_i::State{M, T}, nb_slice::UnitRange{Int}, 
+    g::Any, p_idx::Int, rho_i::State{M, T}, nb_slice::UnitRange{Int},
     newRho::State{M, T}, pg::ParticleGrid{D, M, T}, int_buffer_f::AbstractVector{State{M, T}}
 ) where {D, M, T}
-    return MOOD(m.strategy, MOODu1(m.criterion.d))(g, p_idx, rho_i, nb_slice, newRho, pg, int_buffer_f)
+    δ = m.criterion.d
+    _dmp_fails(δ, rho_i, nb_slice, newRho, int_buffer_f) || return false
+
+    # The curvature override needs cached gradients with a degree-2 reconstruction, i.e. a scheme
+    # that caches them (trait) at consistency order ≥ 3. Otherwise behave like MOODu1.
+    has_cached_gradients(g) || return true
+    if _extract_order(g) < 3 || pg.core.particle_orders[p_idx] < 3
+        return true
+    end
+
+    grad_vec  = cached_gradients(g)
+    neighbors = pg.neighbor.indices
+    for d in 1:D
+        curve_idx = D + d
+        c_i = grad_vec[p_idx][curve_idx]
+        mini, maxi, minAbs, maxAbs = findLocalExtremaAbs(c_i, curve_idx, nb_slice, neighbors, grad_vec)
+        for mm in 1:M
+            ratio = maxAbs[mm] < T(1e-12) ? one(T) : minAbs[mm] / maxAbs[mm]
+            valid = (mini[mm] * maxi[mm] > -δ) && (ratio >= T(0.5) || maxAbs[mm] < δ)
+            valid || return true
+        end
+    end
+    return false
+end
+
+# =========================================================================
+# WORK BUFFERS + DETECTION
+# =========================================================================
+
+
+"""
+    expand_mask!(mask, scratch, pg, hops)
+
+Marks every particle within `hops` topological hops of a marked one (boundary particles included;
+the compute passes skip them).
+"""
+function expand_mask!(mask::Vector{Bool}, scratch::Vector{Bool}, pg::ParticleGrid, hops::Int)
+    N = pg.meta.N
+    nb_slices, nb_indices = pg.neighbor.ranges, pg.neighbor.indices
+    for _ in 1:hops
+        copyto!(scratch, 1, mask, 1, N)
+        @inbounds for p in 1:N
+            if mask[p]
+                for k in nb_slices[p]; scratch[nb_indices[k]] = true; end
+            end
+        end
+        copyto!(mask, 1, scratch, 1, N)
+    end
+    return nothing
+end
+
+"""
+    detect_and_drop!(mood, work, interp, pg, int_buffer, rho_prev, rho_cand, full) -> Bool
+
+Checks `rho_cand` against the neighbourhood of `rho_prev` (neighbour states in `int_buffer.f`,
+gradients cached in `interp`) for all interior particles (`full`) or only those in `work.dirty`.
+Drops one order on every flagged particle, applies forcing halos from a snapshot, and records the
+set of changed orders in `work.changed`. Returns `true` if any order changed.
+"""
+function detect_and_drop!(
+    mood::MOOD, work::MOODWork, interp::DivergenceInterpolator, pg::ParticleGrid{D, M, T},
+    int_buffer::InteractionBuffer{D, M, T}, rho_prev::AbstractVector, rho_cand::AbstractVector, full::Bool
+) where {D, M, T}
+    mood.criterion isa NoMOOD && return false
+
+    N           = pg.meta.N
+    nb_slices   = pg.neighbor.ranges
+    is_boundary = pg.core.is_boundary
+    orders      = pg.core.particle_orders
+    triggered, changed, dirty, snapshot = work.triggered, work.changed, work.dirty, work.snapshot
+    use_threads = get_use_threads()
+
+    fill!(view(triggered, 1:N), false)
+    fill!(view(changed, 1:N), false)
+
+    # 1. Candidate check (parallel; per-particle writes only)
+    @smart_parallel use_threads for p in 1:N
+        if is_boundary[p] || !(full || dirty[p]); continue; end
+        if mood(interp, p, rho_prev[p], nb_slices[p], rho_cand[p], pg, int_buffer.f)
+            triggered[p] = true
+        end
+    end
+
+    # 2. Decrement (serial). Particles already at order 1 are un-flagged so they don't force.
+    any_dropped = false
+    @inbounds for p in 1:N
+        if triggered[p]
+            if orders[p] > 1
+                orders[p] -= 1
+                changed[p] = true
+                work.triggered_step[p] = true         # diagnostic, accumulated per step
+                any_dropped = true
+            else
+                triggered[p] = false
+            end
+        end
+    end
+    any_dropped || return false
+
+    # 3. Forcing from a snapshot (serial, no cascade)
+    copyto!(snapshot, 1, orders, 1, N)
+    @inbounds for p in 1:N
+        triggered[p] && trigger_halo!(mood.strategy, p, pg, orders, snapshot, changed)
+    end
+    return true
 end

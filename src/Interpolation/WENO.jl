@@ -3,7 +3,7 @@ export WENO
 """
     WENO{D, M, T, MAX_ORDER, DIV_ORDER, INTERPS} <: DivergenceInterpolator
     WENO(::Type{T}, dimension::Int, M::Int, order::Int; div_order::Int=0)
-    (weno::WENO)(eq, i, f_i, nb_slice, pg, ib)
+    (weno::WENO)(eq, i, f_i, nb_slice, pg, ib, strategy)
 
 Weighted Essentially Non-Oscillatory (WENO) divergence interpolator for evaluating flux derivatives in hyperbolic PDEs. It dynamically blends central and directional stencils based on local solution smoothness to prevent oscillations near discontinuities.
 
@@ -19,7 +19,7 @@ Weighted Essentially Non-Oscillatory (WENO) divergence interpolator for evaluati
 
 # Callable / Functor
 
-    (weno::WENO)(eq, i, f_i, nb_slice, pg, ib) -> State{M, T}
+    (weno::WENO)(eq, i, f_i, nb_slice, pg, ib, strategy) -> State{M, T}
 
 Computes the divergence of the flux at particle `i`. The execution follows these steps:
 - Evaluates a full central stencil using all available neighbors within the interaction buffer.
@@ -27,6 +27,7 @@ Computes the divergence of the flux at particle `i`. The execution follows these
 - Computes smoothness indicators for both the central and directional stencils using locally scaled spatial derivatives.
 - Calculates non-linear weights to heavily penalize stencils crossing discontinuities.
 - Blends the central and directional interpolations using these weights to form the final stable divergence computation.
+- Scalar equations only (`M == 1`); the advection speed is taken per direction from `velocity(eq, U, d)`.
 
 # Fields
 - `interpolators`: Pre-allocated tuple of `Interpolator` instances ranging up to `MAX_ORDER` to support dynamic order degradation.
@@ -41,6 +42,7 @@ end
 
 function WENO(::Type{T}, dimension::Int, M::Int, order::Int; div_order::Int=0) where {T}
     @assert order >= 2 "WENO requires order >= 2 for second derivatives."
+    @assert M == 1 "WENO is implemented for scalar equations only (directional stencils need a single wave speed)."
     if div_order > order; div_order = order; end
     
     interps = ntuple(Val(order)) do k
@@ -51,11 +53,12 @@ function WENO(::Type{T}, dimension::Int, M::Int, order::Int; div_order::Int=0) w
 end
 
 function (weno::WENO{D, M, T, MAX_ORDER, DIV_ORDER, INTERPS})(
-    eq::HyperbolicPDE, i::Int, f_i::State{M, T}, nb_slice::UnitRange{Int},       
-    pg::ParticleGrid{D, M, T}, ib::InteractionBuffer{D, M, T}    
+    eq::HyperbolicPDE, i::Int, f_i::State{M, T}, nb_slice::UnitRange{Int},
+    pg::ParticleGrid{D, M, T}, ib::InteractionBuffer{D, M, T}, ::MOODStrategy
 ) where {D, M, T, MAX_ORDER, DIV_ORDER, INTERPS}
 
-    vel = velocity(eq, f_i, D)
+    # Scalar advection speed per spatial direction (WENO is a scalar scheme, see constructor)
+    vel = SVector{D, T}(ntuple(d -> velocity(eq, f_i, d)[1, 1], Val(D)))
     dist_all = get_distances(pg)
     w_all = get_weights(pg)
 

@@ -95,7 +95,6 @@ function (rd::ReorderData{D})(pg::ParticleGrid{D}) where {D}
     Base.permute!(pg.core.is_boundary, p)
     Base.permute!(pg.core.tags, p)
     Base.permute!(pg.core.particle_orders, p)
-    Base.permute!(pg.core.mood_triggered, p)
     Base.permute!(pg.rhos, p)          
     Base.permute!(pg.curvatures, p)    
     

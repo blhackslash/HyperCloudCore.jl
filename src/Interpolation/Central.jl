@@ -19,7 +19,7 @@ Central divergence interpolator for evaluating flux derivatives in hyperbolic PD
 
 # Callable / Functor
 
-    (central::CentralDivergence)(eq, i, f_i, nb_slice, pg, ib) -> State{M, T}
+    (central::CentralDivergence)(eq, i, f_i, nb_slice, pg, ib, strat) -> State{M, T}
 
 Computes the divergence of the flux at particle `i`. Dynamically degrades the interpolation 
 order if the particle has an insufficient number of neighbors.
@@ -47,8 +47,8 @@ function CentralDivergence(::Type{T}, dimension::Int, M::Int, order::Int; div_or
 end
 
 function (central::CentralDivergence{D, M, T, MAX_ORDER, DIV_ORDER, INTERPS})(
-    eq::HyperbolicPDE, i::Int, f_i::State{M, T}, nb_slice::UnitRange{Int},       
-    pg::ParticleGrid{D, M, T}, ib::InteractionBuffer{D, M, T}    
+    eq::HyperbolicPDE, i::Int, f_i::State{M, T}, nb_slice::UnitRange{Int},
+    pg::ParticleGrid{D, M, T}, ib::InteractionBuffer{D, M, T}, ::MOODStrategy
 ) where {D, M, T, MAX_ORDER, DIV_ORDER, INTERPS}
 
     num_nb = length(nb_slice)
