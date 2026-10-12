@@ -11,7 +11,7 @@ By operating entirely on unstructured point clouds, the framework completely byp
 
 Built with a zero-overhead, trait-based API, `HyperCloudCore` provides a strict but flexible mathematical engine. Users simply define their governing physical equations, fluxes, and source terms, while the backend autonomously handles the complex spatial reconstruction, stabilization, and time integration.
 
-### Core Capabilities
+## Core Capabilities
 * **Meshless Spatial Discretization:** High-order spatial gradients via MLS, supporting advanced reconstruction schemes like **MUSCL** (stabilized by Multi-Dimensional Optimal Order Detection, or **MOOD**) and meshless **WENO**.
 * **Advanced Time Integration:** A robust suite of time-steppers including explicit Strong Stability Preserving Runge-Kutta (**SSP-RK**) methods and **IMEX** (Implicit-Explicit) tableaus for resolving stiff operator interactions.
 * **Unified Source Term API:** Zero-cost tuple unrolling for stacking multiple explicit (e.g., gravity, body forces) and implicit (e.g., stiff kinetic relaxation) source terms natively into the sub-stages of the RK/IMEX tableaus.
@@ -40,7 +40,7 @@ Finally, we plot the integrated results compared to the initial condition as a s
 
 ---
 
-### Complete Example Code
+## Complete Example Code
 
 ```julia
 using HyperCloudCore
