@@ -8,12 +8,17 @@
 #   Secret   GH_MIRROR_TOKEN  - GitHub fine-grained PAT with
 #                               "Contents: Read and write" and
 #                               "Workflows: Read and write" on the target repo(s)
+#   Variable FORGEJO_URL      - base URL of your Forgejo instance,
+#                               e.g. https://git.example.com
 #   Variable GH_MIRROR_OWNER  - (optional) GitHub user/org, if it differs
 #                               from your Forgejo owner name
 
 name: Push to GitHub
 
 on:
+  push:
+    branches: ["**"]
+    tags: ["**"]
   workflow_dispatch:
 
 concurrency:
@@ -27,13 +32,21 @@ jobs:
       - name: Push branches and tags to GitHub
         env:
           SRC_TOKEN: ${{ github.token }}
-          SRC_SERVER: ${{ github.server_url }}
+          SRC_SERVER: ${{ vars.FORGEJO_URL }}   # e.g. https://git.example.com
           SRC_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ secrets.GH_MIRROR_TOKEN }}
           GH_OWNER: ${{ vars.GH_MIRROR_OWNER || github.repository_owner }}
           REPO_NAME: ${{ github.event.repository.name }}
         run: |
           set -euo pipefail
+
+          if [ -z "$SRC_SERVER" ]; then
+            echo "Set the Actions variable FORGEJO_URL (e.g. https://git.example.com)" >&2
+            exit 1
+          fi
+          SRC_SERVER="${SRC_SERVER%/}"
+          echo "Source: ${SRC_SERVER}/${SRC_REPO}"
+          echo "Target: github.com/${GH_OWNER}/${REPO_NAME}"
 
           # Bare clone of everything on Forgejo
           src_url="${SRC_SERVER/:\/\//://oauth2:${SRC_TOKEN}@}/${SRC_REPO}.git"
