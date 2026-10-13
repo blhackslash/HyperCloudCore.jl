@@ -1,0 +1,50 @@
+# .forgejo/workflows/github-mirror.yml
+#
+# Pushes all branches and tags from Forgejo to GitHub WITHOUT --mirror,
+# so branches that only exist on GitHub (e.g. gh-pages from Documenter)
+# are never deleted or overwritten.
+#
+# Setup (per repo, or once at user/org level):
+#   Secret   GH_MIRROR_TOKEN  - GitHub fine-grained PAT with
+#                               "Contents: Read and write" and
+#                               "Workflows: Read and write" on the target repo(s)
+#   Variable GH_MIRROR_OWNER  - (optional) GitHub user/org, if it differs
+#                               from your Forgejo owner name
+
+name: Push to GitHub
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: github-mirror
+  cancel-in-progress: false
+
+jobs:
+  push:
+    runs-on: docker   # adjust to a label your Forgejo runner provides
+    steps:
+      - name: Push branches and tags to GitHub
+        env:
+          SRC_TOKEN: ${{ github.token }}
+          SRC_SERVER: ${{ github.server_url }}
+          SRC_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GH_MIRROR_TOKEN }}
+          GH_OWNER: ${{ vars.GH_MIRROR_OWNER || github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
+        run: |
+          set -euo pipefail
+
+          # Bare clone of everything on Forgejo
+          src_url="${SRC_SERVER/:\/\//://oauth2:${SRC_TOKEN}@}/${SRC_REPO}.git"
+          git clone --mirror "$src_url" repo.git
+          cd repo.git
+
+          # Explicit refspecs: update/create only, never delete on GitHub.
+          # The negative refspec keeps gh-pages untouched even if it ever
+          # shows up on Forgejo (needs git >= 2.29).
+          git push \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GH_OWNER}/${REPO_NAME}.git" \
+            '+refs/heads/*:refs/heads/*' \
+            '+refs/tags/*:refs/tags/*' \
+            '^refs/heads/gh-pages'
