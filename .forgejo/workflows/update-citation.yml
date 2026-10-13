@@ -58,7 +58,7 @@ jobs:
           git config --local user.email "actions@forgejo.local"
           if [ -n "$(git status --porcelain CITATION.cff)" ]; then
             git add CITATION.cff
-            git commit -m "chore: bump version in CITATION.cff [skip ci]"
+            git commit -m "chore: bump version in CITATION.cff"
             git push origin HEAD:${{ github.ref_name }}
           else
             echo "No changes to commit."
