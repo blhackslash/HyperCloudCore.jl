@@ -38,16 +38,16 @@ end
 
 # --- Main Domain Builder ---
 function build_domain(domain_conf::Dict, context::Dict)
-    # Direct pass-through if the user supplied an already-instantiated GeometricDomain
-    if haskey(domain_conf, :instance) && domain_conf[:instance] isa GeometricDomain
-        return domain_conf[:instance]
+
+    for (_,val) in domain_conf
+        if val isa GeometricDomain; return val end
     end
-    
+
     if !haskey(domain_conf, :domain)
         error("Domain configuration must strictly include a :domain key (e.g., :rectangular, :spherical).")
     end
-    
-    domain_name = domain_conf[:domain]::Symbol
+
+    domain_name = Symbol(domain_conf[:domain])   # accepts Symbol or String
     return build_domain(Val(domain_name), domain_conf, context)
 end
 
