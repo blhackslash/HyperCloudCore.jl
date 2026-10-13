@@ -4,7 +4,7 @@ using HyperCloudCore
 
 makedocs(
     sitename = "HyperCloudCore.jl",
-    modules = [HyperCloudCore, HyperCloudCore.Builders],
+    modules = [HyperCloudCore],
     checkdocs = :exports,
     format = Documenter.HTML(
         prettyurls = get(ENV, "CI", "false") == "true",

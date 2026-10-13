@@ -1,13 +1,13 @@
 ```@meta
-CurrentModule = HyperCloudCore.Builders
+CurrentModule = HyperCloudCore
 ```
 
 # Config-Driven Builders
 
-`HyperCloudCore.Builders` turns flat, namespaced parameter dictionaries into the numerical objects of the package. It exists so that a wrapper (or a test suite) does not have to re-implement the symbol-to-type mapping for every scheme, tableau, limiter and strategy, and so that this mapping is updated together with the types it names.
+The `build_*` functions in `src/Builders/` turn flat, namespaced parameter dictionaries into the numerical objects of the package. It exists so that a wrapper (or a test suite) does not have to re-implement the symbol-to-type mapping for every scheme, tableau, limiter and strategy, and so that this mapping is updated together with the types it names.
 
 ```julia
-using HyperCloudCore, HyperCloudCore.Builders
+using HyperCloudCore
 
 context = Dict{Symbol, Any}(:Type => Float64, :D => 1, :M => 1, :Equation => eq,
                             :ExplicitSources => (), :ImplicitSources => ())
@@ -27,10 +27,10 @@ adaptivity        = build_adaptivity(Dict(:enabled => true), context)
 Every builder is `build_x(conf::Dict, context::Dict)` and dispatches on `Val(conf[:name])` (or the namespace's selector key). Adding a variant means defining one more method:
 
 ```julia
-Builders.build_flux(::Val{:HLL}, conf::Dict, context::Dict) = MyHLLFlux()
+HyperCloudCore.build_flux(::Val{:HLL}, conf::Dict, context::Dict) = MyHLLFlux()
 ```
 
-The physics side is deliberately *not* here: PDEs, initial conditions and source terms are built by the wrapper, which then fills `context[:Equation]`, `[:D]`, `[:M]` and the source tuples before calling into this module.
+The physics side is deliberately *not* here: PDEs, initial conditions and source terms are built by the wrapper, which then fills `context[:Equation]`, `[:D]`, `[:M]` and the source tuples before calling the builders.
 
 ## Selectors
 
@@ -52,5 +52,6 @@ The physics side is deliberately *not* here: PDEs, initial conditions and source
 ## Reference
 
 ```@autodocs
-Modules = [HyperCloudCore.Builders]
+Modules = [HyperCloudCore]
+Pages   = ["Builders.jl", "weights.jl", "domains.jl", "movers.jl", "volumes.jl", "particle_grid.jl", "limiter.jl", "mood.jl", "schemes.jl", "tableaus.jl", "timestepper.jl", "adaptivity.jl"]
 ```

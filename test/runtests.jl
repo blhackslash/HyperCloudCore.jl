@@ -6,7 +6,6 @@ import HyperCloudCore: flux, velocity, max_eigenvalue, prim2cons, cons2prim, flu
                        update_size!, update_content!, _extract_order, _order_reach, _divergence_degree,
                        has_cached_gradients, grid_velocity
 using PDEStudioCore
-using HyperCloudCore.Builders
 using StaticArrays
 using LinearAlgebra
 using Random
