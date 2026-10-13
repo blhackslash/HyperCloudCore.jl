@@ -28,7 +28,7 @@ end
 
 "Run every method in `methods` over `varied` and return a loader `sim(method_key; overrides...)`."
 function run_suite(shared, methods; varied = Dict{Symbol, Any}(), stats = true)
-    config = SimulationConfig(shared, methods, collect(keys(methods)); varied_params = varied, ref_func_name = :analytical_solution)
+    config = SimulationConfig(shared, methods, collect(keys(methods)); varied = varied, reference = :analytical_solution)
     run_all_simulations(config; force_overwrite = true, calculate_stats = stats)
     return (key; overrides...) -> load_sim_data(create_param_dict(merge(shared, methods[key])..., overrides...))
 end
