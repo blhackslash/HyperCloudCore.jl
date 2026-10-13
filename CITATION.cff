@@ -6,7 +6,7 @@ authors:
     email: "dev@blackslash.win"
     orcid: https://orcid.org/0009-0000-1223-4611
 title: "HyperCloudCore.jl: High-performance, physics-agnostic meshless solver backend for hyperbolic PDEs"
-version: 0.3.1
+version: 0.3.2
 date-released: 2026-10-13
 url: "https://github.com/blhackslash/HyperCloudCore.jl"
 identifiers:
