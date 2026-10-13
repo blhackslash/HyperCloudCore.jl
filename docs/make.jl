@@ -19,6 +19,7 @@ makedocs(
             "Domains"             => "particle_grids/domains.md",
             "Boundary Conditions" => "particle_grids/boundary_conditions.md",
             "Weight Functions"    => "particle_grids/weights.md",
+            "Volumes & Adaptivity" => "particle_grids/volumes.md",
         ],
         "Spatial Discretization" => [
             "MLS Interpolation" => "spatial/mls_interpolation.md",

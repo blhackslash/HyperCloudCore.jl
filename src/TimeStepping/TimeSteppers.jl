@@ -99,8 +99,8 @@ end
     end
 end
 
-include("MOOD.jl")
 include("ButcherTableaus.jl")
+include("MOOD.jl")
 include("GridMovers.jl")
 
 # =========================================================================
@@ -134,6 +134,8 @@ exact for SSP tableaus.
 - `reset_orders_per_stage = false`: restore the maximum order before each stage's full RHS pass.
 - `full_search_per_stage = false`: rebuild the neighbour topology at every stage position
   (default: freeze topology, refresh distances/weights only).
+- `volume_estimator = ShepardVolumes()`: how `pg.core.volumes` is recomputed after each step of a
+  moving grid (`nothing` leaves the volumes untouched).
 
 # Fields
 - `rho_n`, `rho_cand`, `Y_stages`, `K_E_stages`, `K_I_stages`: states and RHS (`K_E = -div(F − w_i ρ) + S_expl`).
@@ -142,7 +144,8 @@ exact for SSP tableaus.
 """
 struct GeneralRKTimeStepper{D, M, T, PDE <: HyperbolicPDE, G <: DivergenceInterpolator, MO <: MOOD,
                             EST <: Tuple{Vararg{AbstractExplicitSourceTerm}},
-                            IST <: Tuple{Vararg{AbstractImplicitSourceTerm}}} <: TimeStepper
+                            IST <: Tuple{Vararg{AbstractImplicitSourceTerm}},
+                            VE <: Union{Nothing, VolumeEstimator}} <: TimeStepper
     pde::PDE
     divergence_interpolator::G
     mood::MO
@@ -151,6 +154,7 @@ struct GeneralRKTimeStepper{D, M, T, PDE <: HyperbolicPDE, G <: DivergenceInterp
     tableau::IMEXButcherTableau{T}
     reset_orders_per_stage::Bool
     full_search_per_stage::Bool
+    volume_estimator::VE
 
     rho_n::Vector{State{M, T}}
     rho_cand::Vector{State{M, T}}
@@ -170,12 +174,13 @@ struct GeneralRKTimeStepper{D, M, T, PDE <: HyperbolicPDE, G <: DivergenceInterp
     function GeneralRKTimeStepper(
         pde::HyperbolicPDE{D, M, T}, div_interp::G, mood::MO,
         explicit_sources::EST, implicit_sources::IST, tableau::IMEXButcherTableau{T};
-        reset_orders_per_stage::Bool = false, full_search_per_stage::Bool = false
-    ) where {D, M, T, G, MO <: MOOD, EST <: Tuple{Vararg{AbstractExplicitSourceTerm}}, IST <: Tuple{Vararg{AbstractImplicitSourceTerm}}}
+        reset_orders_per_stage::Bool = false, full_search_per_stage::Bool = false,
+        volume_estimator::VE = ShepardVolumes()
+    ) where {D, M, T, G, MO <: MOOD, EST <: Tuple{Vararg{AbstractExplicitSourceTerm}}, IST <: Tuple{Vararg{AbstractImplicitSourceTerm}}, VE <: Union{Nothing, VolumeEstimator}}
         s = num_stages(tableau)
-        new{D, M, T, typeof(pde), G, MO, EST, IST}(
+        new{D, M, T, typeof(pde), G, MO, EST, IST, VE}(
             pde, div_interp, mood, explicit_sources, implicit_sources, tableau,
-            reset_orders_per_stage, full_search_per_stage,
+            reset_orders_per_stage, full_search_per_stage, volume_estimator,
             State{M, T}[], State{M, T}[],
             [State{M, T}[] for _ in 1:s], [State{M, T}[] for _ in 1:s], [State{M, T}[] for _ in 1:s],
             Space{D, T}[], Space{D, T}[],
@@ -423,6 +428,7 @@ function (ts::GeneralRKTimeStepper{D, M, T})(eq::HyperbolicPDE, pg::ParticleGrid
     if moving
         pg.core.positions[1:N] .= view(ts.x_cand, 1:N)
         pg.neighbor(pg)                                    # full search + periodic wrap for the next step
+        ts.volume_estimator === nothing || update_volumes!(pg, ts.volume_estimator)
     end
     return nothing
 end

@@ -33,6 +33,7 @@ Velocity
 | `AbstractSlopeLimiter` | a new MUSCL limiter | `_limit_slopes` (see `Limiter.jl`) |
 | `MOODCriterion`, `MOODStrategy` | admissibility tests, interface-degree rules | [Multi-Dimensional Optimal Order Detection (MOOD)](@ref) |
 | `GridMover` | grid velocity models | [Moving Grids (ALE)](@ref) |
+| `VolumeEstimator` | particle quadrature weights | `update_volumes!(pg, est)`, see [Particle Volumes and Adaptivity](@ref) |
 | `AbstractBoundaryCondition` | boundary conditions | [Boundary Conditions](@ref) |
 | `MLSWeightFunction` | MLS kernels | [MLS Weight Functions](@ref) |
 | `TimeStepper` | a different time integrator | functor `(ts)(eq, pg, t, dt)` |

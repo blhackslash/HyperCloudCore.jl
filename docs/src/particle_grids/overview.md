@@ -19,15 +19,16 @@ pg = ParticleGrid(geom, nominal_dx, weight_func, M;
 | `M::Int` | Number of state components. |
 | `randomness` | Per-axis amplitude of a uniform jitter added to every lattice point. |
 | `mover::GridMover` | Grid velocity model; `NoGridMover()` keeps the particles fixed (see [Moving Grids (ALE)](@ref)). |
+| `volume_estimator::VolumeEstimator` | How `pg.core.volumes` is computed; `ShepardVolumes()` by default (see [Particle Volumes and Adaptivity](@ref)). |
 
-The constructor generates the point cloud, runs a neighbour search, reorders the particles along a space-filling curve, searches again on the reordered cloud, and (in 1-D) computes particle volumes.
+The constructor generates the point cloud, runs a neighbour search, reorders the particles along a space-filling curve, searches again on the reordered cloud, and computes the particle volumes.
 
 ## Internal structure
 
 | Field | Type | Contents |
 |---|---|---|
 | `pg.meta` | `GridMetadata` | `N`, `N_interior`, `N_ghost`, cutoff `R`, `dx`, largest neighbourhood `max_nb` |
-| `pg.core` | `ParticleGridCore` | `positions`, `is_boundary`, `volumes`, `tags`, `particle_orders` |
+| `pg.core` | `ParticleGridCore` | `positions`, `is_boundary`, `tags`, `volumes` (partition-of-unity weights, see [Particle Volumes and Adaptivity](@ref)), `particle_orders` |
 | `pg.neighbor` | `NeighborData` | Weight function and CSR-style lists: `ranges[i]` indexes `indices`, `weights`, `distances` |
 | `pg.bins` | `GlobalBins` | Coarse spatial hash (bin size ≥ `R`) and linked lists for the search |
 | `pg.reorder` | `ReorderData` | Permutation buffers for the Morton reordering |

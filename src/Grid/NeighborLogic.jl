@@ -11,7 +11,10 @@ function GlobalBins(
     # We no longer need to convert to Space{D,T} since they are already passed as such
     domain_size = domain_maxs .- domain_mins
 
-    coarse_dims = ntuple(d -> max(1, ceil(Int, domain_size[d] / R)), Val(D))
+    # Bins must be at least R wide, otherwise the ±1-bin search window misses neighbours that sit
+    # between `coarse_size` and `R` away from a particle at the edge of its bin. `floor` guarantees
+    # coarse_size = domain_size / coarse_dims ≥ R (`ceil` gave coarse_size ≤ R).
+    coarse_dims = ntuple(d -> max(1, floor(Int, domain_size[d] / R)), Val(D))
     coarse_size = domain_size ./ coarse_dims
 
     total_coarse_bins = prod(coarse_dims)

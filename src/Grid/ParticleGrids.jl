@@ -41,6 +41,7 @@ mutable struct SharedBuffers{D, M, T}
     rho_buffer::Vector{State{M, T}}      
     pos_buffer::Vector{Space{D, T}}
     float_buffer::Vector{T}
+    float_buffer2::Vector{T}
     bit_buffer::Vector{Bool}
     int_buffer::Vector{Int}
 end
@@ -87,8 +88,9 @@ mutable struct ParticleGridCore{D, T}
     volumes::Vector{T}
     tags::Vector{Int}
 
-    # Per-particle consistency order (read by every spatial scheme, written by MOOD in the stepper).
-    # All other MOOD state lives in the time stepper (`MOODWork`).
+    # `volumes`: partition-of-unity quadrature weights, Σ V = |Ω| (see Volumes.jl). They define the
+    # discrete mass Σ V U and make particle insertion/merging exactly conservative.
+    # `particle_orders`: per-particle consistency order (read by every scheme, written by MOOD).
     particle_orders::Vector{Int}
 end
 """
@@ -121,7 +123,8 @@ include("MLSWeightFunctions.jl")
 include("NeighborLogic.jl")
 include("BoundaryConditions.jl")
 include("Reordering.jl")
-
+include("Volumes.jl")
+include("Adaptivity.jl")
 
 export get_positions, get_weights, get_distances, get_neighbors
 
@@ -160,7 +163,8 @@ function ParticleGrid(
     M::Int;
     randomness::Tuple = ntuple(i -> zero(T), D),
     rng = Random.default_rng(),
-    mover = NoGridMover()
+    mover = NoGridMover(),
+    volume_estimator::VolumeEstimator = ShepardVolumes()
 ) where {D, T, FI, FT, GEO}
     
     R = get_cutoff(weight_func)
@@ -186,7 +190,7 @@ function ParticleGrid(
     
     core = ParticleGridCore{D, T}(positions, is_boundary, volumes, tags, zeros(Int, N))
     
-    shared = SharedBuffers{D, M, T}(zeros(State{M, T}, N), similar(positions), zeros(T, N), zeros(Bool, N), zeros(Int, N))
+    shared = SharedBuffers{D, M, T}(zeros(State{M, T}, N), similar(positions), zeros(T, N), zeros(T, N), zeros(Bool, N), zeros(Int, N))
     reorder = ReorderData{D}(collect(1:N), collect(1:N), zeros(Int, N), zeros(Bool, N))
     
     bins = GlobalBins(T, comp_domain.canvas_mins, comp_domain.canvas_maxs, R, N)
@@ -204,40 +208,11 @@ function ParticleGrid(
     if D > 1; pg.neighbor(pg); end 
     pg.reorder(pg)
     pg.neighbor(pg)
-    determine_volumes!(pg)
-    
+    update_volumes!(pg, volume_estimator)
+
     return pg
 end
 
-determine_volumes!(pg) = return
-
-function determine_volumes!(pg::ParticleGrid{1, M, T, WF, GM, N_OFF, Geom}) where {M, WF, GM, N_OFF, Geom, T}
-    N = pg.meta.N
-    if N == 0; return; end
-    
-    positions = get_positions(pg)
-    volumes = pg.core.volumes
-    
-    # Directly evaluate the numerical wrapper's boolean flag
-    if pg.domain.is_periodic[1]
-        L = pg.domain.L_wrap
-        L_inv = pg.domain.invL_wrap
-        for i in 1:N
-            prev_idx = mod1(i - 1, N)
-            next_idx = mod1(i + 1, N)
-            # Use the generalized periodic distance function
-            deltaPosL = abs(get_distance(positions, prev_idx, i, L, L_inv)[1])
-            deltaPosR = abs(get_distance(positions, i, next_idx, L, L_inv)[1])
-            volumes[i] = (deltaPosL + deltaPosR) / 2.0
-        end
-    else
-        for i in 1:N
-            if pg.core.is_boundary[i]; continue end
-            volumes[i] = (positions[i+1][1] - positions[i-1][1]) / 2.0
-        end
-    end
-    return
-end
 # =========================================================================
 # EXACT GEOMETRIC CFL CALCULATION FOR HIGH-ORDER MLS
 # =========================================================================
@@ -412,6 +387,23 @@ end
     return nothing
 end
 
+"""
+    ensure_particle_capacity!(nd::NeighborData, N::Int)
+
+Grows the per-particle arrays of the neighbour structure (`ranges` needs `N + 1` entries).
+"""
+function ensure_particle_capacity!(nd::NeighborData, N::Int)
+    if length(nd.ranges) < N + 1
+        new_cap = ceil(Int, (N + 1) * 1.25)
+        old_len = length(nd.ranges)
+        resize!(nd.ranges, new_cap)
+        for k in (old_len + 1):new_cap; nd.ranges[k] = 1:0; end
+    end
+    length(nd.counts)  < N && resize!(nd.counts,  ceil(Int, N * 1.25))
+    length(nd.offsets) < N && resize!(nd.offsets, ceil(Int, N * 1.25))
+    return nothing
+end
+
 @inline function ensure_capacity!(sb::SharedBuffers{D, M, T}, req_capacity::Int) where {D, M, T}
     if length(sb.pos_buffer) < req_capacity
         new_cap = ceil(Int, req_capacity * 1.25)
@@ -419,6 +411,7 @@ end
         resize!(sb.pos_buffer, new_cap)
         resize!(sb.bit_buffer, new_cap)
         resize!(sb.float_buffer, new_cap)
+        resize!(sb.float_buffer2, new_cap)
         resize!(sb.int_buffer, new_cap)
         resize!(sb.rho_buffer, new_cap)
     end
@@ -436,7 +429,7 @@ end
     ensure_capacity!(pg.core, req_capacity)
     ensure_capacity!(pg.shared, req_capacity)
     ensure_capacity!(pg.reorder, req_capacity)
-    ensure_capacity!(pg.neighbor, req_capacity)
+    ensure_particle_capacity!(pg.neighbor, req_capacity)
     ensure_capacity!(pg.bins, req_capacity)
     
     return nothing

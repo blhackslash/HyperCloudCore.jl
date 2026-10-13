@@ -67,8 +67,9 @@ The default of the four-argument `max_eigenvalue` is the safe bound $\max|\lambd
 ## Limitations
 
 - **Time step.** `get_time_step` uses the absolute wave speeds $|\lambda|$, not $|\lambda - w|$. For co-moving grids this is conservative. If the grid moves *against* the waves, the relative speed is larger, and the CFL number has to be reduced accordingly. The particle displacement $|w|\,\Delta t$ should also stay well below the cutoff radius.
-- **Volumes** in `pg.core.volumes` are not updated as particles move.
-- **Conservation.** Like the static collocation scheme, the ALE scheme is not exactly conservative; mass errors converge with the scheme's order.
+- **Volumes** in `pg.core.volumes` are recomputed after every step from the new geometry with the stepper's `volume_estimator`; see [Particle Volumes and Adaptivity](@ref).
+- **Conservation.** Like the static collocation scheme, the ALE scheme is not exactly conservative; mass errors converge with the scheme's order. Particle insertion and merging between steps (`adapt_particles!`) *are* exactly conservative with respect to `total_mass`.
+- **Particle distribution.** Lagrangian motion clusters particles in compressions. Use `ParticleAdaptivity` between steps, and/or a mover that adds a smoothing velocity.
 - **Reordering** has to happen between steps, as for static grids.
 
 ## Reference

@@ -341,3 +341,153 @@ end
         @test eoc > 1.5
     end
 end
+
+@testset "Particle volumes" begin
+    @testset "Uniform periodic cloud: every V equals dx" begin
+        pg = make_pg_1d(50)
+        N  = pg.meta.N
+        @test all(i -> isapprox(pg.core.volumes[i], 2 / 50; rtol = 1e-12), 1:N)
+        @test sum(view(pg.core.volumes, 1:N)) ≈ domain_volume(pg)
+        update_volumes!(pg, MLSVolumes(2))
+        @test all(i -> isapprox(pg.core.volumes[i], 2 / 50; rtol = 1e-10), 1:N)
+        update_volumes!(pg, ShepardVolumes(sweeps = 3))
+        @test sum(view(pg.core.volumes, 1:N)) ≈ domain_volume(pg)
+    end
+
+    @testset "Quadrature order on a jittered cloud" begin
+        geom = get_rectangular_domain(Float64, (-1.0,), (1.0,); is_periodic = false)
+        dx   = 2 / 80
+        pg   = ParticleGrid(geom, (dx,), ExponentialWeightFunction(1.0, 2.5dx), 1;
+                            randomness = (0.3dx,), rng = MersenneTwister(1))
+        N    = pg.meta.N
+        x    = i -> pg.core.positions[i][1]
+        quad = f -> sum(pg.core.volumes[i] * f(x(i)) for i in 1:N)
+
+        @test sum(view(pg.core.volumes, 1:N)) ≈ 2.0                 # Shepard: Σ V = |Ω| exactly
+        err_shepard = abs(quad(x -> x^2) - 2 / 3)
+
+        update_volumes!(pg, MLSVolumes(2; samples_per_dx = 4))        # reproduces quadratics
+        @test sum(view(pg.core.volumes, 1:N)) ≈ 2.0
+        @test all(v -> v >= 0, view(pg.core.volumes, 1:N))
+        # Exterior (ghost) particles can get negative MLS volumes; they are clamped to zero before
+        # the renormalisation, which costs some of the polynomial exactness near a non-periodic
+        # boundary (the clamped mass is O(dx) per ghost). Exactness is tested on the periodic cloud below.
+        err_mls = abs(quad(x -> x^2) - 2 / 3)
+        @test err_mls < 5e-3
+        @test err_mls < err_shepard
+        @test abs(quad(x -> x) - 0.0) < 5e-3
+    end
+
+    @testset "Quadrature order on a jittered periodic cloud (no ghosts)" begin
+        geom = get_rectangular_domain(Float64, (-1.0,), (1.0,); is_periodic = true)
+        dx   = 2 / 80
+        pg   = ParticleGrid(geom, (dx,), ExponentialWeightFunction(1.0, 2.5dx), 1;
+                            randomness = (0.3dx,), rng = MersenneTwister(2))
+        N    = pg.meta.N
+        x    = i -> pg.core.positions[i][1]
+        f    = x -> 1 + sin(π * x)                                   # ∫_{-1}^{1} f = 2
+        quad = () -> sum(pg.core.volumes[i] * f(x(i)) for i in 1:N)
+
+        err_shepard = abs(quad() - 2)
+        update_volumes!(pg, MLSVolumes(2; samples_per_dx = 4))
+        @test all(v -> v > 0, view(pg.core.volumes, 1:N))
+        err_mls2 = abs(quad() - 2)
+        update_volumes!(pg, MLSVolumes(3; samples_per_dx = 4))
+        err_mls3 = abs(quad() - 2)
+        @test err_mls2 < 1e-5
+        @test err_mls2 < err_shepard
+        @test err_mls3 <= 2 * err_mls2                                # degree 3 is not worse
+    end
+
+    @testset "Singular kernels fall back to uniform volumes" begin
+        geom = get_rectangular_domain(Float64, (-1.0,), (1.0,); is_periodic = true)
+        pg = @test_logs (:warn, r"bounded at zero") ParticleGrid(geom, (0.05,), InverseWeightFunction(1.0, 0.125), 1)
+        @test all(i -> pg.core.volumes[i] ≈ 2 / pg.meta.N, 1:pg.meta.N)
+    end
+
+    @testset "total_mass" begin
+        pg = set_ic!(make_pg_1d(40), x -> 2.0)
+        @test total_mass(pg)[1] ≈ 4.0
+    end
+end
+
+@testset "Particle adaptivity" begin
+    ic   = x -> 1.0 + 0.5 * sin(π * x)
+    kmax = 3
+    ad   = ParticleAdaptivity(Float64)
+
+    # Remove particle `p` through the remap machinery (exactly conservative) and return the new mass
+    function punch_hole!(pg, p)
+        N0 = pg.meta.N
+        ev = HyperCloudCore._AdaptEvent{1, Float64}(pg.core.positions[p], [p], Space{1, Float64}[])
+        np, nr, nv = Space{1, Float64}[], State{1, Float64}[], Float64[]
+        HyperCloudCore._remap_event!(pg, ad, ev, np, nr, nv)
+        mask = pg.shared.bit_buffer; fill!(view(mask, 1:N0), false); mask[p] = true
+        HyperCloudCore._apply_topology!(pg, mask, np, nr, nv, kmax)
+        pg.neighbor(pg)
+        return nothing
+    end
+
+    @testset "Removal + re-insertion are exactly conservative and bounded" begin
+        pg = set_ic!(make_pg_1d(40), ic)
+        N0 = pg.meta.N
+        m0 = total_mass(pg)
+        x_hole = pg.core.positions[10][1]
+
+        punch_hole!(pg, 10)
+        @test pg.meta.N == N0 - 1
+        @test maximum(abs.(total_mass(pg) - m0)) < 1e-12
+        @test sum(view(pg.core.volumes, 1:pg.meta.N)) ≈ domain_volume(pg)
+
+        rep = adapt_particles!(pg, ad, kmax)
+        @test rep.inserted == 1 && rep.removed == 0
+        @test pg.meta.N == N0
+        @test maximum(abs.(rep.mass_residual)) < 1e-12
+        @test maximum(abs.(total_mass(pg) - m0)) < 1e-12
+        @test all(r -> 0.5 - 1e-12 <= r[1] <= 1.5 + 1e-12, view(pg.rhos, 1:pg.meta.N))
+        @test pg.core.particle_orders[pg.meta.N] == kmax                # new particle starts at max order
+
+        # The new particle sits in the hole and carries a second-order accurate value
+        x_new = pg.core.positions[pg.meta.N][1]
+        @test abs(x_new - x_hole) < 0.3 * (2 / 40)
+        @test abs(pg.rhos[pg.meta.N][1] - ic(x_new)) < 0.05
+
+        rep2 = adapt_particles!(pg, ad, kmax)                             # nothing left to do
+        @test rep2.inserted == 0 && rep2.removed == 0
+    end
+
+    @testset "Merge of a close pair" begin
+        pg = set_ic!(make_pg_1d(40), ic)
+        N0 = pg.meta.N
+        pg.core.positions[21] = pg.core.positions[20] + Space{1, Float64}(0.2 * 2 / 40)
+        pg.neighbor(pg)
+        update_volumes!(pg, ShepardVolumes())
+        m0 = total_mass(pg)
+        rep = adapt_particles!(pg, ad, kmax)
+        @test rep.removed == 2 && rep.inserted == 1
+        @test pg.meta.N == N0 - 1
+        @test maximum(abs.(rep.mass_residual)) < 1e-12
+        @test all(r -> 0.5 - 1e-12 <= r[1] <= 1.5 + 1e-12, view(pg.rhos, 1:pg.meta.N))
+    end
+
+    @testset "No events inside the shock band" begin
+        pg = set_ic!(make_pg_1d(40), ic)
+        punch_hole!(pg, 10)
+        pg.core.particle_orders[12] = 1                                   # pretend MOOD lowered a neighbour
+        rep = adapt_particles!(pg, ad, kmax)
+        @test rep.inserted == 0 && rep.removed == 0
+        rep = adapt_particles!(pg, ParticleAdaptivity(Float64; exclude_reduced_order = false), kmax)
+        @test rep.inserted == 1
+    end
+
+    @testset "DMP repair is conservative" begin
+        U  = [State{1, Float64}(1.3), State{1, Float64}(0.4), State{1, Float64}(0.9)]
+        V  = [1.0, 1.0, 2.0]
+        lo = fill(State{1, Float64}(0.5), 3)
+        hi = fill(State{1, Float64}(1.0), 3)
+        m0 = sum(V .* getindex.(U, 1))
+        HyperCloudCore._dmp_repair!(U, V, lo, hi)
+        @test all(u -> 0.5 - 1e-12 <= u[1] <= 1.0 + 1e-12, U)
+        @test sum(V .* getindex.(U, 1)) ≈ m0
+    end
+end

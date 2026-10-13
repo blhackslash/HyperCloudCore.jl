@@ -45,6 +45,7 @@ Keyword options:
 |---|---|---|
 | `reset_orders_per_stage` | `false` | Restore the maximum order before every stage's RHS pass. By default, orders lowered by MOOD stay lowered for the rest of the step. |
 | `full_search_per_stage` | `false` | On moving grids, rebuild the neighbour topology at every stage position instead of only refreshing distances and weights. |
+| `volume_estimator` | `ShepardVolumes()` | How `pg.core.volumes` is recomputed after each step of a moving grid; `nothing` disables it. |
 
 All buffers (per-stage states $Y_k$ and right-hand sides $K_{E,k}$, $K_{I,k}$, position stages, neighbour gather buffer, MOOD scratch) are owned by the stepper and grown on demand, so one stepper can be reused for any number of steps and grid sizes.
 
@@ -59,7 +60,7 @@ All buffers (per-stage states $Y_k$ and right-hand sides $K_{E,k}$, $K_{I,k}$, p
    3. **Move** the grid to $X_k$ (moving grids only).
    4. **Explicit RHS:** pre-gather pass (`update_content!`), then flux pass, giving $K_{E,k}$ and, on a moving grid, the grid velocities $K_{X,k}$.
 3. **Final checkpoint:** form $U^{n+1}$ (and $x^{n+1}$), apply boundary conditions, and run the MOOD fixed point against $Y_s$.
-4. Write $U^{n+1}$ to `pg.rhos`. On a moving grid, write $x^{n+1}$ and run a full neighbour search.
+4. Write $U^{n+1}$ to `pg.rhos`. On a moving grid, write $x^{n+1}$, run a full neighbour search and recompute the particle volumes.
 
 Stage 1 has no MOOD check: $Y_1$ contains no explicit flux contribution yet, so no order could change it.
 
@@ -88,7 +89,7 @@ while t < tmax
 end
 ```
 
-`get_time_step` uses the grid geometry of the current step. On a moving grid, call it every step, since the geometry changes.
+`get_time_step` uses the grid geometry of the current step. On a moving grid, call it every step, since the geometry changes. To keep a Lagrangian cloud well-spaced, call `adapt_particles!(pg, adaptivity, _extract_order(interp))` after each step; see [Particle Volumes and Adaptivity](@ref).
 
 ## Reference
 

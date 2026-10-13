@@ -64,7 +64,7 @@ The primary simulation orchestrator governing the main time-stepping loop.
 - `snapshots::Integer`: The number of discrete data dumps to record evenly across the simulation timeline.
 - `remove_ghosts::Bool`: Strips boundary/ghost particles from the returned snapshot data if true.
 - `show_progress::Bool`: Toggles visual progress tracking.
-- `progress_interval::Real`: Sets the refresh rate (in seconds) for logging the simulation's progress and calculating the ETA.
+- `adaptivity`: a `ParticleAdaptivity` to insert/merge particles between steps (moving grids), or `nothing`.
 
 # Returns
 - A tuple containing: `(position_history, state_history, time_history, total_steps, elapsed_wall_time)`.
@@ -78,6 +78,7 @@ function solve_equation(
     is_cfl::Bool = false,
     snapshots::Integer = 10,
     remove_ghosts::Bool = false,
+    adaptivity::Union{Nothing, ParticleAdaptivity} = nothing,
 ) where {D, M, T}
     
     xs = Vector{Vector{Space{D, T}}}(undef, snapshots + 1)
@@ -108,7 +109,12 @@ function solve_equation(
         if dt_val <= T(1e-12); break; end
 
         timestepper(eq, pg, t, dt_val)
-        
+
+        if adaptivity !== nothing
+            # Between steps: insert/merge particles with the conservative remap, then reorder for locality
+            adapt_particles!(pg, adaptivity, _extract_order(div_interp))
+        end
+
         t += dt_val
         k_step += 1
         

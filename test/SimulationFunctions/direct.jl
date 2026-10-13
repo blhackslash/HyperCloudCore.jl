@@ -20,6 +20,7 @@ function run_direct_simulation(params::ParamDict)::Union{AbstractSimData, Nothin
         scheme_conf = extract_namespace(params, :Scheme)
         ic_conf     = extract_namespace(params, :IC)
         time_conf   = extract_namespace(params, :Time)
+        adapt_conf  = extract_namespace(params, :Adapt)
         
         # 2. Base Equation & Dimensions
         eq = build_equation(pde_conf, context)
@@ -59,11 +60,15 @@ function run_direct_simulation(params::ParamDict)::Union{AbstractSimData, Nothin
         tmax = T(get(time_conf, :tmax, params[:tmax]))
         
         # 8. Execution
+        adaptivity = build_adaptivity(adapt_conf, context)
+        mass0 = total_mass(pg)
         xs_svector, us_svector, ts_full, k_step, elapsed_time = solve_equation(
-            method, eq, pg, tmax, dt; 
-            is_cfl = is_cfl, snapshots = params[:snapshots], 
-            remove_ghosts = get(params, :remove_ghosts, true), 
+            method, eq, pg, tmax, dt;
+            is_cfl = is_cfl, snapshots = params[:snapshots],
+            remove_ghosts = get(params, :remove_ghosts, true),
+            adaptivity = adaptivity,
         )
+        mass1 = total_mass(pg)
         
         @info "Direct Simulation (D=$D) finished in$(round(elapsed_time, digits=2)) seconds."
 
@@ -71,7 +76,9 @@ function run_direct_simulation(params::ParamDict)::Union{AbstractSimData, Nothin
         valid_indices = findall(i -> isassigned(us_svector, i), 1:length(us_svector))
         sim_data = create_sim_data(xs_svector[valid_indices], us_svector[valid_indices], ts_full[valid_indices], params; xmins=Tuple(geom.mins), xmaxs=Tuple(geom.maxs), tmin=zero(T), tmax=tmax)
         add_stat!(sim_data, :Runtime, elapsed_time, :none)
-        add_stat!(sim_data, :k_step, Float64(k_step), :none) 
+        add_stat!(sim_data, :k_step, Float64(k_step), :none)
+        add_stat!(sim_data, :discrete_mass_error, Float64(maximum(abs.(mass1 - mass0))), :none)
+        add_stat!(sim_data, :final_particle_count, Float64(pg.meta.N), :none)
         
         return sim_data
 

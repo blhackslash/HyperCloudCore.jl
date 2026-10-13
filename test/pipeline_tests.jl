@@ -187,6 +187,22 @@ end
         @test abs(r_moving - r_static) < 1.0
     end
 
+    @testset "Adaptivity on a compressing/expanding grid" begin
+        # The sinusoidal mover clusters particles in some regions and starves others, which
+        # triggers merges and insertions. The remap must not spoil mass or stability.
+        shared  = merge(BASE_1D, Dict(:tmax => 0.5, :Grid_mover => :sinusoidal, :Grid_mover_amplitude => 0.4))
+        methods = Dict(:moving       => muscl(3; mood = (:U2, :EPD1)),
+                       :moving_adapt => merge(muscl(3; mood = (:U2, :EPD1)), Dict(:Adapt_enabled => true)))
+        sim = run_suite(shared, methods)
+        scalar(v) = v isa Number ? v : scalar(first(v))
+        s0, s1 = sim(:moving), sim(:moving_adapt)
+        check_runs(s0); check_runs(s1)
+        @test scalar(s1.stats[:final_particle_count]) != scalar(s0.stats[:final_particle_count])
+        e0, e1 = scalar(s0.stats[:discrete_mass_error]), scalar(s1.stats[:discrete_mass_error])
+        @test e1 < max(2e0, 1e-6)
+        @test final_stat(s1, :l1error) < 2 * final_stat(s0, :l1error) + 1e-3
+    end
+
     @testset "Lagrangian motion makes linear advection exact" begin
         shared  = merge(BASE_1D, Dict(:tmax => 1.0))
         methods = Dict(:lagrangian => merge(muscl(2; limiter = :minmod), Dict(:Grid_mover => :lagrangian)),
