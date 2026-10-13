@@ -32,7 +32,7 @@ jobs:
       - name: Push branches and tags to GitHub
         env:
           SRC_TOKEN: ${{ github.token }}
-          SRC_SERVER: ${{ vars.FORGEJO_URL }}   # e.g. https://git.example.com
+          SRC_SERVER: ${{ vars.FORGE_URL }}   # e.g. https://git.example.com
           SRC_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ secrets.GH_MIRROR_TOKEN }}
           GH_OWNER: ${{ vars.GH_MIRROR_OWNER || github.repository_owner }}
