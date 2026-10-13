@@ -48,7 +48,7 @@ function run_direct_simulation(params::ParamDict)::Union{AbstractSimData, Nothin
         
         # 5. Time Stepper
         context[:Tableau] = build_tableau(time_conf, context)
-        method = build_timestepper(context)
+        method = build_timestepper(context; time_conf = time_conf)
         
         # 6. Initialization
         IC = build_ic(ic_conf, context)

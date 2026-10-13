@@ -22,10 +22,10 @@ function parse_bc(domain_conf::Dict)
             elseif bc_sym === :fixed_dirichlet || bc_sym === :FixedDirichlet
                 bc_map[tag] = FixedDirichlet()
             else
-                if isdefined(Main, bc_sym)
+                if isdefined(HyperCloudCore, bc_sym)
+                    bc_map[tag] = getfield(HyperCloudCore, bc_sym)()
+                elseif isdefined(Main, bc_sym)
                     bc_map[tag] = getfield(Main, bc_sym)()
-                elseif isdefined(@__MODULE__, bc_sym)
-                    bc_map[tag] = getfield(@__MODULE__, bc_sym)()
                 else
                     error("Boundary Condition '$bc_sym' could not be found.")
                 end

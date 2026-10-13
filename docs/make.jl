@@ -4,7 +4,7 @@ using HyperCloudCore
 
 makedocs(
     sitename = "HyperCloudCore.jl",
-    modules = [HyperCloudCore],
+    modules = [HyperCloudCore, HyperCloudCore.Builders],
     checkdocs = :exports,
     format = Documenter.HTML(
         prettyurls = get(ENV, "CI", "false") == "true",
@@ -38,6 +38,7 @@ makedocs(
         "Extending" => [
             "API Contracts"  => "extending/api.md",
             "Abstract Types" => "extending/types.md",
+            "Builders"       => "extending/builders.md",
         ],
     ],
 )
