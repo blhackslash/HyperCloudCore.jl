@@ -4,7 +4,7 @@ build_mood_criterion(::Val{:none}, conf::Dict, context::Dict) = NoMOOD()
 build_mood_criterion(::Val{:only}, conf::Dict, context::Dict) = OnlyMOOD()
 
 function build_mood_criterion(::Val{:U1}, conf::Dict, context::Dict)
-    T = context[:Type]::DataType
+    T = real_type(context)
     pg = context[:Grid]
     
     vol_dx = prod(pg.meta.dx)
@@ -16,7 +16,7 @@ function build_mood_criterion(::Val{:U1}, conf::Dict, context::Dict)
 end
 
 function build_mood_criterion(::Val{:U2}, conf::Dict, context::Dict)
-    T = context[:Type]::DataType
+    T = real_type(context)
     pg = context[:Grid]
     
     vol_dx = prod(pg.meta.dx)

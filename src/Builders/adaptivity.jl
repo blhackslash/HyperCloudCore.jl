@@ -3,7 +3,7 @@
 # :Adapt_samples_per_dx, :Adapt_exclude_reduced_order
 function build_adaptivity(conf::Dict, context::Dict)
     get(conf, :enabled, false) || return nothing
-    T = context[:Type]::DataType
+    T = real_type(context)
     return ParticleAdaptivity(T;
         max_gap               = get(conf, :max_gap, 1.6),
         min_gap               = get(conf, :min_gap, 0.5),

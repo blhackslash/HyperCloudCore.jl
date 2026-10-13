@@ -4,7 +4,7 @@
 
 # --- Boundary Condition Parsing ---
 function parse_bc(domain_conf::Dict)
-    raw_bc = get(domain_conf, :bc, Dict{Int, AbstractBoundaryCondition}())
+    raw_bc = get(domain_conf, :bc, get(domain_conf, :bc_map, Dict{Int, AbstractBoundaryCondition}()))
     
     if raw_bc isa String
         raw_bc = eval(Meta.parse(raw_bc))
@@ -56,7 +56,7 @@ build_domain(name::Val, domain_conf::Dict, context::Dict) = error("Unknown domai
 
 # --- Specific Domain Builders ---
 function build_domain(::Val{:rectangular}, domain_conf::Dict, context::Dict)
-    T = context[:Type]::DataType
+    T = real_type(context)
     
     bc_map = parse_bc(domain_conf)
     
@@ -70,7 +70,7 @@ function build_domain(::Val{:rectangular}, domain_conf::Dict, context::Dict)
 end
 
 function build_domain(::Val{:spherical}, domain_conf::Dict, context::Dict)
-    T = context[:Type]::DataType
+    T = real_type(context)
     D = context[:D]::Int
     
     bc_map = parse_bc(domain_conf)

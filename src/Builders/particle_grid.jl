@@ -1,12 +1,12 @@
 """
     build_particle_grid(grid_conf, context) -> ParticleGrid
 
-Requires `context[:Type]`, `[:D]`, `[:M]`, `[:Domain]`, `[:WeightConf]`. Stores `:max_dx` in the
+Requires `real_type(context)`, `[:D]`, `[:M]`, `[:Domain]`, `[:WeightConf]`. Stores `:max_dx` in the
 context, builds the weight function, the grid mover and the volume estimator from the same
 `Grid` namespace, and sets `context[:Grid]`.
 """
 function build_particle_grid(grid_conf::Dict, context::Dict)
-    T = context[:Type]::DataType
+    T = real_type(context)
     D = context[:D]::Int
     M = context[:M]::Int
     geom = context[:Domain]
@@ -18,7 +18,7 @@ function build_particle_grid(grid_conf::Dict, context::Dict)
     randomness = ntuple(d -> T(rf[d]) * dxs[d], Val(D))
 
     weight_func = build_weights(context[:WeightConf]::Dict, context)
-    rng   = MersenneTwister(get(grid_conf, :SEED, 42)::Int)
+    rng   = MersenneTwister(get(grid_conf, :seed, get(grid_conf, :SEED, 42))::Int)
     mover = build_mover(grid_conf, context)
     vol   = build_volume_estimator(grid_conf, context)
 

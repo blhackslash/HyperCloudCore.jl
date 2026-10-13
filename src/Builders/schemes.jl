@@ -7,7 +7,7 @@ end
 build_scheme(name::Val, conf::Dict, context::Dict) = error("Unknown Scheme: $(typeof(name))")
 
 function build_scheme(::Val{:MUSCL}, conf::Dict, context::Dict)
-    T = context[:Type]::DataType
+    T = real_type(context)
     D = context[:D]::Int
     M = context[:M]::Int
     
@@ -21,7 +21,7 @@ function build_scheme(::Val{:MUSCL}, conf::Dict, context::Dict)
 end
 
 function build_scheme(::Val{:Upwind}, conf::Dict, context::Dict)
-    T = context[:Type]::DataType
+    T = real_type(context)
     D = context[:D]::Int
     M = context[:M]::Int
     
@@ -35,7 +35,7 @@ function build_scheme(::Val{:Upwind}, conf::Dict, context::Dict)
 end
 
 function build_scheme(::Val{:Central}, conf::Dict, context::Dict)
-    T = context[:Type]::DataType
+    T = real_type(context)
     D = context[:D]::Int
     M = context[:M]::Int
     
@@ -46,7 +46,7 @@ function build_scheme(::Val{:Central}, conf::Dict, context::Dict)
 end
 
 function build_scheme(::Val{:WENO}, conf::Dict, context::Dict)
-    T = context[:Type]::DataType
+    T = real_type(context)
     D = context[:D]::Int
     M = context[:M]::Int
     

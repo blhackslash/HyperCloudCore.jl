@@ -13,12 +13,12 @@ build_mover(::Val{:none},       conf::Dict, context::Dict) = NoGridMover()
 build_mover(::Val{:lagrangian}, conf::Dict, context::Dict) = LagrangianMover()
 
 function build_mover(::Val{:scaled_lagrangian}, conf::Dict, context::Dict)
-    T = context[:Type]::DataType
+    T = real_type(context)
     return ScaledLagrangianMover(T(conf[:mover_alpha]))
 end
 
 function build_mover(::Val{:sinusoidal}, conf::Dict, context::Dict)
-    T    = context[:Type]::DataType
+    T    = real_type(context)
     D    = context[:D]::Int
     geom = context[:Domain]
     A    = T(conf[:mover_amplitude])

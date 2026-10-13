@@ -13,7 +13,7 @@ function build_weights(weight_conf::Dict, context::Dict)
     weight_name = weight_conf[:name]::Symbol
     
     # Extract dependencies from the context
-    T = context[:Type]::DataType
+    T = real_type(context)
     max_dx = context[:max_dx]::T
     
     # Compute the absolute interpolation range directly in the weight builder
@@ -28,7 +28,7 @@ build_weights(name::Val, weight_conf::Dict, context::Dict) = error("Unknown weig
 
 # --- Specific Weight Builders ---
 function build_weights(::Val{:exponential}, weight_conf::Dict, context::Dict)
-    T = context[:Type]::DataType
+    T = real_type(context)
     interp_range = context[:interp_range]::T
     
     # Explicitly require alpha (no defaults!)
@@ -37,7 +37,7 @@ function build_weights(::Val{:exponential}, weight_conf::Dict, context::Dict)
 end
 
 function build_weights(::Val{:inverse}, weight_conf::Dict, context::Dict)
-    T = context[:Type]::DataType
+    T = real_type(context)
     interp_range = context[:interp_range]::T
     
     # Explicitly require alpha (no defaults!)
