@@ -16,9 +16,6 @@
 name: Push to GitHub
 
 on:
-  push:
-    branches: ["**"]
-    tags: ["**"]
   workflow_dispatch:
 
 concurrency:
