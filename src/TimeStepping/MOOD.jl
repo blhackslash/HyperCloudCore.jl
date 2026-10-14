@@ -139,14 +139,14 @@ end
 (m::MOOD{<:MOODStrategy, OnlyMOOD})(args...) = true
 
 function (m::MOOD{<:MOODStrategy, MOODu1{T}})(
-    g::Any, p_idx::Int, rho_i::State{M, T}, nb_slice::UnitRange{Int},
+    g::DivergenceInterpolator, p_idx::Int, rho_i::State{M, T}, nb_slice::UnitRange{Int},
     newRho::State{M, T}, pg::ParticleGrid{D, M, T}, int_buffer_f::AbstractVector{State{M, T}}
 ) where {D, M, T}
     return _dmp_fails(m.criterion.d, rho_i, nb_slice, newRho, int_buffer_f)
 end
 
 function (m::MOOD{<:MOODStrategy, MOODu2{T}})(
-    g::Any, p_idx::Int, rho_i::State{M, T}, nb_slice::UnitRange{Int},
+    g::DivergenceInterpolator, p_idx::Int, rho_i::State{M, T}, nb_slice::UnitRange{Int},
     newRho::State{M, T}, pg::ParticleGrid{D, M, T}, int_buffer_f::AbstractVector{State{M, T}}
 ) where {D, M, T}
     δ = m.criterion.d

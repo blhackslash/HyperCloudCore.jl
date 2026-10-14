@@ -148,8 +148,10 @@ function ComputationalDomain(
     
     is_per_svec = geom.is_periodic
     dxs_f = Space{D, T}(nominal_dx...)
-    N_ghost = any(is_per_svec) ? 0 : ceil(Int, interp_range_factor)
-    
+    # Ghost layers are decided per axis: a periodic axis needs none, every other axis needs a band
+    # of `interp_range_factor` spacings (mixed periodicity used to drop all ghost layers).
+    N_ghost = ceil(Int, interp_range_factor)
+
     canvas_mins = Space{D, T}(ntuple(d -> is_per_svec[d] ? geom.mins[d] : geom.mins[d] - N_ghost * dxs_f[d], Val(D)))
     canvas_maxs = Space{D, T}(ntuple(d -> is_per_svec[d] ? geom.maxs[d] : geom.maxs[d] + N_ghost * dxs_f[d], Val(D)))
     
@@ -213,19 +215,10 @@ function get_points(
         end
     end
     
-    surviving_ghosts = Space{D, T}[]
     max_dx = maximum(dxs_f)
     cutoff_dist_sq = (T(interp_range_factor) * max_dx + max_dx)^2
-    
-    for ghost in ghost_candidates
-        for inner in inner_points
-            if sum(abs2, ghost - inner) <= cutoff_dist_sq
-                push!(surviving_ghosts, ghost)
-                break 
-            end
-        end
-    end
-    
+    surviving_ghosts = _narrow_band(inner_points, ghost_candidates, cutoff_dist_sq)
+
     positions = vcat(inner_points, surviving_ghosts)
     N = length(positions)
     
@@ -241,4 +234,37 @@ function get_points(
     end
     
     return positions, is_boundary, tags, volumes, Tuple(dxs_f)
+end
+
+# The ghost candidates within `sqrt(cutoff_sq)` of an interior point, in their original order. Interior
+# points are hashed into cells of that width, so only the 3^D surrounding cells are searched and the
+# cost is linear in the number of points (the pairwise check was quadratic and dominated 3-D set-ups).
+function _narrow_band(inner::Vector{Space{D, T}}, candidates::Vector{Space{D, T}}, cutoff_sq::T) where {D, T}
+    survivors = Space{D, T}[]
+    (isempty(inner) || isempty(candidates)) && return survivors
+    h = sqrt(cutoff_sq)
+    origin = reduce((a, b) -> min.(a, b), inner)
+    cell_of(p) = ntuple(d -> floor(Int, (p[d] - origin[d]) / h), Val(D))
+    cells = Dict{NTuple{D, Int}, Vector{Int}}()
+    for (i, p) in enumerate(inner)
+        push!(get!(() -> Int[], cells, cell_of(p)), i)
+    end
+    window = CartesianIndices(ntuple(_ -> -1:1, Val(D)))
+    for g in candidates
+        c = cell_of(g)
+        found = false
+        for off in window
+            lst = get(cells, ntuple(d -> c[d] + off[d], Val(D)), nothing)
+            lst === nothing && continue
+            for i in lst
+                if sum(abs2, g - inner[i]) <= cutoff_sq
+                    found = true
+                    break
+                end
+            end
+            found && break
+        end
+        found && push!(survivors, g)
+    end
+    return survivors
 end

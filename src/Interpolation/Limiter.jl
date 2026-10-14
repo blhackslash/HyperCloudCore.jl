@@ -119,6 +119,12 @@ end
 # =========================================================================
 # 1D DIRECTIONAL LIMITERS (Minmod & Superbee)
 # =========================================================================
+function _limit_slopes(strategy::Union{SuperbeeLimiter, MinmodLimiter}, raw_grad, nb_slice, f_i, f_neighbors,
+                       pg::ParticleGrid{D}, distVec, ::Val) where {D}
+    error("$(nameof(typeof(strategy))) is a one-dimensional limiter and cannot be used on a $(D)-D grid; " *
+          "use BarthJespersenLimiter or VenkatakrishnanLimiter instead.")
+end
+
 function _limit_slopes(
     strategy::Union{SuperbeeLimiter{Mode}, MinmodLimiter{Mode}},
     raw_grad::SVector{B_LEN, State{M, T}},

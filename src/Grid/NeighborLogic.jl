@@ -110,8 +110,8 @@ function update_bin_neighbors!(bins::GlobalBins{D, T, N_OFF}, domain::Computatio
 
     for b in 1:num_bins
         cart_idx = ci[b]
-        
-        bins.bin_neighbors[b] = SVector{N_OFF, Int}(ntuple(Val(N_OFF)) do idx
+
+        raw = ntuple(Val(N_OFF)) do idx
             offset = window[idx]
             nb_cart = cart_idx + offset
             
@@ -137,9 +137,15 @@ function update_bin_neighbors!(bins::GlobalBins{D, T, N_OFF}, domain::Computatio
             else
                 return dummy_bin
             end
+        end
+        # A periodic axis with fewer than three bins maps several offsets onto the same bin. Visiting
+        # it more than once would list every neighbour in it several times, so repeats become the dummy bin.
+        bins.bin_neighbors[b] = SVector{N_OFF, Int}(ntuple(Val(N_OFF)) do idx
+            v = raw[idx]
+            any(k -> raw[k] == v, 1:(idx - 1)) ? dummy_bin : v
         end)
     end
-    
+
     return nothing
 end
 

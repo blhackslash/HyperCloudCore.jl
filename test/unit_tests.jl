@@ -105,6 +105,77 @@ end
     @test length(pg.rhos) == cap
 end
 
+@testset "Grid construction" begin
+    @testset "Mixed periodicity keeps ghost layers on the non-periodic axes" begin
+        geom = get_rectangular_domain(Float64, (0.0, 0.0), (1.0, 1.0); is_periodic = (true, false))
+        pg = ParticleGrid(geom, (0.1, 0.1), ExponentialWeightFunction(1.0, 0.3), 1)
+        @test pg.meta.N_ghost > 0
+        @test pg.domain.canvas_mins[1] == 0.0 && pg.domain.canvas_maxs[1] == 1.0        # periodic axis: no band
+        @test pg.domain.canvas_mins[2] < 0.0 && pg.domain.canvas_maxs[2] > 1.0          # ghost band in y
+        @test any(i -> pg.core.is_boundary[i] && pg.core.positions[i][2] < 0, 1:pg.meta.N)
+        @test count(i -> pg.core.positions[i][1] ≈ 1.0, 1:pg.meta.N) == 0               # no duplicated seam
+    end
+
+    @testset "Small periodic domains do not duplicate neighbours" begin
+        geom = get_rectangular_domain(Float64, (0.0,), (1.0,); is_periodic = true)
+        for R in (0.45, 0.6)                                   # two and one coarse bins along the axis
+            pg = ParticleGrid(geom, (0.1,), ExponentialWeightFunction(1.0, R), 1)
+            nb = pg.neighbor
+            @test pg.bins.coarse_dims[1] <= 2
+            @test all(i -> allunique(view(nb.indices, nb.ranges[i])), 1:pg.meta.N)
+            @test all(i -> !(i in view(nb.indices, nb.ranges[i])), 1:pg.meta.N)
+            @test all(i -> length(nb.ranges[i]) == count(j -> j != i && (dd = pg.core.positions[j][1] - pg.core.positions[i][1]; abs(dd - round(dd)) <= R + 1e-12), 1:pg.meta.N), 1:pg.meta.N)
+        end
+    end
+
+    @testset "Narrow ghost band equals the brute-force selection" begin
+        geom = get_spherical_domain(Float64, (0.0, 0.0), 1.0)
+        dx   = 2 / 40
+        pg   = ParticleGrid(geom, (dx, dx), ExponentialWeightFunction(1.0, 2.5dx), 1)
+        cd   = pg.domain
+        Ns   = ntuple(d -> round(Int, (cd.canvas_maxs[d] - cd.canvas_mins[d]) / dx) + 1, 2)
+        pts  = [Space{2, Float64}(cd.canvas_mins[1] + (I[1] - 1) * dx, cd.canvas_mins[2] + (I[2] - 1) * dx) for I in CartesianIndices(Ns)]
+        inner, outer = filter(geom.is_interior, pts), filter(!geom.is_interior, pts)
+        cutoff_sq = (2.5dx + dx)^2
+        expected = count(g -> any(p -> sum(abs2, g - p) <= cutoff_sq, inner), outer)
+        @test pg.meta.N_interior == length(inner)
+        @test pg.meta.N_ghost == expected
+        @test all(i -> !pg.core.is_boundary[i] || any(j -> !pg.core.is_boundary[j] &&
+                  sum(abs2, pg.core.positions[i] - pg.core.positions[j]) <= cutoff_sq, 1:pg.meta.N), 1:pg.meta.N)
+    end
+end
+
+@testset "MLS divergence" begin
+    @testset "Exact for a linear flux with one solve for all components" begin
+        geom = get_rectangular_domain(Float64, (0.0, 0.0), (1.0, 1.0); is_periodic = true)
+        dx = 1 / 20
+        pg = ParticleGrid(geom, (dx, dx), ExponentialWeightFunction(1.0, 2.5dx), 2)
+        nb = pg.neighbor
+        df_flux = Vector{Flux{2, 2, Float64}}(undef, length(nb.indices))
+        scratch = Vector{State{2, Float64}}(undef, length(nb.indices))
+        for i in (1, pg.meta.N ÷ 2)
+            sl = nb.ranges[i]
+            for k in sl
+                d = nb.distances[k]
+                df_flux[k] = Flux{2, 2, Float64}((State{2, Float64}(1.5d[1], -0.5d[1] + 2d[2]),
+                                                  State{2, Float64}(2.0d[2], 3.0d[2] - d[1])))
+            end
+            for order in 1:3
+                div = HyperCloudCore.Interpolator{2, order, 1}()(sl, nb.distances, nb.weights, df_flux, scratch; scale = pg.meta.dx)
+                @test isapprox(div, State{2, Float64}(3.5, 2.5); atol = 1e-8)
+            end
+        end
+    end
+
+    @testset "1-D limiters refuse multi-dimensional grids" begin
+        geom = get_rectangular_domain(Float64, (0.0, 0.0), (1.0, 1.0); is_periodic = true)
+        pg = ParticleGrid(geom, (0.1, 0.1), ExponentialWeightFunction(1.0, 0.25), 1)
+        g = zero(SVector{2, State{1, Float64}})
+        @test_throws ErrorException HyperCloudCore._limit_slopes(MinmodLimiter(:hard), g, 1:0, State{1, Float64}(0.0),
+                                                                 State{1, Float64}[], pg, pg.neighbor.distances, Val(1))
+    end
+end
+
 @testset "Butcher tableaus" begin
     explicit = (RK1_Euler_Tableau, RK2_SSP_Tableau, RK2_Ralston_Tableau, RK3_SSP_Tableau, RK4_Classical_Tableau)
     imex     = (IMEX_Euler_Tableau, IMEX_ARS233_Tableau, IMEX_ARS222_Tableau, IMEX_PRSSP3_Tableau, IMEX_SSP2332_Tableau)
@@ -238,6 +309,16 @@ end
         ts(eq, pg, 0.0, dt)
         @test all(==(1), view(pg.core.particle_orders, 1:pg.meta.N))
         @test all(view(mood_flags(ts), 1:pg.meta.N))
+    end
+
+    @testset "First-order MUSCL advances the solution and matches the upwind scheme" begin
+        pg_m, pg_u = set_ic!(make_pg_1d(N), ic), set_ic!(make_pg_1d(N), ic)
+        ts_m = GeneralRKTimeStepper(eq, MUSCL(Float64, 1, 1, 1, NoLimiter(), RusanovFlux()), MOOD(), RK1_Euler_Tableau(Float64))
+        ts_u = GeneralRKTimeStepper(eq, UpwindDivergence(Float64, 1, 1, 1, :Classic, RusanovFlux()), MOOD(), RK1_Euler_Tableau(Float64))
+        r0 = copy(pg_m.rhos)
+        ts_m(eq, pg_m, 0.0, dt); ts_u(eq, pg_u, 0.0, dt)
+        @test maximum(abs.(first.(view(pg_m.rhos, 1:pg_m.meta.N) .- view(r0, 1:pg_m.meta.N)))) > 1e-4
+        @test all(i -> isapprox(pg_m.rhos[i][1], pg_u.rhos[i][1]; atol = 1e-12), 1:pg_m.meta.N)
     end
 
     @testset "dt must have the grid's element type" begin

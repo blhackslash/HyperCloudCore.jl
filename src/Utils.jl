@@ -3,7 +3,6 @@
 export param2uvec, param2xvec, param2svec, param2fvec, param2vel
 export set_threads!, get_use_threads
 
-const _THREAD_TOLERANCE = Ref(100)
 const _USE_THREADS      = Ref(false)
 
 get_use_threads() = _USE_THREADS[]
