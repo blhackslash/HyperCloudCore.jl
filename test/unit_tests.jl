@@ -280,6 +280,16 @@ end
         @test all(view(mood_flags(ts), 1:pg.meta.N))
     end
 
+    @testset "First-order MUSCL advances the solution and matches the upwind scheme" begin
+        pg_m, pg_u = set_ic!(make_pg_1d(N), ic), set_ic!(make_pg_1d(N), ic)
+        ts_m = GeneralRKTimeStepper(eq, MUSCL(Float64, 1, 1, 1, NoLimiter(), RusanovFlux()), MOOD(), RK1_Euler_Tableau(Float64))
+        ts_u = GeneralRKTimeStepper(eq, UpwindDivergence(Float64, 1, 1, 1, :Classic, RusanovFlux()), MOOD(), RK1_Euler_Tableau(Float64))
+        r0 = copy(pg_m.rhos)
+        ts_m(eq, pg_m, 0.0, dt); ts_u(eq, pg_u, 0.0, dt)
+        @test maximum(abs.(first.(view(pg_m.rhos, 1:pg_m.meta.N) .- view(r0, 1:pg_m.meta.N)))) > 1e-4
+        @test all(i -> isapprox(pg_m.rhos[i][1], pg_u.rhos[i][1]; atol = 1e-12), 1:pg_m.meta.N)
+    end
+
     @testset "dt must have the grid's element type" begin
         pg = set_ic!(make_pg_1d(N), ic)
         ts = GeneralRKTimeStepper(eq, CentralDivergence(Float64, 1, 1, 2), MOOD(), RK2_SSP_Tableau(Float64))

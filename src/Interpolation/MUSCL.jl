@@ -71,11 +71,14 @@ function MUSCL(
     
     if div_order > max_order; div_order = max_order; end
     
-    max_degree = max(1, max_order - 1) 
+    max_degree = max(1, max_order - 1)
     B_LEN_VAL = basis_length(Val(dimension), Val(max_degree))
-    B_LEN = typeof(B_LEN_VAL).parameters[1] 
-    
-    interps = ntuple(Val(max_order)) do k
+    B_LEN = typeof(B_LEN_VAL).parameters[1]
+
+    # Entry k reconstructs with degree k - 1 (entry 1: piecewise constant). The divergence always uses
+    # an entry ≥ 2 (`_resolve_div_idx`), so a first-order scheme still needs the degree-1 interpolator
+    # for its divergence; without it the flux divergence was identically zero.
+    interps = ntuple(Val(max(2, max_order))) do k
         k == 1 ? ConstantReconstruction() : Interpolator{dimension, k - 1, 1}()
     end
     
@@ -106,7 +109,7 @@ function update_content!(
     req_nb = req_deg == 0 ? 0 : typeof(basis_length(Val(D), Val(req_deg))).parameters[1]
     
     # Dynamically clamp spatial order in core arrays if neighborhood is starved
-    if i < 0 || num_nb < req_nb
+    if num_nb < req_nb
         pg.core.particle_orders[i] = 1 
         p_order = 1
     end
@@ -144,6 +147,7 @@ function (muscl::MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER})(
     nb_indices = pg.neighbor.indices
 
     eff_order_i = pg.core.particle_orders[i]
+    degree      = Val(max(1, MAX_ORDER - 1))   # reconstruction degree; matches B_LEN of the cached gradients
 
     @inbounds for global_idx in nb_slice
         dist_k = dist_all[global_idx]
@@ -151,8 +155,8 @@ function (muscl::MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER})(
         j_idx  = nb_indices[global_idx]
         grad_j = muscl.gradients[j_idx]
 
-        p_interface_i_raw = build_basis(Val(MAX_ORDER-1),  T(0.5) * dist_k)
-        p_interface_j_raw = build_basis(Val(MAX_ORDER-1), -T(0.5) * dist_k)
+        p_interface_i_raw = build_basis(degree,  T(0.5) * dist_k)
+        p_interface_j_raw = build_basis(degree, -T(0.5) * dist_k)
 
         # Interface degrees resolved by the MOOD strategy (EPD0 / EPD1 / EPD2 / ...)
         interface_order_i, interface_order_j = _get_interface_orders(strategy, pg, i, j_idx)
