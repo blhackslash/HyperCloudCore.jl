@@ -105,6 +105,46 @@ end
     @test length(pg.rhos) == cap
 end
 
+@testset "Grid construction" begin
+    @testset "Mixed periodicity keeps ghost layers on the non-periodic axes" begin
+        geom = get_rectangular_domain(Float64, (0.0, 0.0), (1.0, 1.0); is_periodic = (true, false))
+        pg = ParticleGrid(geom, (0.1, 0.1), ExponentialWeightFunction(1.0, 0.3), 1)
+        @test pg.meta.N_ghost > 0
+        @test pg.domain.canvas_mins[1] == 0.0 && pg.domain.canvas_maxs[1] == 1.0        # periodic axis: no band
+        @test pg.domain.canvas_mins[2] < 0.0 && pg.domain.canvas_maxs[2] > 1.0          # ghost band in y
+        @test any(i -> pg.core.is_boundary[i] && pg.core.positions[i][2] < 0, 1:pg.meta.N)
+        @test count(i -> pg.core.positions[i][1] ≈ 1.0, 1:pg.meta.N) == 0               # no duplicated seam
+    end
+
+    @testset "Small periodic domains do not duplicate neighbours" begin
+        geom = get_rectangular_domain(Float64, (0.0,), (1.0,); is_periodic = true)
+        for R in (0.45, 0.6)                                   # two and one coarse bins along the axis
+            pg = ParticleGrid(geom, (0.1,), ExponentialWeightFunction(1.0, R), 1)
+            nb = pg.neighbor
+            @test pg.bins.coarse_dims[1] <= 2
+            @test all(i -> allunique(view(nb.indices, nb.ranges[i])), 1:pg.meta.N)
+            @test all(i -> !(i in view(nb.indices, nb.ranges[i])), 1:pg.meta.N)
+            @test all(i -> length(nb.ranges[i]) == count(j -> j != i && (dd = pg.core.positions[j][1] - pg.core.positions[i][1]; abs(dd - round(dd)) <= R + 1e-12), 1:pg.meta.N), 1:pg.meta.N)
+        end
+    end
+
+    @testset "Narrow ghost band equals the brute-force selection" begin
+        geom = get_spherical_domain(Float64, (0.0, 0.0), 1.0)
+        dx   = 2 / 40
+        pg   = ParticleGrid(geom, (dx, dx), ExponentialWeightFunction(1.0, 2.5dx), 1)
+        cd   = pg.domain
+        Ns   = ntuple(d -> round(Int, (cd.canvas_maxs[d] - cd.canvas_mins[d]) / dx) + 1, 2)
+        pts  = [Space{2, Float64}(cd.canvas_mins[1] + (I[1] - 1) * dx, cd.canvas_mins[2] + (I[2] - 1) * dx) for I in CartesianIndices(Ns)]
+        inner, outer = filter(geom.is_interior, pts), filter(!geom.is_interior, pts)
+        cutoff_sq = (2.5dx + dx)^2
+        expected = count(g -> any(p -> sum(abs2, g - p) <= cutoff_sq, inner), outer)
+        @test pg.meta.N_interior == length(inner)
+        @test pg.meta.N_ghost == expected
+        @test all(i -> !pg.core.is_boundary[i] || any(j -> !pg.core.is_boundary[j] &&
+                  sum(abs2, pg.core.positions[i] - pg.core.positions[j]) <= cutoff_sq, 1:pg.meta.N), 1:pg.meta.N)
+    end
+end
+
 @testset "Butcher tableaus" begin
     explicit = (RK1_Euler_Tableau, RK2_SSP_Tableau, RK2_Ralston_Tableau, RK3_SSP_Tableau, RK4_Classical_Tableau)
     imex     = (IMEX_Euler_Tableau, IMEX_ARS233_Tableau, IMEX_ARS222_Tableau, IMEX_PRSSP3_Tableau, IMEX_SSP2332_Tableau)

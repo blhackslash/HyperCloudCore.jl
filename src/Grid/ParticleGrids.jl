@@ -205,7 +205,8 @@ function ParticleGrid(
         zeros(State{M, T}, N), zeros(State{M, T}, N)
     )
 
-    if D > 1; pg.neighbor(pg); end 
+    # The spatial reordering only needs positions and the canvas box, so the neighbour search is run
+    # once, after the particles have been laid out in memory.
     pg.reorder(pg)
     pg.neighbor(pg)
     update_volumes!(pg, volume_estimator)
