@@ -27,7 +27,7 @@
 # Namespaces
 #
 # Configuration dictionaries are flat with namespaced keys (`:Scheme_name`, `:Time_stepper`, …);
-# `PDEStudioCore.extract_namespace(params, :Scheme)` yields the `conf` dict a builder expects. Keys used:
+# `HyperCloud.extract_namespace(params, :Scheme)` (the wrapper owns it) yields the `conf` dict a builder expects. Keys used:
 #
 # - `Grid`: `domain`, `mins`, `maxs`, `Ns`, `periodic`, `bc` (or `bc_map`), `randomness_factor`, `seed` (or `SEED`), `mover`,
 #   `mover_alpha`, `mover_amplitude`, `volumes`, `volumes_degree`, `volumes_samples_per_dx`

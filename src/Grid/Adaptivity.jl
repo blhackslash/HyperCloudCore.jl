@@ -77,9 +77,10 @@ function adapt_particles!(pg::ParticleGrid{D, M, T}, ad::ParticleAdaptivity{T}, 
     remove_mask = pg.shared.bit_buffer
     fill!(view(remove_mask, 1:N), false)
     new_pos, new_rho, new_vol = Space{D, T}[], State{M, T}[], T[]
+    df = Vector{State{M, T}}(undef, length(pg.neighbor.indices))   # neighbour-slot scratch shared by all events
 
     for ev in events
-        _remap_event!(pg, ad, ev, new_pos, new_rho, new_vol)
+        _remap_event!(pg, ad, ev, new_pos, new_rho, new_vol, df)
         for r in ev.removed; remove_mask[r] = true; end
     end
 
@@ -169,7 +170,8 @@ end
 # The remap of one event (on the OLD topology)
 # -------------------------------------------------------------------------
 function _remap_event!(pg::ParticleGrid{D, M, T}, ad::ParticleAdaptivity{T}, ev::_AdaptEvent{D, T},
-                       new_pos::Vector{Space{D, T}}, new_rho::Vector{State{M, T}}, new_vol::Vector{T}) where {D, M, T}
+                       new_pos::Vector{Space{D, T}}, new_rho::Vector{State{M, T}}, new_vol::Vector{T},
+                       df::Vector{State{M, T}} = Vector{State{M, T}}(undef, length(pg.neighbor.indices))) where {D, M, T}
     nb     = pg.neighbor
     pos    = pg.core.positions
     V      = pg.core.volumes
@@ -197,7 +199,6 @@ function _remap_event!(pg::ParticleGrid{D, M, T}, ad::ParticleAdaptivity{T}, ev:
     grads = Vector{SVector{D, State{M, T}}}(undef, n_loc)
     lo    = Vector{State{M, T}}(undef, n_loc)
     hi    = Vector{State{M, T}}(undef, n_loc)
-    df    = Vector{State{M, T}}(undef, length(nb.indices))
     scale = dx
     @inbounds for l in 1:n_loc
         j  = loc_idx[l]
