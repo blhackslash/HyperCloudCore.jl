@@ -145,6 +145,37 @@ end
     end
 end
 
+@testset "MLS divergence" begin
+    @testset "Exact for a linear flux with one solve for all components" begin
+        geom = get_rectangular_domain(Float64, (0.0, 0.0), (1.0, 1.0); is_periodic = true)
+        dx = 1 / 20
+        pg = ParticleGrid(geom, (dx, dx), ExponentialWeightFunction(1.0, 2.5dx), 2)
+        nb = pg.neighbor
+        df_flux = Vector{Flux{2, 2, Float64}}(undef, length(nb.indices))
+        scratch = Vector{State{2, Float64}}(undef, length(nb.indices))
+        for i in (1, pg.meta.N ÷ 2)
+            sl = nb.ranges[i]
+            for k in sl
+                d = nb.distances[k]
+                df_flux[k] = Flux{2, 2, Float64}((State{2, Float64}(1.5d[1], -0.5d[1] + 2d[2]),
+                                                  State{2, Float64}(2.0d[2], 3.0d[2] - d[1])))
+            end
+            for order in 1:3
+                div = HyperCloudCore.Interpolator{2, order, 1}()(sl, nb.distances, nb.weights, df_flux, scratch; scale = pg.meta.dx)
+                @test isapprox(div, State{2, Float64}(3.5, 2.5); atol = 1e-8)
+            end
+        end
+    end
+
+    @testset "1-D limiters refuse multi-dimensional grids" begin
+        geom = get_rectangular_domain(Float64, (0.0, 0.0), (1.0, 1.0); is_periodic = true)
+        pg = ParticleGrid(geom, (0.1, 0.1), ExponentialWeightFunction(1.0, 0.25), 1)
+        g = zero(SVector{2, State{1, Float64}})
+        @test_throws ErrorException HyperCloudCore._limit_slopes(MinmodLimiter(:hard), g, 1:0, State{1, Float64}(0.0),
+                                                                 State{1, Float64}[], pg, pg.neighbor.distances, Val(1))
+    end
+end
+
 @testset "Butcher tableaus" begin
     explicit = (RK1_Euler_Tableau, RK2_SSP_Tableau, RK2_Ralston_Tableau, RK3_SSP_Tableau, RK4_Classical_Tableau)
     imex     = (IMEX_Euler_Tableau, IMEX_ARS233_Tableau, IMEX_ARS222_Tableau, IMEX_PRSSP3_Tableau, IMEX_SSP2332_Tableau)

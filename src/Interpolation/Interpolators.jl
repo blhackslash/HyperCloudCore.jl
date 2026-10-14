@@ -230,17 +230,44 @@ function (interp::Interpolator{D, IO, DO})(
     dfFluxVec::AbstractVector{Flux{D, M, T}}, dfVec_workspace::AbstractVector{State{M, T}};
     scale::Space{D, T}
 ) where {D, IO, DO, M, T}
-    
-    div_tuple = ntuple(Val(D)) do d
-        @inbounds for global_idx in nb_slice
-            dfVec_workspace[global_idx] = dfFluxVec[global_idx][d] 
-        end
-        
-        res = interp(nb_slice, dists, weights, dfVec_workspace; scale = scale[d])
-        return res[d] 
+    # The MLS fit is invariant to the (isotropic) coordinate scale up to the relative regularisation,
+    # so one scale serves all directions and the workspace argument is kept only for the interface.
+    return _mls_divergence(nb_slice, dists, weights, dfFluxVec, minimum(scale),
+                           basis_length(Val(D), Val(IO)), Val(IO), Val(D))
+end
+
+# One moment matrix and one factorisation for all D flux components (instead of one per direction):
+# the right-hand side holds the D·M flux differences side by side and the divergence is Σ_d ∂_d F_d.
+@inline function _mls_divergence(
+    nb_slice::UnitRange{Int}, distVec::AbstractVector{Space{D, T}}, wVec::AbstractVector{T},
+    dfFluxVec::AbstractVector{Flux{D, M, T}}, scale::T, ::Val{B_LEN}, ::Val{IO}, ::Val{D}
+) where {B_LEN, IO, D, M, T}
+    invL = one(T) / scale
+    N_s = zero(SMatrix{B_LEN, B_LEN, T, B_LEN * B_LEN})
+    b_s = zero(SMatrix{B_LEN, D * M, T, B_LEN * D * M})
+
+    @inbounds for i in nb_slice
+        w   = wVec[i]
+        p_s = build_basis(Val(IO), distVec[i] * invL)
+        F   = dfFluxVec[i]
+        row = SVector{D * M, T}(ntuple(k -> F[(k - 1) ÷ M + 1][(k - 1) % M + 1], Val(D * M)))
+        N_s += w * (p_s * p_s')
+        b_s += w * (p_s * row')
     end
-    
-    return sum(div_tuple)
+
+    eps_reg = T(1e-10) * tr(N_s) / B_LEN
+    C = cholesky(Symmetric(N_s + eps_reg * I), check = false)
+    LinearAlgebra.issuccess(C) || return zero(State{M, T})
+    c_s = C \ b_s
+
+    # The first D basis terms are the first derivatives in axis order, scaled by invL.
+    return State{M, T}(ntuple(Val(M)) do m
+        acc = zero(T)
+        for d in 1:D
+            acc += c_s[d, (d - 1) * M + m]
+        end
+        acc * invL
+    end)
 end
 
 # =========================================================================
@@ -321,12 +348,14 @@ end
         if !mask[i]; continue; end
         
         w = wVec[i]
-        p_s = build_basis(Val(IO), distVec[i] * invL) 
-        N_s += w * (p_s * p_s') 
-        b_s += w * (p_s * dfVec[i]') 
+        p_s = build_basis(Val(IO), distVec[i] * invL)
+        N_s += w * (p_s * p_s')
+        b_s += w * (p_s * dfVec[i]')
     end
-    
-    C = cholesky(Symmetric(N_s), check=false)
+
+    # Same scale-invariant regularisation as the unmasked solve (one-sided stencils are ill-conditioned more often)
+    eps_reg = T(1e-10) * tr(N_s) / B_LEN
+    C = cholesky(Symmetric(N_s + eps_reg * I), check=false)
     
     if !LinearAlgebra.issuccess(C)
         return zero(SVector{B_LEN, State{M, T}})
