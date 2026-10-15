@@ -7,11 +7,11 @@ include("Domains.jl")
 # ---------------------------------------------------------
 """
     GridMetadata{D, T}
-    SharedBuffers{D, M, T}
-    NeighborData{D, T, WF}
+    SharedBuffers{D, M, T, ...}
+    NeighborData{D, T, WF, ...}
     ReorderData{D}
-    GlobalBins{D, T, N_OFF}
-    ParticleGridCore{D, T}
+    GlobalBins{D, T, N_OFF, ...}
+    ParticleGridCore{D, T, ...}
 
 Internal structures managing the state, topology, and execution context of the mesh-free solver.
 - `GridMetadata`: Stores grid capacities, resolutions, and the active interaction radius.
@@ -37,67 +37,103 @@ mutable struct GridMetadata{D, T}
     geometry_version::Int
 end
 
+"""
+    GridMetadataView{D, T}
+
+Immutable snapshot of a `GridMetadata`, the form in which the metadata travels into kernels
+(see `DeviceAdapt.jl`). Kernels only read it.
+"""
+struct GridMetadataView{D, T}
+    N::Int
+    N_interior::Int
+    N_ghost::Int
+    R::T
+    max_dx::T
+    dx::Space{D, T}
+    interp_range_factor::T
+    max_nb::Int
+    geometry_version::Int
+end
+GridMetadataView(m::GridMetadata{D, T}) where {D, T} = GridMetadataView{D, T}(
+    m.N, m.N_interior, m.N_ghost, m.R, m.max_dx, m.dx, m.interp_range_factor, m.max_nb, m.geometry_version)
+
+# The storage containers are parametric in their vector types, so the same structs hold host `Vector`s,
+# device arrays (`CuArray`, ...) or the device views KernelAbstractions passes into kernels. Their arrays are
+# only ever resized in place (`ensure_capacity!`), never rebound, so the structs are immutable.
+
 # ---------------------------------------------------------
 # 2. Shared Workspace Buffers
 # ---------------------------------------------------------
-mutable struct SharedBuffers{D, M, T}
-    rho_buffer::Vector{State{M, T}}      
-    pos_buffer::Vector{Space{D, T}}
-    float_buffer::Vector{T}
-    float_buffer2::Vector{T}
-    bit_buffer::Vector{Bool}
-    int_buffer::Vector{Int}
+struct SharedBuffers{D, M, T, VS <: AbstractVector{State{M, T}}, VP <: AbstractVector{Space{D, T}},
+                     VT <: AbstractVector{T}, VB <: AbstractVector{Bool}, VI <: AbstractVector{Int}}
+    rho_buffer::VS
+    pos_buffer::VP
+    float_buffer::VT
+    float_buffer2::VT
+    bit_buffer::VB
+    int_buffer::VI
 end
+SharedBuffers{D, M, T}(rho, pos, f1::VT, f2::VT, bit, int) where {D, M, T, VT} =
+    SharedBuffers{D, M, T, typeof(rho), typeof(pos), VT, typeof(bit), typeof(int)}(rho, pos, f1, f2, bit, int)
 
 # ---------------------------------------------------------
 # 3. Neighbor Search Context
 # ---------------------------------------------------------
-mutable struct NeighborData{D, T, WF}    
+struct NeighborData{D, T, WF, VR <: AbstractVector{UnitRange{Int}}, VI <: AbstractVector{Int},
+                    VT <: AbstractVector{T}, VP <: AbstractVector{Space{D, T}}}
     weight_func::WF
-    ranges::Vector{UnitRange{Int}}
-    indices::Vector{Int}
-    weights::Vector{T}
-    distances::Vector{Space{D, T}} 
-    counts::Vector{Int}
-    offsets::Vector{Int}
+    ranges::VR
+    indices::VI
+    weights::VT
+    distances::VP
+    counts::VI
+    offsets::VI
 end
+NeighborData{D, T, WF}(wf::WF, ranges, indices::VI, weights, distances, counts::VI, offsets::VI) where {D, T, WF, VI} =
+    NeighborData{D, T, WF, typeof(ranges), VI, typeof(weights), typeof(distances)}(wf, ranges, indices, weights, distances, counts, offsets)
 
 # ---------------------------------------------------------
-# 4. Reordering / Sorting Context
+# 4. Reordering / Sorting Context (host only)
 # ---------------------------------------------------------
 struct ReorderData{D}
-    permutation::Vector{Int}          
-    inv_permutation::Vector{Int}      
-    new_permutation_buffer::Vector{Int} 
-    seen_buffer::Vector{Bool}            
+    permutation::Vector{Int}
+    inv_permutation::Vector{Int}
+    new_permutation_buffer::Vector{Int}
+    seen_buffer::Vector{Bool}
 end
 
-struct GlobalBins{D, T, N_OFF}
+struct GlobalBins{D, T, N_OFF, VI <: AbstractVector{Int}, VN <: AbstractVector{SVector{N_OFF, Int}}}
     mins::Space{D, T}
     maxs::Space{D, T}
     coarse_size::Space{D, T}
     coarse_dims::NTuple{D, Int}
-    head::Vector{Int}
-    next::Vector{Int}
-    bin_neighbors::Vector{SVector{N_OFF, Int}} 
+    head::VI
+    next::VI
+    bin_neighbors::VN
 end
+GlobalBins{D, T, N_OFF}(mins, maxs, coarse_size, coarse_dims, head::VI, next::VI, bin_neighbors) where {D, T, N_OFF, VI} =
+    GlobalBins{D, T, N_OFF, VI, typeof(bin_neighbors)}(mins, maxs, coarse_size, coarse_dims, head, next, bin_neighbors)
 
 # ---------------------------------------------------------
 # 6. Particle Grid Core (Geometry & Topology)
 # ---------------------------------------------------------
-mutable struct ParticleGridCore{D, T}
-    positions::Vector{Space{D, T}}
-    is_boundary::Vector{Bool}
-    volumes::Vector{T}
-    tags::Vector{Int}
+struct ParticleGridCore{D, T, VP <: AbstractVector{Space{D, T}}, VB <: AbstractVector{Bool},
+                        VT <: AbstractVector{T}, VI <: AbstractVector{Int}}
+    positions::VP
+    is_boundary::VB
+    volumes::VT
+    tags::VI
 
     # `volumes`: partition-of-unity quadrature weights, Σ V = |Ω| (see Volumes.jl). They define the
     # discrete mass Σ V U and make particle insertion/merging exactly conservative.
     # `particle_orders`: per-particle consistency order (read by every scheme, written by MOOD).
-    particle_orders::Vector{Int}
+    particle_orders::VI
 end
+ParticleGridCore{D, T}(positions, is_boundary, volumes, tags::VI, particle_orders::VI) where {D, T, VI} =
+    ParticleGridCore{D, T, typeof(positions), typeof(is_boundary), typeof(volumes), VI}(positions, is_boundary, volumes, tags, particle_orders)
+
 """
-    ParticleGrid{D, M, T, WF, GM, N_OFF, Geom}
+    ParticleGrid{D, M, T, WF, GM, N_OFF, Geom, META, CORE, SH, NB, RD, BINS, VS}
 
 The primary orchestrator representing the active computational domain, tying together the physical geometry, state vectors, and mesh-free topology.
 
@@ -105,21 +141,34 @@ The primary orchestrator representing the active computational domain, tying tog
 - Initializes the geometric and computational domains.
 - Invokes the universal narrow-band point generator to allocate `ParticleGridCore`.
 - Pre-allocates and assigns all internal components including `SharedBuffers`, `NeighborData`, `ReorderData`, and `GlobalBins`.
-- Automatically forces an initial spatial reordering and constructs the initial neighbor list upon instantiation if the dimension is greater than 1.
+- Runs the initial spatial reordering and constructs the initial neighbor list upon instantiation.
+
+The trailing type parameters are the storage types of the components. On the host they are the
+`Vector`-based structs; inside a kernel the grid arrives as a bits type with device arrays, an immutable
+`GridMetadataView` and `nothing` for the host-only parts (geometry, scratch buffers, reordering), see
+`DeviceAdapt.jl`.
 """
-struct ParticleGrid{D, M, T, WF, GM, N_OFF, Geom}
-    meta::GridMetadata{D, T}
-    geometry::Geom                             
-    domain::ComputationalDomain{D, T}          
-    core::ParticleGridCore{D, T}
-    shared::SharedBuffers{D, M, T}
-    neighbor::NeighborData{D, T, WF}
-    reorder::ReorderData{D}
-    bins::GlobalBins{D, T, N_OFF} 
+struct ParticleGrid{D, M, T, WF, GM, N_OFF, Geom, META, CORE, SH, NB, RD, BINS, VS}
+    meta::META
+    geometry::Geom
+    domain::ComputationalDomain{D, T}
+    core::CORE
+    shared::SH
+    neighbor::NB
+    reorder::RD
+    bins::BINS
     mover::GM
-    
-    rhos::Vector{State{M, T}}
-    curvatures::Vector{State{M, T}}
+
+    rhos::VS
+    curvatures::VS
+end
+
+function ParticleGrid(meta, geometry, domain::ComputationalDomain{D, T}, core::ParticleGridCore{D, T}, shared,
+                      neighbor::NeighborData{D, T, WF}, reorder, bins::GlobalBins{D, T, N_OFF}, mover::GM,
+                      rhos::VS, curvatures::VS) where {D, T, WF, N_OFF, GM, M, VS <: AbstractVector{State{M, T}}}
+    return ParticleGrid{D, M, T, WF, GM, N_OFF, typeof(geometry), typeof(meta), typeof(core), typeof(shared),
+                        typeof(neighbor), typeof(reorder), typeof(bins), VS}(
+        meta, geometry, domain, core, shared, neighbor, reorder, bins, mover, rhos, curvatures)
 end
 
 include("MLSWeightFunctions.jl")
@@ -201,12 +250,8 @@ function ParticleGrid(
         weight_func, fill(1:0, N + 1), Int[], Vector{T}(undef, 0), Vector{Space{D, T}}(undef, 0), zeros(Int, N), zeros(Int, N)
     )
 
-    N_OFF = get_n_offsets(Val(D))
-    
-    pg = ParticleGrid{D, M, T, typeof(weight_func), typeof(mover), N_OFF, typeof(geom)}(
-        meta, geom, comp_domain, core, shared, neighbors, reorder, bins, mover,
-        zeros(State{M, T}, N), zeros(State{M, T}, N)
-    )
+    pg = ParticleGrid(meta, geom, comp_domain, core, shared, neighbors, reorder, bins, mover,
+                      zeros(State{M, T}, N), zeros(State{M, T}, N))
 
     # The spatial reordering only needs positions and the canvas box, so the neighbour search is run
     # once, after the particles have been laid out in memory.

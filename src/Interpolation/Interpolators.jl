@@ -114,6 +114,22 @@ end
     return :(Val($len))
 end
 
+"""
+    basis_count(D::Int, degree::Int) -> Int
+
+Number of basis terms of degree 1..`degree` in `D` variables, `binomial(D + degree, degree) - 1`, i.e. the
+`B_LEN` of `basis_length(Val(D), Val(degree))` for a *runtime* degree. Kernels use it to check neighbour
+counts against the particle's current order without a dynamic `Val` dispatch.
+"""
+@inline function basis_count(D::Int, degree::Int)
+    degree <= 0 && return 0
+    n = 1
+    for k in 1:degree           # binomial(D + degree, degree) without allocation or dispatch
+        n = (n * (D + k)) ÷ k
+    end
+    return n - 1
+end
+
 # =========================================================================
 # BASIS VECTOR EVALUATORS (Fully Generalized & Type-Stable)
 # =========================================================================
@@ -385,7 +401,9 @@ Only `B_LEN²` numbers per particle are stored, so the neighbour-slot traffic of
 `ok[i]` is `false` where the moment matrix was not positive definite (callers use the direct solve there,
 which returns zero). `version` is the `geometry_version` the matrices belong to; see [`update_weights!`](@ref).
 """
-struct MLSWeights{B_LEN, IO, T, L}   # L = B_LEN^2 (StaticArrays needs the matrix length as a parameter)
+abstract type AbstractMLSWeights{B_LEN, IO, T} end
+
+struct MLSWeights{B_LEN, IO, T, L} <: AbstractMLSWeights{B_LEN, IO, T}   # L = B_LEN^2 (StaticArrays needs it)
     inv_moment::Vector{SMatrix{B_LEN, B_LEN, T, L}}
     ok::Vector{Bool}
     version::Base.RefValue{Int}
@@ -397,8 +415,27 @@ function MLSWeights{B_LEN, IO, T}() where {B_LEN, IO, T}
                                                    Ref(one(T)), Ref(zero(SVector{B_LEN, T})))
 end
 
+"""
+    MLSWeightsView{B_LEN, IO, T, L, VM, VB}
+
+The bits-type form of `MLSWeights` that enters kernels (see `DeviceAdapt.jl`): device arrays and plain values
+instead of `Ref`s.
+"""
+struct MLSWeightsView{B_LEN, IO, T, L, VM <: AbstractVector{SMatrix{B_LEN, B_LEN, T, L}}, VB <: AbstractVector{Bool}} <: AbstractMLSWeights{B_LEN, IO, T}
+    inv_moment::VM
+    ok::VB
+    version::Int
+    invL::T
+    scales::SVector{B_LEN, T}
+end
+
 "`true` if the cached matrices belong to the current geometry of `pg`."
 @inline is_current(w::MLSWeights, pg::ParticleGrid) = w.version[] == pg.meta.geometry_version
+@inline is_current(w::MLSWeightsView, pg::ParticleGrid) = w.version == pg.meta.geometry_version
+@inline _cache_invL(w::MLSWeights) = w.invL[]
+@inline _cache_invL(w::MLSWeightsView) = w.invL
+@inline _cache_scales(w::MLSWeights) = w.scales[]
+@inline _cache_scales(w::MLSWeightsView) = w.scales
 
 """
     update_weights!(w::MLSWeights, pg::ParticleGrid)
@@ -447,16 +484,16 @@ end
 The MLS coefficients of the differences `dfVec` over `nb_slice` of particle `i` from the cached inverse moment
 matrix (replaces the factorisation of `Interpolator{D, IO, 1}`).
 """
-@inline function apply_weights(w::MLSWeights{B_LEN, IO, T}, i::Int, nb_slice::UnitRange{Int},
+@inline function apply_weights(w::AbstractMLSWeights{B_LEN, IO, T}, i::Int, nb_slice::UnitRange{Int},
                                distVec::AbstractVector, wVec::AbstractVector{T},
                                dfVec::AbstractVector{State{M, T}}) where {B_LEN, IO, T, M}
-    invL = w.invL[]
+    invL = _cache_invL(w)
     b_s = zero(SMatrix{B_LEN, M, T, B_LEN * M})
     @inbounds for k in nb_slice
         p_s = build_basis(Val(IO), distVec[k] * invL)
         b_s += wVec[k] * (p_s * dfVec[k]')
     end
-    return _scaled_rows(w.inv_moment[i] * b_s, w.scales[])
+    return _scaled_rows(w.inv_moment[i] * b_s, _cache_scales(w))
 end
 
 # Rows of the coefficient matrix as States, scaled to physical derivatives (as in `_mls_solve`).
@@ -472,10 +509,10 @@ end
 `Σ_d ∂_d F_d` of the flux differences `dfFluxVec` over `nb_slice` of particle `i` from the cached inverse
 moment matrix (replaces the factorisation in `_mls_divergence`).
 """
-@inline function apply_weights_divergence(w::MLSWeights{B_LEN, IO, T}, i::Int, nb_slice::UnitRange{Int},
+@inline function apply_weights_divergence(w::AbstractMLSWeights{B_LEN, IO, T}, i::Int, nb_slice::UnitRange{Int},
                                           distVec::AbstractVector, wVec::AbstractVector{T},
                                           dfFluxVec::AbstractVector{Flux{D, M, T}}) where {B_LEN, IO, T, D, M}
-    invL = w.invL[]
+    invL = _cache_invL(w)
     b_s = zero(SMatrix{B_LEN, D * M, T, B_LEN * D * M})
     @inbounds for k in nb_slice
         p_s = build_basis(Val(IO), distVec[k] * invL)

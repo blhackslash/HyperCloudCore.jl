@@ -163,7 +163,7 @@ The universal, branchless neighbor search functor managing topology updates.
 - **Pass 1 (Counting):** Scans adjacent spatial bins to count the valid neighbors falling within the interaction radius `R_sq` for each particle. Computes a sequential prefix sum to establish writing ranges and resizes the target buffers.
 - **Pass 2 (Writing):** Rescans the valid particles, accurately writing their indices, computed weights, and computed distances directly into the pre-allocated neighbor buffers.
 """
-function (nd::NeighborData{D, T, WF})(pg::ParticleGrid{D, M, T, WF, GM, N_OFF, Dom}) where {D, M, T, WF, GM, N_OFF, Dom}
+function (nd::NeighborData{D, T})(pg::ParticleGrid{D, M, T}) where {D, M, T}
     
     backend = get_backend()
     N = pg.meta.N

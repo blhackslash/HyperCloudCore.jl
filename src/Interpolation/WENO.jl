@@ -66,12 +66,12 @@ function (weno::WENO{D, M, T, MAX_ORDER, DIV_ORDER, INTERPS})(
     p_order = pg.core.particle_orders[i]
 
     while p_order > 1
-        req_nb = typeof(basis_length(Val(D), Val(p_order))).parameters[1]
+        req_nb = basis_count(D, p_order)
         if num_nb >= req_nb; break; end
         p_order -= 1
     end
 
-    if num_nb < typeof(basis_length(Val(D), Val(p_order))).parameters[1]
+    if num_nb < basis_count(D, p_order)
         return zero(State{M, T})
     end
 
@@ -118,12 +118,12 @@ function (weno::WENO{D, M, T, MAX_ORDER, DIV_ORDER, INTERPS})(
 
         p_order_d = p_order
         while p_order_d > 1
-            req_nb = typeof(basis_length(Val(D), Val(p_order_d))).parameters[1]
+            req_nb = basis_count(D, p_order_d)
             if stencil_size >= req_nb; break; end
             p_order_d -= 1
         end
 
-        if stencil_size < typeof(basis_length(Val(D), Val(p_order_d))).parameters[1]
+        if stencil_size < basis_count(D, p_order_d)
             div_total += resC[d] * vel[d]
             continue
         end

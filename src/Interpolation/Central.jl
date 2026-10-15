@@ -55,12 +55,12 @@ function (central::CentralDivergence{D, M, T, MAX_ORDER, DIV_ORDER, INTERPS})(
     p_order = pg.core.particle_orders[i]
 
     while p_order > 1
-        req_nb = typeof(basis_length(Val(D), Val(p_order))).parameters[1]
+        req_nb = basis_count(D, p_order)
         if num_nb >= req_nb; break; end
         p_order -= 1
     end
     
-    if num_nb < typeof(basis_length(Val(D), Val(p_order))).parameters[1]
+    if num_nb < basis_count(D, p_order)
         return zero(State{M, T})
     end
 

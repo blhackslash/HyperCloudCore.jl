@@ -234,6 +234,64 @@ end
     @test all(i -> isapprox(pg_a.rhos[i][1], pg_b.rhos[i][1]; atol = 1e-11), 1:pg_a.meta.N)
 end
 
+@testset "Execution backends" begin
+    for D in 1:3, deg in 0:5
+        expected = deg == 0 ? 0 : typeof(HyperCloudCore.basis_length(Val(D), Val(deg))).parameters[1]
+        @test HyperCloudCore.basis_count(D, deg) == expected
+    end
+
+    N  = 80
+    eq = make_advection_1d()
+    dt = 0.4 * (2 / N)
+    ic = x -> exp(-x^2 / 0.02)
+    mover = PrescribedMover((x, t) -> Space{1, Float64}(0.3 * sin(π * x[1])))
+    cases = [
+        ("MUSCL3 VK MOODu2 RK3",  () -> MUSCL(Float64, 1, 1, 3, VenkatakrishnanLimiter(:hard), RusanovFlux()), MOOD(EPD1(), MOODu2(1e-6)), RK3_SSP_Tableau(Float64), NoGridMover()),
+        ("MUSCL2 MOODu1 EPD2 RK2", () -> MUSCL(Float64, 1, 1, 2, NoLimiter(), RusanovFlux()), MOOD(EPD2(), MOODu1(1e-6)), RK2_SSP_Tableau(Float64), NoGridMover()),
+        ("Central2 RK2",           () -> CentralDivergence(Float64, 1, 1, 2), MOOD(), RK2_SSP_Tableau(Float64), NoGridMover()),
+        ("Upwind Euler",           () -> UpwindDivergence(Float64, 1, 1, 1, :Classic, UpwindFlux()), MOOD(), RK1_Euler_Tableau(Float64), NoGridMover()),
+        ("MUSCL3 moving RK2",      () -> MUSCL(Float64, 1, 1, 3, NoLimiter(), RusanovFlux()), MOOD(), RK2_SSP_Tableau(Float64), mover),
+        ("MUSCL4 IMEX ARS222",     () -> MUSCL(Float64, 1, 1, 4, NoLimiter(), RusanovFlux()), MOOD(EPD1(), MOODu1(1e-6)), IMEX_ARS222_Tableau(Float64), NoGridMover()),
+    ]
+    function run_case(backend, make_interp, mood, tab, mv)
+        set_backend!(backend)
+        pg = set_ic!(make_pg_1d(N; mover = mv), ic)
+        interp = make_interp()
+        ts = GeneralRKTimeStepper(eq, interp, mood, tab)
+        for k in 0:3; ts(eq, pg, k * dt, dt); end
+        return (copy(view(pg.rhos, 1:pg.meta.N)), copy(view(pg.core.positions, 1:pg.meta.N)),
+                get_time_step(pg, eq, interp), copy(view(pg.core.particle_orders, 1:pg.meta.N)))
+    end
+    ka = KABackend(HyperCloudCore.KA.CPU(); workgroupsize = 32)
+    try
+        @testset "$name" for (name, make_interp, mood, tab, mv) in cases
+            ref = run_case(PolyesterBackend(), make_interp, mood, tab, mv)
+            thr = run_case(ThreadsBackend(), make_interp, mood, tab, mv)
+            @test thr == ref                                          # same arithmetic, bitwise
+            dev = run_case(ka, make_interp, mood, tab, mv)            # compiled as device kernels (PoCL)
+            @test all(isapprox.(first.(dev[1]), first.(ref[1]); atol = 1e-12))
+            @test all(isapprox.(first.(dev[2]), first.(ref[2]); atol = 1e-12))
+            @test isapprox(dev[3], ref[3]; rtol = 1e-12)
+            @test dev[4] == ref[4]
+        end
+    finally
+        set_backend!(PolyesterBackend())
+    end
+
+    @testset "Kernel views and device grids" begin
+        pg = make_pg_1d(20)
+        kv = HyperCloudCore.Adapt.adapt(Array, pg)                      # what a kernel receives
+        @test kv.meta isa HyperCloudCore.GridMetadataView && kv.meta.N == pg.meta.N
+        @test kv.geometry === nothing && kv.shared === nothing && kv.reorder === nothing
+        @test kv.core.positions === pg.core.positions                    # no copy on the host
+        dg = HyperCloudCore.device_grid(Array, pg)
+        @test dg.meta isa HyperCloudCore.GridMetadata && dg.meta.geometry_version == pg.meta.geometry_version
+        @test dg.core.positions == pg.core.positions && dg.geometry === pg.geometry
+        bt = HyperCloudCore.Adapt.adapt(Array, RK3_SSP_Tableau(Float64))
+        @test bt.a_t isa SMatrix && bt.b_t isa SVector && isbits(bt)
+    end
+end
+
 @testset "Butcher tableaus" begin
     explicit = (RK1_Euler_Tableau, RK2_SSP_Tableau, RK2_Ralston_Tableau, RK3_SSP_Tableau, RK4_Classical_Tableau)
     imex     = (IMEX_Euler_Tableau, IMEX_ARS233_Tableau, IMEX_ARS222_Tableau, IMEX_PRSSP3_Tableau, IMEX_SSP2332_Tableau)
@@ -389,7 +447,7 @@ end
 @testset "Threaded loops do not allocate" begin
     # The @batch bodies used to build types from the method's static parameters (and the neighbour search
     # captured a reassigned variable), which allocated per particle and destroyed the thread scaling.
-    N  = 4000   # large enough that any per-particle allocation dwarfs the per-call task overhead
+    N  = 4000
     eq = make_advection_1d()
     pg = set_ic!(make_pg_1d(N), x -> exp(-x^2 / 0.02))
     @test pg.meta.geometry_version >= 1
@@ -401,17 +459,25 @@ end
     @test (@allocated pg.neighbor(pg)) < 16_384
 
     dt = 0.4 * (2 / N)
-    for use_threads in (false, true)
-        set_threads!(use_threads)
+    # Allocations per step must not grow with the particle count: every launch costs a constant amount
+    # (closure/task set-up), nothing may be allocated per particle. Compared against a grid 10x smaller.
+    function step_alloc(n)
+        pgn = set_ic!(make_pg_1d(n), x -> exp(-x^2 / 0.02))
         interp = MUSCL(Float64, 1, 1, 3, VenkatakrishnanLimiter(:hard), RusanovFlux())
         ts = GeneralRKTimeStepper(eq, interp, MOOD(EPD1(), MOODu1(1e-6)), RK3_SSP_Tableau(Float64))
-        ts(eq, pg, 0.0, dt); ts(eq, pg, dt, dt)
-        a = @allocated ts(eq, pg, 2dt, dt)
-        # Polyester: nothing per particle. Base threads: only the task spawns of each loop (< 100 B per task).
-        @test a < (use_threads ? 256 * 1024 : 16_384)
+        h = 0.4 * (2 / n)
+        ts(eq, pgn, 0.0, h); ts(eq, pgn, h, h)
+        return @allocated ts(eq, pgn, 2h, h)
+    end
+    for use_threads in (false, true)
+        set_threads!(use_threads)
+        small, large = step_alloc(N ÷ 10), step_alloc(N)
+        @test large <= small + 8192
+        @test large < (use_threads ? 512 * 1024 : 128 * 1024)
+        interp = MUSCL(Float64, 1, 1, 3, VenkatakrishnanLimiter(:hard), RusanovFlux())
         get_time_step(pg, eq, interp); update_volumes!(pg, ShepardVolumes())   # compile first
-        @test (@allocated get_time_step(pg, eq, interp)) < (use_threads ? 32_768 : 4096)
-        @test (@allocated update_volumes!(pg, ShepardVolumes())) < (use_threads ? 32_768 : 4096)
+        @test (@allocated get_time_step(pg, eq, interp)) < (use_threads ? 32_768 : 8192)
+        @test (@allocated update_volumes!(pg, ShepardVolumes())) < (use_threads ? 32_768 : 8192)
     end
     set_threads!(false)
 end

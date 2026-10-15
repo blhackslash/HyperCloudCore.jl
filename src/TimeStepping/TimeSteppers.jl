@@ -36,17 +36,17 @@ disjoint and the passes are thread-safe).
 - `df_scratch`: MLS scratch.
 - `mask`: directional stencil filter.
 """
-struct InteractionBuffer{D, M, T}
-    f::Vector{State{M, T}}
-    df::Vector{State{M, T}}
-    df_flux::Vector{Flux{D, M, T}}
-    df_scratch::Vector{State{M, T}}
-    mask::Vector{Bool}
-
-    InteractionBuffer{D, M, T}() where {D, M, T} = new{D, M, T}(
-        State{M, T}[], State{M, T}[], Flux{D, M, T}[], State{M, T}[], Bool[]
-    )
+struct InteractionBuffer{D, M, T, VS <: AbstractVector{State{M, T}}, VF <: AbstractVector{Flux{D, M, T}}, VB <: AbstractVector{Bool}}
+    f::VS
+    df::VS
+    df_flux::VF
+    df_scratch::VS
+    mask::VB
 end
+InteractionBuffer{D, M, T}(f::VS, df::VS, df_flux::VF, df_scratch::VS, mask::VB) where {D, M, T, VS, VF, VB} =
+    InteractionBuffer{D, M, T, VS, VF, VB}(f, df, df_flux, df_scratch, mask)
+InteractionBuffer{D, M, T}() where {D, M, T} =
+    InteractionBuffer{D, M, T}(State{M, T}[], State{M, T}[], Flux{D, M, T}[], State{M, T}[], Bool[])
 
 function update_size!(ib::InteractionBuffer, num_interactions::Int)
     ensure_capacity!(ib.f, num_interactions)
@@ -145,7 +145,7 @@ exact for SSP tableaus.
 struct GeneralRKTimeStepper{D, M, T, PDE <: HyperbolicPDE, G <: DivergenceInterpolator, MO <: MOOD,
                             EST <: Tuple{Vararg{AbstractExplicitSourceTerm}},
                             IST <: Tuple{Vararg{AbstractImplicitSourceTerm}},
-                            VE <: Union{Nothing, VolumeEstimator}} <: TimeStepper
+                            VE <: Union{Nothing, VolumeEstimator}, S} <: TimeStepper
     pde::PDE
     divergence_interpolator::G
     mood::MO
@@ -158,14 +158,15 @@ struct GeneralRKTimeStepper{D, M, T, PDE <: HyperbolicPDE, G <: DivergenceInterp
 
     rho_n::Vector{State{M, T}}
     rho_cand::Vector{State{M, T}}
-    Y_stages::Vector{Vector{State{M, T}}}
-    K_E_stages::Vector{Vector{State{M, T}}}
-    K_I_stages::Vector{Vector{State{M, T}}}
+    # Stage arrays as tuples (one entry per stage): indexable inside kernels, unlike a Vector of Vectors.
+    Y_stages::NTuple{S, Vector{State{M, T}}}
+    K_E_stages::NTuple{S, Vector{State{M, T}}}
+    K_I_stages::NTuple{S, Vector{State{M, T}}}
 
     x_n::Vector{Space{D, T}}
     x_cand::Vector{Space{D, T}}
-    X_stages::Vector{Vector{Space{D, T}}}
-    K_X_stages::Vector{Vector{Space{D, T}}}
+    X_stages::NTuple{S, Vector{Space{D, T}}}
+    K_X_stages::NTuple{S, Vector{Space{D, T}}}
 
     int_buffer::InteractionBuffer{D, M, T}
     work::MOODWork
@@ -178,13 +179,13 @@ struct GeneralRKTimeStepper{D, M, T, PDE <: HyperbolicPDE, G <: DivergenceInterp
         volume_estimator::VE = ShepardVolumes()
     ) where {D, M, T, G, MO <: MOOD, EST <: Tuple{Vararg{AbstractExplicitSourceTerm}}, IST <: Tuple{Vararg{AbstractImplicitSourceTerm}}, VE <: Union{Nothing, VolumeEstimator}}
         s = num_stages(tableau)
-        new{D, M, T, typeof(pde), G, MO, EST, IST, VE}(
+        new{D, M, T, typeof(pde), G, MO, EST, IST, VE, s}(
             pde, div_interp, mood, explicit_sources, implicit_sources, tableau,
             reset_orders_per_stage, full_search_per_stage, volume_estimator,
             State{M, T}[], State{M, T}[],
-            [State{M, T}[] for _ in 1:s], [State{M, T}[] for _ in 1:s], [State{M, T}[] for _ in 1:s],
+            ntuple(_ -> State{M, T}[], s), ntuple(_ -> State{M, T}[], s), ntuple(_ -> State{M, T}[], s),
             Space{D, T}[], Space{D, T}[],
-            [Space{D, T}[] for _ in 1:s], [Space{D, T}[] for _ in 1:s],
+            ntuple(_ -> Space{D, T}[], s), ntuple(_ -> Space{D, T}[], s),
             InteractionBuffer{D, M, T}(), MOODWork(), s
         )
     end
@@ -315,8 +316,8 @@ function form_candidate!(ts::GeneralRKTimeStepper{D, M, T}, eq, pg, i::Int, dt::
     n_prev   = is_final ? s : i - 1
 
     foreach_particle(_stage_predictor!, backend, N,
-        (target, x_target, ts.rho_n, ts.x_n, ts.K_E_stages, ts.K_I_stages, ts.K_X_stages, pg.rhos, pg.core.is_boundary,
-         bt, i, n_prev, is_final, dt, moving, zero(T), zero(Space{D, T})))
+        (target, x_target, ts.rho_n, ts.x_n, ts.K_E_stages, ts.K_I_stages, ts.K_X_stages, pg.rhos,
+         pg.core.is_boundary, bt, i, n_prev, is_final, dt, moving, zero(T), zero(Space{D, T})))
 
     if !is_final
         pre_solve_updates!(ts.implicit_sources, target, pg, t_i)

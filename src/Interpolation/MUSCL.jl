@@ -53,11 +53,11 @@ Computes the divergence of the flux at particle `i`. Note that `MUSCL` relies on
 - `gradients`: A pre-allocated vector storing the reconstructed, limited spatial gradients for all particles.
 - `grad_weights`, `div_weights`: cached inverse MLS moment matrices (`MLSWeights`) of the full-order reconstruction and divergence fits, refreshed by `prepare_geometry!` when the grid geometry changes.
 """
-struct MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER, INTERPS, L, NF, WG, WD} <: DivergenceInterpolator
+struct MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER, INTERPS, L, NF, VG <: AbstractVector{SVector{B_LEN, State{M, T}}}, WG, WD} <: DivergenceInterpolator
     interpolators::INTERPS
     limiter::L
     flux::NF
-    gradients::Vector{SVector{B_LEN, State{M, T}}}
+    gradients::VG
     # Cached inverse MLS moment matrices for a frozen geometry (see `MLSWeights`): the full-order reconstruction and the
     # divergence fit. They are the same object when both use the same degree. Particles at reduced (MOOD)
     # order fall back to the direct solves.
@@ -98,11 +98,14 @@ function MUSCL(
     div_weights  = div_degree == max_degree ? grad_weights :
                    MLSWeights{typeof(basis_length(Val(dimension), Val(div_degree))).parameters[1], div_degree, T}()
 
-    return MUSCL{dimension, M, T, B_LEN, max_order, div_order, typeof(interps), typeof(limiter), typeof(flux),
-                 typeof(grad_weights), typeof(div_weights)}(
-        interps, limiter, flux, SVector{B_LEN, State{M, T}}[], grad_weights, div_weights
-    )
+    return MUSCL{dimension, M, T, B_LEN, max_order, div_order}(interps, limiter, flux, SVector{B_LEN, State{M, T}}[],
+                                                              grad_weights, div_weights)
 end
+
+# Infers the storage types (host vectors, or device views when adapted for a kernel).
+MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER}(interps, limiter, flux, gradients, grad_weights, div_weights) where {D, M, T, B_LEN, MAX_ORDER, DIV_ORDER} =
+    MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER, typeof(interps), typeof(limiter), typeof(flux), typeof(gradients),
+          typeof(grad_weights), typeof(div_weights)}(interps, limiter, flux, gradients, grad_weights, div_weights)
 
 function prepare_geometry!(muscl::MUSCL, pg::ParticleGrid)
     update_weights!(muscl.grad_weights, pg)
@@ -129,7 +132,7 @@ function update_content!(
     p_order = pg.core.particle_orders[i]
 
     req_deg = p_order - 1
-    req_nb = req_deg == 0 ? 0 : typeof(basis_length(Val(D), Val(req_deg))).parameters[1]
+    req_nb = basis_count(D, req_deg)
     
     # Dynamically clamp spatial order in core arrays if neighborhood is starved
     if num_nb < req_nb
