@@ -23,6 +23,7 @@
 # | `:Grid` | `build_particle_grid` | `build_mood_criterion` |
 # | `:Flux`, `:Limiter`, `:MOOD`, `:Scheme`, `:Tableau` | the respective builders | `build_scheme`, `build_timestepper` |
 # | `:ExplicitSources`, `:ImplicitSources` | caller | `build_timestepper` |
+# | `:Storage` (array type, default `Array`) | caller | `build_particle_grid` (`device_grid`), `build_scheme`, `build_timestepper` |
 #
 # Namespaces
 #
@@ -37,7 +38,7 @@
 # - `Time`: `stepper`, `reset_orders_per_stage`, `full_search_per_stage`
 # - `Adapt`: `enabled`, `max_gap`, `min_gap`, `clearance`, `samples_per_dx`, `exclude_reduced_order`
 #
-export real_type
+export real_type, storage_type
 export build_weights, build_domain, parse_bc, build_particle_grid, build_mover, build_volume_estimator
 export build_flux, build_limiter, build_mood, build_mood_criterion, build_mood_strategy, build_scheme
 export build_tableau, build_timestepper, build_adaptivity
@@ -48,6 +49,15 @@ export build_tableau, build_timestepper, build_adaptivity
 The floating-point type of the run: `context[:T]`, or the legacy key `context[:Type]`, else `Float64`.
 """
 real_type(context::Dict) = get(context, :T, get(context, :Type, Float64))::DataType
+
+"""
+    storage_type(context) -> Type
+
+The array type the run lives on: `context[:Storage]`, else `Array`. With a device array type (e.g.
+`ROCArray`) the grid builder returns a `device_grid` and the scheme and time stepper builders allocate
+their buffers there (see docs/src/gpu_roadmap.md).
+"""
+storage_type(context::Dict) = get(context, :Storage, Array)::Type
 
 include("weights.jl")
 include("domains.jl")

@@ -79,18 +79,22 @@ SharedBuffers{D, M, T}(rho, pos, f1::VT, f2::VT, bit, int) where {D, M, T, VT} =
 # ---------------------------------------------------------
 # 3. Neighbor Search Context
 # ---------------------------------------------------------
+# The per-slot arrays (`indices`, `weights`, `distances`) are `Growable`s on the host grid: their length is
+# the neighbour total, which every search may change, on the device too. The per-particle arrays grow
+# only with adaptivity (host).
 struct NeighborData{D, T, WF, VR <: AbstractVector{UnitRange{Int}}, VI <: AbstractVector{Int},
-                    VT <: AbstractVector{T}, VP <: AbstractVector{Space{D, T}}}
+                    GI <: AbstractVector{Int}, GT <: AbstractVector{T}, GP <: AbstractVector{Space{D, T}}}
     weight_func::WF
     ranges::VR
-    indices::VI
-    weights::VT
-    distances::VP
+    indices::GI
+    weights::GT
+    distances::GP
     counts::VI
     offsets::VI
 end
-NeighborData{D, T, WF}(wf::WF, ranges, indices::VI, weights, distances, counts::VI, offsets::VI) where {D, T, WF, VI} =
-    NeighborData{D, T, WF, typeof(ranges), VI, typeof(weights), typeof(distances)}(wf, ranges, indices, weights, distances, counts, offsets)
+NeighborData{D, T, WF}(wf::WF, ranges, indices, weights, distances, counts::VI, offsets::VI) where {D, T, WF, VI} =
+    NeighborData{D, T, WF, typeof(ranges), VI, typeof(indices), typeof(weights), typeof(distances)}(
+        wf, ranges, indices, weights, distances, counts, offsets)
 
 # ---------------------------------------------------------
 # 4. Reordering / Sorting Context (host only)
@@ -102,17 +106,22 @@ struct ReorderData{D}
     seen_buffer::Vector{Bool}
 end
 
+# Counting-sort cell list; see `GlobalBins(...)` in NeighborLogic.jl for the layout.
 struct GlobalBins{D, T, N_OFF, VI <: AbstractVector{Int}, VN <: AbstractVector{SVector{N_OFF, Int}}}
     mins::Space{D, T}
     maxs::Space{D, T}
     coarse_size::Space{D, T}
     coarse_dims::NTuple{D, Int}
-    head::VI
-    next::VI
-    bin_neighbors::VN
+    cell_start::VI          # per bin (+ dummy bin + end sentinel)
+    cell_count::VI          # per bin (+ dummy bin)
+    cell_particles::VI      # per particle: indices sorted by bin
+    bin_of::VI              # per particle: its bin
+    bin_neighbors::VN       # per bin: the 3^D window
 end
-GlobalBins{D, T, N_OFF}(mins, maxs, coarse_size, coarse_dims, head::VI, next::VI, bin_neighbors) where {D, T, N_OFF, VI} =
-    GlobalBins{D, T, N_OFF, VI, typeof(bin_neighbors)}(mins, maxs, coarse_size, coarse_dims, head, next, bin_neighbors)
+GlobalBins{D, T, N_OFF}(mins, maxs, coarse_size, coarse_dims, cell_start::VI, cell_count::VI, cell_particles::VI, bin_of::VI,
+                        bin_neighbors) where {D, T, N_OFF, VI} =
+    GlobalBins{D, T, N_OFF, VI, typeof(bin_neighbors)}(mins, maxs, coarse_size, coarse_dims, cell_start, cell_count,
+                                                        cell_particles, bin_of, bin_neighbors)
 
 # ---------------------------------------------------------
 # 6. Particle Grid Core (Geometry & Topology)
@@ -245,9 +254,10 @@ function ParticleGrid(
     shared = SharedBuffers{D, M, T}(zeros(State{M, T}, N), similar(positions), zeros(T, N), zeros(T, N), zeros(Bool, N), zeros(Int, N))
     reorder = ReorderData{D}(collect(1:N), collect(1:N), zeros(Int, N), zeros(Bool, N))
     
-    bins = GlobalBins(T, comp_domain.canvas_mins, comp_domain.canvas_maxs, R, N)
+    bins = GlobalBins(T, comp_domain.canvas_mins, comp_domain.canvas_maxs, R, N, comp_domain.is_periodic)
     neighbors = NeighborData{D, T, typeof(weight_func)}(
-        weight_func, fill(1:0, N + 1), Int[], Vector{T}(undef, 0), Vector{Space{D, T}}(undef, 0), zeros(Int, N), zeros(Int, N)
+        weight_func, fill(1:0, N + 1), Growable{Int}(Array), Growable{T}(Array), Growable{Space{D, T}}(Array),
+        zeros(Int, N), zeros(Int, N)
     )
 
     pg = ParticleGrid(meta, geom, comp_domain, core, shared, neighbors, reorder, bins, mover,
@@ -407,23 +417,23 @@ end
     ensure_capacity!(bins::GlobalBins, req_particles::Int)
 """
 @inline function ensure_capacity!(bins::GlobalBins, req_particles::Int)
-    if length(bins.next) < req_particles
+    if length(bins.cell_particles) < req_particles
         new_cap = ceil(Int, req_particles * 1.25)
-        resize!(bins.next, new_cap)
+        resize!(bins.cell_particles, new_cap)
+        resize!(bins.bin_of, new_cap)
     end
     return nothing
 end
 
 """
-    ensure_capacity!(nd::NeighborData, req_particles::Int)
+    ensure_capacity!(nd::NeighborData, req_neighbors::Int)
+
+Grows the per-slot arrays to hold `req_neighbors` entries (on the device too: they are `Growable`s).
 """
-@inline function ensure_capacity!(nd::NeighborData{D, T, WF}, req_neighbors::Int) where {D, T, WF}
-    if length(nd.indices) < req_neighbors
-        new_cap = ceil(Int, req_neighbors * 1.25)
-        resize!(nd.indices, new_cap)
-        resize!(nd.weights, new_cap)
-        resize!(nd.distances, new_cap)
-    end
+@inline function ensure_capacity!(nd::NeighborData, req_neighbors::Int)
+    ensure_capacity!(nd.indices, req_neighbors)
+    ensure_capacity!(nd.weights, req_neighbors)
+    ensure_capacity!(nd.distances, req_neighbors)
     return nothing
 end
 

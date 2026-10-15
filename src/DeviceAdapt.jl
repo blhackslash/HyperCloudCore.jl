@@ -22,7 +22,8 @@ Adapt.adapt_structure(to, nd::NeighborData{D, T, WF}) where {D, T, WF} = Neighbo
     adapt(to, nd.counts), adapt(to, nd.offsets))
 
 Adapt.adapt_structure(to, b::GlobalBins{D, T, N_OFF}) where {D, T, N_OFF} = GlobalBins{D, T, N_OFF}(
-    b.mins, b.maxs, b.coarse_size, b.coarse_dims, adapt(to, b.head), adapt(to, b.next), adapt(to, b.bin_neighbors))
+    b.mins, b.maxs, b.coarse_size, b.coarse_dims, adapt(to, b.cell_start), adapt(to, b.cell_count),
+    adapt(to, b.cell_particles), adapt(to, b.bin_of), adapt(to, b.bin_neighbors))
 
 Adapt.adapt_structure(to, sb::SharedBuffers{D, M, T}) where {D, M, T} = SharedBuffers{D, M, T}(
     adapt(to, sb.rho_buffer), adapt(to, sb.pos_buffer), adapt(to, sb.float_buffer), adapt(to, sb.float_buffer2),
@@ -58,13 +59,24 @@ end
     device_grid(ArrayType, pg::ParticleGrid) -> ParticleGrid
 
 A copy of `pg` whose component arrays are `ArrayType`s (e.g. `CuArray`), with its own mutable metadata.
-The geometry, scratch buffers and reordering state are not transferred (they are host-only), so the
-resulting grid serves the kernel passes of the time stepper; neighbour searches, reordering, boundary
-conditions and adaptivity still run on the host grid (see docs/src/gpu_roadmap.md).
+The geometry (host closures and the boundary-condition map) and the reordering state are kept as they
+are: time steps, neighbour searches and boundary conditions then run on the device; reordering and
+adaptivity still need the host grid (see docs/src/gpu_roadmap.md).
 """
 function device_grid(::Type{AT}, pg::ParticleGrid{D, M, T}) where {AT <: AbstractArray, D, M, T}
-    m = pg.meta
+    m  = pg.meta
+    to = ToStorage{AT}()
     meta = GridMetadata{D, T}(m.N, m.N_interior, m.N_ghost, m.R, m.max_dx, m.dx, m.interp_range_factor, m.max_nb, m.geometry_version)
-    return ParticleGrid(meta, pg.geometry, pg.domain, adapt(AT, pg.core), adapt(AT, pg.shared), adapt(AT, pg.neighbor),
-                        pg.reorder, adapt(AT, pg.bins), pg.mover, adapt(AT, pg.rhos), adapt(AT, pg.curvatures))
+    return ParticleGrid(meta, pg.geometry, pg.domain, adapt(to, pg.core), adapt(to, pg.shared), adapt(to, pg.neighbor),
+                        pg.reorder, adapt(to, pg.bins), pg.mover, adapt(to, pg.rhos), adapt(to, pg.curvatures))
 end
+
+"""
+    ToStorage{ArrayType}
+
+`Adapt` target of `device_grid`: moves arrays to `ArrayType` like `adapt(ArrayType, x)` does, but keeps
+`Growable` buffers growable (with the moved array inside) instead of unwrapping them as a kernel view would.
+"""
+struct ToStorage{AT} end
+Adapt.adapt_storage(::ToStorage{AT}, a::AbstractArray) where {AT} = isbits(a) ? a : adapt(AT, a)
+Adapt.adapt_structure(::ToStorage{AT}, g::Growable) where {AT} = Growable(adapt(AT, parent(g)))

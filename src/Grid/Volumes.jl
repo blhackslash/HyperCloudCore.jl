@@ -123,14 +123,14 @@ function _collect_near!(pg::ParticleGrid{D, M, T}, y::Space{D, T}, R_sq::T,
     n = 0
     for I in CartesianIndices(ranges)
         cart = ntuple(d -> is_per[d] ? mod1(I[d], dims[d]) : I[d], Val(D))
-        j = bins.head[li[CartesianIndex(cart)]]
-        @inbounds while j > 0
+        b = li[CartesianIndex(cart)]
+        @inbounds for s in bins.cell_start[b]:(bins.cell_start[b + 1] - 1)
+            j = bins.cell_particles[s]
             d = _wrapped_diff(pos[j], y, L, Li)
             if sum(abs2, d) <= R_sq
                 n += 1
                 if n > length(idx); push!(idx, j); push!(dvec, d); else; idx[n] = j; dvec[n] = d; end
             end
-            j = bins.next[j]
         end
     end
     return n
@@ -191,16 +191,11 @@ end
     return nothing
 end
 
+# Clamps negative volumes to zero and rescales to Σ V = |Ω| (broadcasts and a reduction: runs on a device grid).
 function _renormalise_volumes!(pg::ParticleGrid{D, M, T}) where {D, M, T}
-    N = pg.meta.N
-    V = pg.core.volumes
-    s = zero(T)
-    @inbounds for i in 1:N
-        V[i] = max(V[i], zero(T))
-        s += V[i]
-    end
-    c = domain_volume(pg) / s
-    @inbounds for i in 1:N; V[i] *= c; end
+    V = view(pg.core.volumes, 1:pg.meta.N)
+    V .= max.(V, zero(T))
+    V .*= domain_volume(pg) / sum(V)
     return nothing
 end
 

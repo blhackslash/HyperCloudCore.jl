@@ -71,6 +71,53 @@ const device_backend = ROCBackend()
             @test any(pg_ref.core.is_boundary[1:n])                        # the condition had particles to act on
         end
 
+        @testset "moving grid: neighbour search on the device" begin
+            mover = PrescribedMover((x, t) -> Space{1, Float64}(0.3 * sin(π * x[1])))
+            tab   = RK2_SSP_Tableau(Float64)
+            set_backend!(PolyesterBackend())
+            pg_ref = set_ic!(make_pg_1d(N; mover = mover), gauss)
+            ts_ref = GeneralRKTimeStepper(eq, muscl(3, NoLimiter())(Array), MOOD(), tab)
+            for k in 0:3; ts_ref(eq, pg_ref, k * dt, dt); end
+
+            dg = HyperCloudCore.device_grid(DeviceArray, set_ic!(make_pg_1d(N; mover = mover), gauss))
+            @test parent(dg.neighbor.indices) isa DeviceArray && dg.bins.cell_particles isa DeviceArray
+            ts = GeneralRKTimeStepper(eq, muscl(3, NoLimiter())(DeviceArray), MOOD(), tab; storage = DeviceArray)
+            set_backend!(device_backend)
+            for k in 0:3; ts(eq, dg, k * dt, dt); end
+
+            n   = pg_ref.meta.N
+            tot = first(pg_ref.neighbor.ranges[n + 1]) - 1
+            @test dg.meta.max_nb == pg_ref.meta.max_nb && dg.meta.geometry_version == pg_ref.meta.geometry_version
+            @test Array(dg.neighbor.ranges)[1:n + 1] == pg_ref.neighbor.ranges[1:n + 1]
+            @test Array(parent(dg.neighbor.indices))[1:tot] == parent(pg_ref.neighbor.indices)[1:tot]   # same lists, same order
+            @test Array(parent(dg.neighbor.weights))[1:tot] == parent(pg_ref.neighbor.weights)[1:tot]
+            @test all(isapprox.(first.(Array(dg.core.positions)[1:n]), first.(pg_ref.core.positions[1:n]); atol = 1e-12))
+            @test all(isapprox.(first.(Array(dg.rhos)[1:n]), first.(pg_ref.rhos[1:n]); atol = 1e-12))
+            @test all(isapprox.(Array(dg.core.volumes)[1:n], pg_ref.core.volumes[1:n]; rtol = 1e-12))
+        end
+
+        @testset "builders with context[:Storage]" begin
+            ctx = Dict{Symbol, Any}(:T => Float64, :D => 1, :M => 1, :Equation => eq, :Storage => DeviceArray,
+                                    :ExplicitSources => (), :ImplicitSources => ())
+            ctx[:Domain]     = build_domain(Dict{Symbol, Any}(:domain => :rectangular, :mins => (-1.0,), :maxs => (1.0,), :periodic => true), ctx)
+            ctx[:WeightConf] = Dict{Symbol, Any}(:name => :exponential, :range => 2.5, :alpha => 1.0)
+            set_backend!(PolyesterBackend())                              # the grid is built on the host, then moved
+            pg = build_particle_grid(Dict{Symbol, Any}(:Ns => (N,)), ctx)
+            @test pg.rhos isa DeviceArray && ctx[:Grid] === pg
+            ctx[:Flux]    = build_flux(Dict{Symbol, Any}(:name => :Rusanov), ctx)
+            ctx[:Limiter] = build_limiter(Dict{Symbol, Any}(:name => :none), ctx)
+            ctx[:MOOD]    = build_mood(Dict{Symbol, Any}(:criterion => :U1, :strategy => :EPD1, :delta_relax => 1e-6), ctx)
+            ctx[:Scheme]  = build_scheme(Dict{Symbol, Any}(:name => :MUSCL, :order => 3), ctx)
+            ctx[:Tableau] = build_tableau(Dict{Symbol, Any}(:stepper => :RK3), ctx)
+            ts = build_timestepper(ctx)
+            @test parent(ctx[:Scheme].gradients) isa DeviceArray && parent(ts.rho_n) isa DeviceArray
+            n  = pg.meta.N
+            copyto!(pg.rhos, 1, DeviceArray([State{1, Float64}(gauss(x[1])) for x in Array(pg.core.positions)[1:n]]), 1, n)
+            set_backend!(device_backend)
+            for k in 0:3; ts(eq, pg, k * dt, dt); end
+            @test all(isfinite, first.(Array(pg.rhos)[1:n]))
+        end
+
         @testset "host buffers are rejected" begin
             set_backend!(PolyesterBackend())                              # grids are built on the host
             pg_host = set_ic!(make_pg_1d(N), gauss)

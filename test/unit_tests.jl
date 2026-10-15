@@ -92,7 +92,7 @@ end
               pg.core.positions, pg.core.is_boundary, pg.core.volumes, pg.core.tags, pg.core.particle_orders,
               pg.shared.rho_buffer, pg.shared.pos_buffer, pg.shared.float_buffer, pg.shared.bit_buffer, pg.shared.int_buffer,
               pg.reorder.permutation, pg.reorder.inv_permutation, pg.reorder.new_permutation_buffer, pg.reorder.seen_buffer,
-              pg.bins.next)
+              pg.bins.cell_particles, pg.bins.bin_of)
         @test length(v) == cap
     end
 

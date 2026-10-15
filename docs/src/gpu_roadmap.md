@@ -24,7 +24,8 @@ set_backend!(CUDABackend())                 # from CUDA.jl (likewise ROCBackend(
 | inverse MLS moment matrices | `_moment_body!` | `Interpolation/Interpolators.jl` |
 | Shepard volumes | `_shepard_sums!`, `_shepard_sweep!` | `Grid/Volumes.jl` |
 | CFL estimate | `_cfl_body!` | `Grid/ParticleGrids.jl` |
-| periodic wrap, neighbour counting and writing | `_wrap_position!`, `_count_neighbours!`, `_write_neighbours!` | `Grid/NeighborLogic.jl` |
+| cell list (bin histogram, scatter, per-bin sort) | `_bin_count!`, `_bin_scatter!`, `_bin_sort!` | `Grid/NeighborLogic.jl` |
+| periodic wrap, neighbour counting, slot ranges, writing | `_wrap_position!`, `_count_neighbours!`, `_neighbour_ranges!`, `_write_neighbours!` | `Grid/NeighborLogic.jl` |
 | boundary conditions (Dirichlet; outflow donor search, one pass per hop) | `_dirichlet_body!`, `_outflow_init!`, `_outflow_pass!`, `_outflow_fallback!` | `Grid/BoundaryConditions.jl` |
 
 With the KernelAbstractions backend these bodies are compiled as device kernels. The 0.10 `CPU()`
@@ -58,6 +59,9 @@ set_backend!(ROCBackend())
 ts(eq, dg, t, dt)
 ```
 
+With the config-driven builders, `context[:Storage] = ROCArray` does the same: `build_particle_grid`
+returns the device grid, `build_scheme` and `build_timestepper` allocate on it.
+
 Before a `KABackend` launch, `check_resident` walks the arguments and throws if an array does not live on
 that backend. Without it AMDGPU.jl would copy a host array to the device for the launch and silently drop
 the kernel's writes to it.
@@ -77,14 +81,23 @@ the kernel's writes to it.
 
 | part | status | plan |
 |---|---|---|
-| prefix sum of the neighbour search | host loop between the two kernel passes | exclusive scan on the device (`accumulate!`), or a counting-sort cell list |
-| `build_global_bins!` (linked lists) | host | atomic insertion into cell heads, or a sort-based cell list |
-| Morton reordering | host (`sort!`) | device sort of the keys + permutation kernels |
+| Morton reordering | host (`sort!`); only runs when a grid is constructed | device sort of the keys + permutation kernels, if ever needed between steps |
 | particle adaptivity | host | stays on the host (rare, inherently serial); transfer the grid around the call |
 | WENO, Tiwari upwind | not device-compatible: the stencil order is a runtime `Val` | pad to the maximum basis length and mask |
 | reductions (`get_time_step`, `total_mass`) | `minimum`/loop on host arrays | `mapreduce` on device arrays |
-| data residency | the grid (`device_grid`), the stepper and MUSCL (`storage`) live on the device; a static grid steps entirely there, MOOD and boundary conditions included (the `bc_map` loop itself is on the host, its conditions are kernels) | transfer only around the remaining host passes above; `storage` for the builders |
-| growing a device grid | `ensure_capacity!` on the grid uses `resize!` (host arrays only) | rebuild the device grid after adaptivity on the host |
+| data residency | the grid (`device_grid`), the stepper and MUSCL (`storage`) live on the device; static and moving grids step entirely there, neighbour search, MOOD and boundary conditions included (the `bc_map` loop itself is on the host, its conditions are kernels); the builders follow `context[:Storage]` | transfer only around the remaining host passes above |
+| growing a device grid | the neighbour-slot arrays grow on the device (`Growable`); the per-particle arrays use `resize!` (host) | rebuild the device grid after adaptivity on the host |
+
+## The neighbour search
+
+The cell list is a counting sort: a kernel writes every particle's bin and bumps the bin's count with
+an atomic add, a prefix sum over the bins gives the segment starts, a second kernel scatters the
+particles into their segments through an atomic cursor, and a kernel per bin sorts its (small) segment
+by descending particle index. That last sort removes the only nondeterminism the atomics introduce,
+so the neighbour lists are identical on every backend and in every run, and in the order the former
+linked list produced. The counting and writing passes then walk the `3^D` bins around a particle's bin
+as contiguous segments. The slot ranges come from a prefix sum of the counts (`cumsum!`) and two
+reductions (total and maximum), all on the device.
 
 ## Testing on the device
 

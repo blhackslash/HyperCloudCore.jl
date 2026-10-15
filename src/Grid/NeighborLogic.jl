@@ -3,34 +3,77 @@
 @inline get_n_offsets(::Val{2}) = 9
 @inline get_n_offsets(::Val{3}) = 27
 
-function GlobalBins(
-    ::Type{T}, domain_mins::Space{D, T}, domain_maxs::Space{D, T}, 
-    R::Real, max_particles::Int
-) where {D, T}
-    
-    # We no longer need to convert to Space{D,T} since they are already passed as such
+"""
+    GlobalBins(T, domain_mins, domain_maxs, R, max_particles, is_periodic)
+
+The coarse cell list of the neighbour search, stored as a counting sort (every pass of its
+construction is a kernel; see `build_global_bins!`):
+
+- `cell_particles`: particle indices sorted by bin, in descending index order within a bin;
+- `cell_start` (`num_bins + 2` entries): the particles of bin `b` are
+  `cell_particles[cell_start[b]:cell_start[b + 1] - 1]`; bin `num_bins + 1` is the always-empty dummy
+  bin that `bin_neighbors` points to for out-of-domain and repeated offsets;
+- `cell_count`: particles per bin (also the scatter cursor while building);
+- `bin_of`: the bin of every particle;
+- `bin_neighbors`: the `3^D` bins around every bin, fixed at construction (periodic axes wrap).
+
+Bins are at least `R` wide, so the ±1-bin window around a particle's bin contains all its neighbours.
+"""
+function GlobalBins(::Type{T}, domain_mins::Space{D, T}, domain_maxs::Space{D, T}, R::Real, max_particles::Int,
+                    is_periodic::SVector{D, Bool}) where {D, T}
     domain_size = domain_maxs .- domain_mins
 
-    # Bins must be at least R wide, otherwise the ±1-bin search window misses neighbours that sit
-    # between `coarse_size` and `R` away from a particle at the edge of its bin. `floor` guarantees
-    # coarse_size = domain_size / coarse_dims ≥ R (`ceil` gave coarse_size ≤ R).
+    # `floor` guarantees coarse_size = domain_size / coarse_dims ≥ R (`ceil` gave coarse_size ≤ R, which
+    # misses neighbours between `coarse_size` and `R` away from a particle at the edge of its bin).
     coarse_dims = ntuple(d -> max(1, floor(Int, domain_size[d] / R)), Val(D))
     coarse_size = domain_size ./ coarse_dims
+    num_bins    = prod(coarse_dims)
+    cap         = ceil(Int, max_particles * 1.25)
 
-    total_coarse_bins = prod(coarse_dims)
-    head = zeros(Int, total_coarse_bins)
-    next = zeros(Int, ceil(Int, max_particles * 1.25))
-    
     N_OFF = get_n_offsets(Val(D))
-    bin_neighbors = Vector{SVector{N_OFF, Int}}(undef, 0)
+    bin_neighbors = Vector{SVector{N_OFF, Int}}(undef, num_bins)
+    _fill_bin_neighbors!(bin_neighbors, coarse_dims, is_periodic)
 
-    # Note: Ensure your GlobalBins struct definition also had BC removed!
-    # i.e., struct GlobalBins{D, T, N_OFF}
-    return GlobalBins{D, T, N_OFF}(
-        domain_mins, domain_maxs, coarse_size, coarse_dims, head, next, bin_neighbors
-    )
+    return GlobalBins{D, T, N_OFF}(domain_mins, domain_maxs, coarse_size, coarse_dims,
+                                   fill(num_bins + 1, num_bins + 2), zeros(Int, num_bins + 1), zeros(Int, cap), zeros(Int, cap),
+                                   bin_neighbors)
 end
 
+# The 3^D window around every bin, with per-axis periodic wrapping (host, once per grid).
+function _fill_bin_neighbors!(bin_neighbors::Vector{SVector{N_OFF, Int}}, coarse_dims::NTuple{D, Int},
+                              is_per::SVector{D, Bool}) where {N_OFF, D}
+    ci = CartesianIndices(coarse_dims)
+    li = LinearIndices(coarse_dims)
+    window = CartesianIndices(ntuple(_ -> -1:1, Val(D)))
+    num_bins  = prod(coarse_dims)
+    dummy_bin = num_bins + 1
+
+    for b in 1:num_bins
+        cart_idx = ci[b]
+        raw = ntuple(Val(N_OFF)) do idx
+            nb_cart = cart_idx + window[idx]
+            valid_bin = true
+            final_cart = ntuple(Val(D)) do d
+                nc = nb_cart[d]
+                cd = coarse_dims[d]
+                if nc < 1 || nc > cd
+                    is_per[d] && return mod1(nc, cd)
+                    valid_bin = false
+                    return 1                      # junk, caught by valid_bin
+                end
+                return nc
+            end
+            valid_bin ? li[CartesianIndex(final_cart)] : dummy_bin
+        end
+        # A periodic axis with fewer than three bins maps several offsets onto the same bin. Visiting
+        # it more than once would list every neighbour in it several times, so repeats become the dummy bin.
+        bin_neighbors[b] = SVector{N_OFF, Int}(ntuple(Val(N_OFF)) do idx
+            v = raw[idx]
+            any(k -> raw[k] == v, 1:(idx - 1)) ? dummy_bin : v
+        end)
+    end
+    return nothing
+end
 
 # =========================================================================
 # FAST SPATIAL HASHING (Coordinates -> 1D Bin Index)
@@ -58,94 +101,68 @@ end
     return LinearIndices(dims)[cartesian...]
 end
 
-
 # =========================================================================
-# GLOBAL BIN BUILDING
+# GLOBAL BIN BUILDING (counting sort)
 # =========================================================================
 """
     build_global_bins!(pg::ParticleGrid)
 
-Constructs the spatial hashing linked list for the current particle configuration.
-
-# Details
-- Resolves valid neighbor bins for each spatial cell, accounting for per-axis periodic wrapping.
-- Iterates over all particles, inserting them into their respective spatial bins using a highly efficient `head` and `next` linked-list methodology.
+Rebuilds the cell list for the current positions: bin index and per-bin histogram (atomic adds), a
+prefix sum over the bins, an atomic scatter into `cell_particles`, and an insertion sort of every
+bin's (small) segment by descending particle index. The sort makes the lists independent of the order
+in which the atomics landed, so the neighbour lists, and everything computed from them, are the same
+on every backend and in every run.
 """
 function build_global_bins!(pg::ParticleGrid)
-    N = pg.meta.N
-    pos = get_positions(pg)
-    bins = pg.bins
-    
-    update_bin_neighbors!(bins, pg.domain) # Passes the domain for per-axis logic
-    
-    fill!(bins.head, 0)
-    
-    @inbounds for i in 1:N
-        # Link particle into the coarse spatial bin
-        coarse_idx = get_flat_bin_index(pos[i], bins.mins, bins.coarse_size, bins.coarse_dims)
-        bins.next[i] = bins.head[coarse_idx]
-        bins.head[coarse_idx] = i
-    end
+    N       = pg.meta.N
+    bins    = pg.bins
+    backend = get_backend()
+    nb      = prod(bins.coarse_dims)
+    cs, cc, cp, bo = bins.cell_start, bins.cell_count, bins.cell_particles, bins.bin_of
+
+    fill!(cc, 0)
+    foreach_particle(_bin_count!, backend, N, (bo, cc, pg.core.positions, bins.mins, bins.coarse_size, bins.coarse_dims))
+
+    # Segment starts: exclusive prefix sum of the counts, 1-based; the dummy bin nb + 1 is empty.
+    fill!(view(cs, 1:1), 0)
+    cumsum!(view(cs, 2:nb + 1), view(cc, 1:nb))
+    view(cs, 1:nb + 1) .+= 1
+    fill!(view(cs, nb + 2:nb + 2), N + 1)
+
+    fill!(view(cc, 1:nb), 0)                              # reused as the scatter cursor; ends up as the count again
+    foreach_particle(_bin_scatter!, backend, N, (cp, bo, cs, cc))
+    foreach_particle(_bin_sort!, backend, nb, (cp, cs))
     return nothing
 end
 
-function update_bin_neighbors!(bins::GlobalBins{D, T, N_OFF}, domain::ComputationalDomain{D, T}) where {D, T, N_OFF}
-    coarse_dims = bins.coarse_dims
-    ci = CartesianIndices(coarse_dims)
-    li = LinearIndices(coarse_dims)
-    window = CartesianIndices(ntuple(_ -> -1:1, Val(D)))
-    
-    num_bins = prod(coarse_dims)
-    dummy_bin = num_bins + 1 
+# Kernel bodies of the cell list (see Backend.jl).
+@inline function _bin_count!(i, bin_of, cell_count, pos, mins, coarse_size, coarse_dims)
+    b = get_flat_bin_index(pos[i], mins, coarse_size, coarse_dims)
+    bin_of[i] = b
+    KA.@atomic cell_count[b] += 1
+    return nothing
+end
 
-    # Resize vectors to include the dummy bin
-    if length(bins.bin_neighbors) != num_bins
-        resize!(bins.bin_neighbors, num_bins)
-        if length(bins.head) < dummy_bin
-            resize!(bins.head, dummy_bin)
+@inline function _bin_scatter!(i, cell_particles, bin_of, cell_start, cursor)
+    b = bin_of[i]
+    k = KA.@atomic cursor[b] += 1
+    cell_particles[cell_start[b] + k - 1] = i
+    return nothing
+end
+
+# One bin per work item: insertion sort of its segment, descending (the order the former linked list produced).
+@inline function _bin_sort!(b, cell_particles, cell_start)
+    lo = cell_start[b]
+    hi = cell_start[b + 1] - 1
+    @inbounds for s in (lo + 1):hi
+        v = cell_particles[s]
+        t = s - 1
+        while t >= lo && cell_particles[t] < v
+            cell_particles[t + 1] = cell_particles[t]
+            t -= 1
         end
+        cell_particles[t + 1] = v
     end
-
-    is_per = domain.is_periodic
-
-    for b in 1:num_bins
-        cart_idx = ci[b]
-
-        raw = ntuple(Val(N_OFF)) do idx
-            offset = window[idx]
-            nb_cart = cart_idx + offset
-            
-            # Resolve wrapping per axis
-            valid_bin = true
-            final_cart = ntuple(Val(D)) do d
-                nc = nb_cart[d]
-                cd = coarse_dims[d]
-                
-                if nc < 1 || nc > cd
-                    if is_per[d]
-                        return mod1(nc, cd)
-                    else
-                        valid_bin = false
-                        return 1 # Junk value, will be caught by valid_bin
-                    end
-                end
-                return nc
-            end
-            
-            if valid_bin
-                return li[CartesianIndex(final_cart)]
-            else
-                return dummy_bin
-            end
-        end
-        # A periodic axis with fewer than three bins maps several offsets onto the same bin. Visiting
-        # it more than once would list every neighbour in it several times, so repeats become the dummy bin.
-        bins.bin_neighbors[b] = SVector{N_OFF, Int}(ntuple(Val(N_OFF)) do idx
-            v = raw[idx]
-            any(k -> raw[k] == v, 1:(idx - 1)) ? dummy_bin : v
-        end)
-    end
-
     return nothing
 end
 
@@ -155,16 +172,18 @@ end
 """
     (nd::NeighborData)(pg::ParticleGrid)
 
-The universal, branchless neighbor search functor managing topology updates.
+The universal, branchless neighbor search functor managing topology updates. Every pass is a kernel
+or a device reduction, so it runs on a grid built with `device_grid` as well.
 
 # Details
 - Forces physical coordinates back into the primary periodic domain limits if periodicity is active.
-- Rebuilds the coarse global bins (`build_global_bins!`).
-- **Pass 1 (Counting):** Scans adjacent spatial bins to count the valid neighbors falling within the interaction radius `R_sq` for each particle. Computes a sequential prefix sum to establish writing ranges and resizes the target buffers.
-- **Pass 2 (Writing):** Rescans the valid particles, accurately writing their indices, computed weights, and computed distances directly into the pre-allocated neighbor buffers.
+- Rebuilds the cell list (`build_global_bins!`).
+- **Pass 1 (Counting):** Scans the adjacent bins to count the neighbours within the interaction radius
+  `R_sq` of each particle. A prefix sum of the counts gives the neighbour slots (`ranges`), and the
+  slot arrays are grown to the total.
+- **Pass 2 (Writing):** Rescans the bins, writing neighbour indices, weights and distances into the slots.
 """
 function (nd::NeighborData{D, T})(pg::ParticleGrid{D, M, T}) where {D, M, T}
-    
     backend = get_backend()
     N = pg.meta.N
 
@@ -181,35 +200,28 @@ function (nd::NeighborData{D, T})(pg::ParticleGrid{D, M, T}) where {D, M, T}
     # --- PASS 1: COUNTING ---
     counts = nd.counts
     foreach_particle(_count_neighbours!, backend, N,
-        (counts, pos, bins.head, bins.next, bins.bin_neighbors, bins.mins, bins.coarse_size, bins.coarse_dims, L, L_inv, R_sq))
+        (counts, pos, bins.bin_of, bins.cell_start, bins.cell_particles, bins.bin_neighbors, L, L_inv, R_sq))
 
-    # --- SEQUENTIAL PREFIX SUM (host) ---
+    # --- PREFIX SUM → neighbour slots ---
     starts = pg.shared.int_buffer
-    max_so_far = 0
-    current_ptr = 1
-    @inbounds for i in 1:N
-        c = counts[i]
-        nd.ranges[i] = current_ptr:(current_ptr + c - 1)
-        starts[i] = current_ptr
-        current_ptr += c
-        if c > max_so_far; max_so_far = c; end
-    end
-    pg.meta.max_nb = max_so_far
-    nd.ranges[N + 1] = current_ptr:(current_ptr - 1)
-
-    total_neighbors = current_ptr - 1
+    cumsum!(view(starts, 1:N), view(counts, 1:N))        # inclusive; turned into slot starts below
+    total_neighbors = N == 0 ? 0 : sum(view(counts, 1:N))
+    pg.meta.max_nb  = maximum(view(counts, 1:N); init = 0)
+    foreach_particle(_neighbour_ranges!, backend, N, (nd.ranges, starts, counts))
+    fill!(view(nd.ranges, (N + 1):(N + 1)), (total_neighbors + 1):total_neighbors)
     ensure_capacity!(nd, total_neighbors)
 
     # --- PASS 2: WRITING ---
     offsets = nd.offsets
     fill!(offsets, 0)
     foreach_particle(_write_neighbours!, backend, N,
-        (pos, bins.head, bins.next, bins.bin_neighbors, bins.mins, bins.coarse_size, bins.coarse_dims, L, L_inv, R_sq,
+        (pos, bins.bin_of, bins.cell_start, bins.cell_particles, bins.bin_neighbors, L, L_inv, R_sq,
          starts, offsets, nd.indices, nd.weights, nd.distances, nd.weight_func))
 
     pg.meta.geometry_version += 1   # neighbour lists, distances and weights changed
     return nothing
 end
+
 # =========================================================================
 # KERNEL BODIES OF THE NEIGHBOUR SEARCH (see Backend.jl)
 # =========================================================================
@@ -222,29 +234,35 @@ end
     return nothing
 end
 
-@inline function _count_neighbours!(i, counts, pos, head, next, bin_neighbors, mins, coarse_size, coarse_dims, L, L_inv, R_sq)
-    bin_idx = get_flat_bin_index(pos[i], mins, coarse_size, coarse_dims)
+@inline function _count_neighbours!(i, counts, pos, bin_of, cell_start, cell_particles, bin_neighbors, L, L_inv, R_sq)
     c = 0
-    @inbounds for nb_bin_idx in bin_neighbors[bin_idx]
-        j = head[nb_bin_idx]
-        while j > 0
+    @inbounds for b in bin_neighbors[bin_of[i]]
+        for s in cell_start[b]:(cell_start[b + 1] - 1)
+            j = cell_particles[s]
             if i != j
                 dist = get_distance(pos, i, j, L, L_inv)
                 sum(abs2, dist) <= R_sq && (c += 1)
             end
-            j = next[j]
         end
     end
     counts[i] = c
     return nothing
 end
 
-@inline function _write_neighbours!(i, pos, head, next, bin_neighbors, mins, coarse_size, coarse_dims, L, L_inv, R_sq,
+# Slot range of particle `i` from the inclusive prefix sum of the counts (`starts` holds it on entry).
+@inline function _neighbour_ranges!(i, ranges, starts, counts)
+    last  = starts[i]
+    first = last - counts[i] + 1
+    ranges[i] = first:last
+    starts[i] = first
+    return nothing
+end
+
+@inline function _write_neighbours!(i, pos, bin_of, cell_start, cell_particles, bin_neighbors, L, L_inv, R_sq,
                                     starts, offsets, indices, weights, distances, weight_func)
-    bin_idx = get_flat_bin_index(pos[i], mins, coarse_size, coarse_dims)
-    @inbounds for nb_bin_idx in bin_neighbors[bin_idx]
-        j = head[nb_bin_idx]
-        while j > 0
+    @inbounds for b in bin_neighbors[bin_of[i]]
+        for s in cell_start[b]:(cell_start[b + 1] - 1)
+            j = cell_particles[s]
             if i != j
                 dist = get_distance(pos, i, j, L, L_inv)
                 d2 = sum(abs2, dist)
@@ -256,7 +274,6 @@ end
                     distances[write_idx] = dist
                 end
             end
-            j = next[j]
         end
     end
     return nothing
