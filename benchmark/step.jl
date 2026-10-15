@@ -15,11 +15,11 @@
 using HyperCloudCore, StaticArrays, LinearAlgebra, Printf
 import HyperCloudCore: flux, max_eigenvalue, velocity
 
-T      = Dict("Float64" => Float64, "Float32" => Float32)[get(ENV, "BENCH_T", "Float64")]
-n      = parse(Int, get(ENV, "BENCH_N", "250"))
-device = get(ENV, "BENCH_DEVICE", "cpu")
-moving = get(ENV, "BENCH_MOVING", "0") == "1"
-steps  = parse(Int, get(ENV, "BENCH_STEPS", "30"))
+const T      = Dict("Float64" => Float64, "Float32" => Float32)[get(ENV, "BENCH_T", "Float64")]
+const n      = parse(Int, get(ENV, "BENCH_N", "250"))
+const device = get(ENV, "BENCH_DEVICE", "cpu")
+const moving = get(ENV, "BENCH_MOVING", "0") == "1"
+const steps  = parse(Int, get(ENV, "BENCH_STEPS", "30"))
 
 if device == "gpu"
     using AMDGPU
