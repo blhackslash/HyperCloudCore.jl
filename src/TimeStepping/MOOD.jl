@@ -179,6 +179,13 @@ end
 # =========================================================================
 
 
+# Kernel body of the candidate check (see Backend.jl).
+@inline function _mood_flag!(p, mood, interp, pg, nb_f, rho_prev, rho_cand, nb_slices, is_boundary, dirty, triggered, full)
+    (is_boundary[p] || !(full || dirty[p])) && return nothing
+    mood(interp, p, rho_prev[p], nb_slices[p], rho_cand[p], pg, nb_f) && (triggered[p] = true)
+    return nothing
+end
+
 """
     expand_mask!(mask, scratch, pg, hops)
 
@@ -219,18 +226,13 @@ function detect_and_drop!(
     is_boundary = pg.core.is_boundary
     orders      = pg.core.particle_orders
     triggered, changed, dirty, snapshot = work.triggered, work.changed, work.dirty, work.snapshot
-    use_threads = get_use_threads()
 
     fill!(view(triggered, 1:N), false)
     fill!(view(changed, 1:N), false)
 
     # 1. Candidate check (parallel; per-particle writes only)
-    @smart_parallel use_threads for p in 1:N
-        if is_boundary[p] || !(full || dirty[p]); continue; end
-        if mood(interp, p, rho_prev[p], nb_slices[p], rho_cand[p], pg, int_buffer.f)
-            triggered[p] = true
-        end
-    end
+    foreach_particle(_mood_flag!, get_backend(), N,
+        (mood, interp, pg, int_buffer.f, rho_prev, rho_cand, nb_slices, is_boundary, dirty, triggered, full))
 
     # 2. Decrement (serial). Particles already at order 1 are un-flagged so they don't force.
     any_dropped = false

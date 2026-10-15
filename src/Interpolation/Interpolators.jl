@@ -412,18 +412,18 @@ function update_weights!(w::MLSWeights{B_LEN, IO, T}, pg::ParticleGrid{D, M, T})
     nb = pg.neighbor
     ensure_capacity!(w.inv_moment, N)
     ensure_capacity!(w.ok, N)
-    # Captured as values (static parameters are runtime objects inside a @batch body, see Utils.jl).
-    invL   = one(T) / minimum(pg.meta.dx)
-    val_io = Val(IO)
-    ranges, dists, wts, inv_moment, ok = nb.ranges, nb.distances, nb.weights, w.inv_moment, w.ok
-    use_threads = get_use_threads()
-    @smart_parallel use_threads for i in 1:N
-        inv_moment[i], ok[i] = _inverse_moment(ranges[i], dists, wts, invL, val_io, inv_moment[i])
-    end
+    invL = one(T) / minimum(pg.meta.dx)
+    foreach_particle(_moment_body!, get_backend(), N, (w.inv_moment, w.ok, nb.ranges, nb.distances, nb.weights, invL, Val(IO)))
     w.invL[]    = invL
     w.scales[]  = build_scale_factors(Val(D), Val(IO), invL)
     w.version[] = pg.meta.geometry_version
     return w
+end
+
+# Kernel body (see Backend.jl): inverse moment matrix of particle `i`.
+@inline function _moment_body!(i, inv_moment, ok, ranges, dists, wts, invL, val_io)
+    inv_moment[i], ok[i] = _inverse_moment(ranges[i], dists, wts, invL, val_io, inv_moment[i])
+    return nothing
 end
 
 # Inverse of the regularised moment matrix of one particle (the same fit as `_mls_solve`); `template` only

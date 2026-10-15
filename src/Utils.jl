@@ -3,10 +3,10 @@
 export param2uvec, param2xvec, param2svec, param2fvec, param2vel
 export set_threads!, get_use_threads
 
-const _USE_THREADS      = Ref(false)
-
-get_use_threads() = _USE_THREADS[]
-set_threads!(B::Bool) = (_USE_THREADS[] = B)
+# Compatibility front for the execution backend (see Backend.jl): `set_threads!(true)` selects
+# `ThreadsBackend()`, `set_threads!(false)` the default `PolyesterBackend()`.
+get_use_threads() = _BACKEND[] isa ThreadsBackend
+set_threads!(B::Bool) = (set_backend!(B ? ThreadsBackend() : PolyesterBackend()); B)
 
 """
     @smart_parallel condition loop

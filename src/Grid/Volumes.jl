@@ -154,7 +154,6 @@ function update_volumes!(pg::ParticleGrid{D, M, T}, est::ShepardVolumes) where {
     Vt  = pg.shared.float_buffer2
     wf  = nb.weight_func
     w0  = wf(zero(T))
-    use_threads = get_use_threads()
     if !isfinite(w0) || w0 > T(1e8) * wf(pg.meta.dx[1]^2)
         # Singular kernel (e.g. InverseWeightFunction): the Shepard partition degenerates to a delta.
         @warn "ShepardVolumes needs a kernel that is bounded at zero distance; using uniform volumes |Ω|/N." maxlog = 1
@@ -162,27 +161,33 @@ function update_volumes!(pg::ParticleGrid{D, M, T}, est::ShepardVolumes) where {
         return nothing
     end
 
-    one_T = one(T)   # captured as a value (static parameters are runtime objects in a @batch body)
-    @smart_parallel use_threads for i in 1:N
-        s = w0
-        @inbounds for k in nb.ranges[i]; s += nb.weights[k]; end
-        S[i] = s
-        V[i] = one_T / s
-    end
-
+    backend = get_backend()
+    foreach_particle(_shepard_sums!, backend, N, (S, V, nb.ranges, nb.weights, w0, one(T)))
     for _ in 1:est.sweeps
-        @smart_parallel use_threads for i in 1:N
-            acc = w0 / S[i] * V[i]
-            @inbounds for k in nb.ranges[i]
-                j = nb.indices[k]
-                acc += nb.weights[k] / S[j] * V[j]
-            end
-            Vt[i] = acc
-        end
+        foreach_particle(_shepard_sweep!, backend, N, (Vt, V, S, nb.ranges, nb.indices, nb.weights, w0))
         copyto!(V, 1, Vt, 1, N)
     end
 
     _renormalise_volumes!(pg)
+    return nothing
+end
+
+# Kernel bodies of the Shepard partition (see Backend.jl).
+@inline function _shepard_sums!(i, S, V, ranges, weights, w0, one_T)
+    s = w0
+    @inbounds for k in ranges[i]; s += weights[k]; end
+    S[i] = s
+    V[i] = one_T / s
+    return nothing
+end
+
+@inline function _shepard_sweep!(i, Vt, V, S, ranges, indices, weights, w0)
+    acc = w0 / S[i] * V[i]
+    @inbounds for k in ranges[i]
+        j = indices[k]
+        acc += weights[k] / S[j] * V[j]
+    end
+    Vt[i] = acc
     return nothing
 end
 

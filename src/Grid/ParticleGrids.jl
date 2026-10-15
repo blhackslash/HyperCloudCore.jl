@@ -302,39 +302,27 @@ Computes the exact geometric CFL-restricted time step dynamically across the act
     w_vec = get_weights(pg)
     dist_vec = get_distances(pg)
 
-    # Everything the @batch body needs from the type parameters is captured as a value: Polyester passes
-    # static parameters into the loop closure as runtime objects, which makes `T(...)`/`Val(D)` dynamic.
-    valD = Val(D)
-    invL = one(T) / minimum(pg.meta.dx)
-    tol = T(1e-14)
-    inv_dim = one(T) / D
-
     degree = _divergence_degree(main_grad)
+    invL   = one(T) / minimum(pg.meta.dx)
+    foreach_particle(_cfl_body!, get_backend(), pg.meta.N,
+        (dt_buffer, pg.core.is_boundary, pg.neighbor.ranges, pg.rhos, eq, degree, Val(D), dist_vec, w_vec, invL,
+         T(1e-14), one(T) / D))
 
-    @batch for i in 1:pg.meta.N
-        if pg.core.is_boundary[i]
-            continue
-        end
-
-        nb_slice = pg.neighbor.ranges[i]
-        if isempty(nb_slice)
-            continue
-        end
-
-        U_i = pg.rhos[i]
-        Lambda = _get_Lambda(eq, U_i, valD)
-
-        sum_c_vec = dispatch_cfl(degree, valD, nb_slice, dist_vec, w_vec, invL, typeof(invL))
-        sum_c = dot(Lambda, sum_c_vec)
-
-        if sum_c > tol
-            dt_buffer[i] = inv_dim / sum_c
-        end
-    end
-    
     # 2. Provide init=T(Inf) to prevent any future reduction errors
     return minimum(view(dt_buffer, 1:pg.meta.N); init=T(Inf))
 end
+# Kernel body of the CFL estimate (see Backend.jl): geometric coefficient of particle `i`.
+@inline function _cfl_body!(i, dt_buffer, is_boundary, ranges, rhos, eq, degree, valD, dist_vec, w_vec, invL, tol, inv_dim)
+    is_boundary[i] && return nothing
+    nb_slice = ranges[i]
+    isempty(nb_slice) && return nothing
+    Lambda    = _get_Lambda(eq, rhos[i], valD)
+    sum_c_vec = dispatch_cfl(degree, valD, nb_slice, dist_vec, w_vec, invL, typeof(invL))
+    sum_c     = dot(Lambda, sum_c_vec)
+    sum_c > tol && (dt_buffer[i] = inv_dim / sum_c)
+    return nothing
+end
+
 # =========================================================================
 # OVERLOADED CAPACITY MANAGERS
 # =========================================================================

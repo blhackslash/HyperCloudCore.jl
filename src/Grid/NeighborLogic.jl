@@ -165,113 +165,99 @@ The universal, branchless neighbor search functor managing topology updates.
 """
 function (nd::NeighborData{D, T, WF})(pg::ParticleGrid{D, M, T, WF, GM, N_OFF, Dom}) where {D, M, T, WF, GM, N_OFF, Dom}
     
+    backend = get_backend()
+    N = pg.meta.N
+
     # --- ENFORCE PER-AXIS PERIODIC WRAPPING ---
-    is_per = pg.domain.is_periodic
-    L_vec = pg.domain.L
-    mins_vec = pg.domain.canvas_mins
-    pos = pg.core.positions
-    
-    for i in 1:pg.meta.N
-        pos[i] = Space{D, T}(ntuple(Val(D)) do d
-            p = pos[i][d]
-            if is_per[d]
-                L_d = L_vec[d]
-                min_d = mins_vec[d]
-                return min_d + mod(p - min_d, L_d)
-            end
-            return p
-        end)
-    end
+    foreach_particle(_wrap_position!, backend, N, (pg.core.positions, pg.domain.is_periodic, pg.domain.L, pg.domain.canvas_mins))
 
     build_global_bins!(pg)
 
-    # `pos` must stay single-assignment: the @batch bodies below capture it, and a captured variable that is
-    # assigned twice is boxed by the closure conversion (every access then allocates).
-    N = pg.meta.N
-    R_sq = pg.meta.R^2
-    weightFunc = nd.weight_func
-    
+    pos  = pg.core.positions
     bins = pg.bins
-    L = pg.domain.L_wrap
-    L_inv = pg.domain.invL_wrap
-    coarse_dims = bins.coarse_dims
-    
-    bin_neighbors = bins.bin_neighbors
+    R_sq = pg.meta.R^2
+    L, L_inv = pg.domain.L_wrap, pg.domain.invL_wrap
 
     # --- PASS 1: COUNTING ---
     counts = nd.counts
-    fill!(counts, 0)
-    
-    @batch for i in 1:N
-        bin_idx = get_flat_bin_index(pos[i], bins.mins, bins.coarse_size, coarse_dims)
-        
-        c = 0
-        @inbounds for nb_bin_idx in bin_neighbors[bin_idx]
-            j = bins.head[nb_bin_idx]
-            while j > 0
-                if i != j
-                    dist = get_distance(pos, i, j, L, L_inv)
-                    d2 = sum(abs2, dist)
-                    if d2 <= R_sq
-                        c += 1
-                    end
-                end
-                j = bins.next[j]
-            end
-        end
-        counts[i] = c
-    end
+    foreach_particle(_count_neighbours!, backend, N,
+        (counts, pos, bins.head, bins.next, bins.bin_neighbors, bins.mins, bins.coarse_size, bins.coarse_dims, L, L_inv, R_sq))
 
-    # --- SEQUENTIAL PREFIX SUM ---
-    starts = pg.shared.int_buffer 
-    max_so_far = 0 
+    # --- SEQUENTIAL PREFIX SUM (host) ---
+    starts = pg.shared.int_buffer
+    max_so_far = 0
     current_ptr = 1
-    
     @inbounds for i in 1:N
         c = counts[i]
-        pg.neighbor.ranges[i] = current_ptr:(current_ptr + c - 1)
+        nd.ranges[i] = current_ptr:(current_ptr + c - 1)
         starts[i] = current_ptr
         current_ptr += c
         if c > max_so_far; max_so_far = c; end
     end
-    
     pg.meta.max_nb = max_so_far
-    pg.neighbor.ranges[N + 1] = current_ptr:(current_ptr - 1)
+    nd.ranges[N + 1] = current_ptr:(current_ptr - 1)
 
     total_neighbors = current_ptr - 1
-    ensure_capacity!(nd, total_neighbors) 
+    ensure_capacity!(nd, total_neighbors)
 
     # --- PASS 2: WRITING ---
-    indices = pg.neighbor.indices
-    weights = pg.neighbor.weights
-    distances = pg.neighbor.distances
-    
     offsets = nd.offsets
     fill!(offsets, 0)
+    foreach_particle(_write_neighbours!, backend, N,
+        (pos, bins.head, bins.next, bins.bin_neighbors, bins.mins, bins.coarse_size, bins.coarse_dims, L, L_inv, R_sq,
+         starts, offsets, nd.indices, nd.weights, nd.distances, nd.weight_func))
 
-    @batch for i in 1:N
-        bin_idx = get_flat_bin_index(pos[i], bins.mins, bins.coarse_size, coarse_dims)
-        
-        @inbounds for nb_bin_idx in bin_neighbors[bin_idx]
-            j = bins.head[nb_bin_idx]
-            while j > 0
-                if i != j
-                    dist = get_distance(pos, i, j, L, L_inv)
-                    d2 = sum(abs2, dist)
-                    
-                    if d2 <= R_sq
-                        write_idx = starts[i] + offsets[i]
-                        offsets[i] += 1
-                        
-                        indices[write_idx]   = j
-                        weights[write_idx]   = weightFunc(d2)
-                        distances[write_idx] = dist
-                    end
-                end
-                j = bins.next[j]
+    pg.meta.geometry_version += 1   # neighbour lists, distances and weights changed
+    return nothing
+end
+# =========================================================================
+# KERNEL BODIES OF THE NEIGHBOUR SEARCH (see Backend.jl)
+# =========================================================================
+@inline function _wrap_position!(i, pos::AbstractVector{Space{D, T}}, is_per, L_vec, mins_vec) where {D, T}
+    @inbounds p_i = pos[i]
+    @inbounds pos[i] = Space{D, T}(ntuple(Val(D)) do d
+        p = p_i[d]
+        is_per[d] ? mins_vec[d] + mod(p - mins_vec[d], L_vec[d]) : p
+    end)
+    return nothing
+end
+
+@inline function _count_neighbours!(i, counts, pos, head, next, bin_neighbors, mins, coarse_size, coarse_dims, L, L_inv, R_sq)
+    bin_idx = get_flat_bin_index(pos[i], mins, coarse_size, coarse_dims)
+    c = 0
+    @inbounds for nb_bin_idx in bin_neighbors[bin_idx]
+        j = head[nb_bin_idx]
+        while j > 0
+            if i != j
+                dist = get_distance(pos, i, j, L, L_inv)
+                sum(abs2, dist) <= R_sq && (c += 1)
             end
+            j = next[j]
         end
     end
-    pg.meta.geometry_version += 1   # neighbour lists, distances and weights changed
+    counts[i] = c
+    return nothing
+end
+
+@inline function _write_neighbours!(i, pos, head, next, bin_neighbors, mins, coarse_size, coarse_dims, L, L_inv, R_sq,
+                                    starts, offsets, indices, weights, distances, weight_func)
+    bin_idx = get_flat_bin_index(pos[i], mins, coarse_size, coarse_dims)
+    @inbounds for nb_bin_idx in bin_neighbors[bin_idx]
+        j = head[nb_bin_idx]
+        while j > 0
+            if i != j
+                dist = get_distance(pos, i, j, L, L_inv)
+                d2 = sum(abs2, dist)
+                if d2 <= R_sq
+                    write_idx = starts[i] + offsets[i]
+                    offsets[i] += 1
+                    indices[write_idx]   = j
+                    weights[write_idx]   = weight_func(d2)
+                    distances[write_idx] = dist
+                end
+            end
+            j = next[j]
+        end
+    end
     return nothing
 end

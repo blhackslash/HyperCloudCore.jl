@@ -248,50 +248,49 @@ velocity), and `K_X = w` when the grid moves. `full = true` covers all
 interior particles; otherwise gradients are recomputed on `work.changed` and fluxes on `work.dirty`.
 """
 function compute_explicit_rhs!(ts::GeneralRKTimeStepper{D, M, T}, eq, pg, K_E, K_X, Y, t, full::Bool) where {D, M, T}
-    N           = pg.meta.N
-    nb_slices   = pg.neighbor.ranges
-    nb_indices  = pg.neighbor.indices
-    is_boundary = pg.core.is_boundary
-    ib          = ts.int_buffer
-    interp      = ts.divergence_interpolator
-    strategy    = ts.mood.strategy
-    mover       = pg.mover
-    moving      = _is_moving(pg)
-    grad_mask   = ts.work.changed
-    flux_mask   = ts.work.dirty
-    use_threads = get_use_threads()
-    # Captured as values: static parameters are runtime objects inside a @batch body (see Utils.jl).
-    zero_state  = zero(State{M, T})
-    zero_space  = zero(Space{D, T})
+    N       = pg.meta.N
+    interp  = ts.divergence_interpolator
+    moving  = _is_moving(pg)
+    backend = get_backend()
 
     prepare_geometry!(interp, pg)   # refreshes geometry caches only if the grid changed
 
-    @smart_parallel use_threads for p in 1:N
-        if is_boundary[p] || !(full || grad_mask[p]); continue; end
-        fi = Y[p]; nb = nb_slices[p]
-        update_content!(ib, nb_indices, fi, nb, Y)
-        update_content!(interp, p, fi, nb, pg, ib)
-    end
+    foreach_particle(_rhs_gather!, backend, N,
+        (Y, pg.core.is_boundary, pg.neighbor.ranges, pg.neighbor.indices, ts.int_buffer, interp, pg, ts.work.changed, full))
+    foreach_particle(_rhs_flux!, backend, N,
+        (eq, Y, K_E, K_X, pg.core.is_boundary, pg.neighbor.ranges, ts.int_buffer, interp, ts.mood.strategy, pg.mover, pg,
+         ts.explicit_sources, ts.work.dirty, full, moving, t, zero(State{M, T}), zero(Space{D, T})))
+    return nothing
+end
 
-    @smart_parallel use_threads for p in 1:N
-        if is_boundary[p]
-            if full
-                K_E[p] = zero_state
-                moving && (K_X[p] = zero_space)
-            end
-            continue
+# Kernel bodies of the right-hand side (see Backend.jl): neighbour gather + scheme caches, then the flux pass.
+@inline function _rhs_gather!(p, Y, is_boundary, nb_slices, nb_indices, ib, interp, pg, grad_mask, full)
+    (is_boundary[p] || !(full || grad_mask[p])) && return nothing
+    fi = Y[p]; nb = nb_slices[p]
+    update_content!(ib, nb_indices, fi, nb, Y)
+    update_content!(interp, p, fi, nb, pg, ib)
+    return nothing
+end
+
+@inline function _rhs_flux!(p, eq, Y, K_E, K_X, is_boundary, nb_slices, ib, interp, strategy, mover, pg, sources,
+                            flux_mask, full, moving, t, zero_state, zero_space)
+    if is_boundary[p]
+        if full
+            K_E[p] = zero_state
+            moving && (K_X[p] = zero_space)
         end
-        if !(full || flux_mask[p]); continue; end
-        fi = Y[p]; nb = nb_slices[p]
-        if moving
-            w      = grid_velocity(mover, eq, p, fi, pg, t)
-            K_X[p] = w
-            div_F  = interp(ALEFrame(eq, w), p, fi, nb, pg, ib, strategy)   # relative flux F − w_i ρ
-        else
-            div_F  = interp(eq, p, fi, nb, pg, ib, strategy)
-        end
-        K_E[p] = -div_F + evaluate_sources(ts.explicit_sources, fi, p, pg, t)
+        return nothing
     end
+    (full || flux_mask[p]) || return nothing
+    fi = Y[p]; nb = nb_slices[p]
+    if moving
+        w      = grid_velocity(mover, eq, p, fi, pg, t)
+        K_X[p] = w
+        div_F  = interp(ALEFrame(eq, w), p, fi, nb, pg, ib, strategy)   # relative flux F − w_i ρ
+    else
+        div_F  = interp(eq, p, fi, nb, pg, ib, strategy)
+    end
+    K_E[p] = -div_F + evaluate_sources(sources, fi, p, pg, t)
     return nothing
 end
 
@@ -303,66 +302,70 @@ For `i == s + 1`: builds the final state into `rho_cand` / `x_cand` (BCs applied
 Positions are NOT applied to the grid here; see `set_positions!`.
 """
 function form_candidate!(ts::GeneralRKTimeStepper{D, M, T}, eq, pg, i::Int, dt::T, time::Real) where {D, M, T}
-    N           = pg.meta.N
-    s           = ts.num_stages
-    bt          = ts.tableau
-    is_boundary = pg.core.is_boundary
-    U_n, x_n    = ts.rho_n, ts.x_n
-    K_E, K_I, K_X = ts.K_E_stages, ts.K_I_stages, ts.K_X_stages
-    moving      = _is_moving(pg)
-    use_threads = get_use_threads()
+    N        = pg.meta.N
+    s        = ts.num_stages
+    bt       = ts.tableau
+    moving   = _is_moving(pg)
+    backend  = get_backend()
 
     is_final = i > s
     target   = is_final ? ts.rho_cand : ts.Y_stages[i]
     x_target = is_final ? ts.x_cand   : ts.X_stages[i]
     t_i      = is_final ? time + dt : time + bt.c_t[i] * dt
     n_prev   = is_final ? s : i - 1
-    # Captured as values: `zero(Space{D, T})` inside the @batch body built the type at runtime for every
-    # particle (several MiB of allocations per stage and no thread scaling).
-    zero_T      = zero(T)
-    zero_state  = zero(State{M, T})
-    zero_space  = zero(Space{D, T})
 
-    @smart_parallel use_threads for p in 1:N
-        if is_boundary[p]
-            target[p] = pg.rhos[p]
-            moving && (x_target[p] = x_n[p])
-            continue
-        end
-        Y = U_n[p]
-        X = moving ? x_n[p] : zero_space
-        for j in 1:n_prev
-            a_t = is_final ? bt.b_t[j] : bt.a_t[i, j]
-            a   = is_final ? bt.b[j]   : bt.a[i, j]
-            if a_t != zero_T
-                Y += (dt * a_t) * K_E[j][p]
-                moving && (X += (dt * a_t) * K_X[j][p])
-            end
-            a != zero_T && (Y += (dt * a) * K_I[j][p])
-        end
-        target[p] = Y
-        moving && (x_target[p] = X)
-    end
+    foreach_particle(_stage_predictor!, backend, N,
+        (target, x_target, ts.rho_n, ts.x_n, ts.K_E_stages, ts.K_I_stages, ts.K_X_stages, pg.rhos, pg.core.is_boundary,
+         bt, i, n_prev, is_final, dt, moving, zero(T), zero(Space{D, T})))
 
     if !is_final
         pre_solve_updates!(ts.implicit_sources, target, pg, t_i)
         a_ii = bt.a[i, i]
         if abs(a_ii) > T(1e-14)
-            dt_ii = dt * a_ii
-            @smart_parallel use_threads for p in 1:N
-                if is_boundary[p]; continue; end
-                target[p] = implicit_solve(ts.implicit_sources, target[p], dt_ii, p, pg, t_i)
-            end
+            foreach_particle(_stage_implicit_solve!, backend, N,
+                (target, pg.core.is_boundary, ts.implicit_sources, dt * a_ii, pg, t_i))
         end
-        K_I_i = K_I[i]
-        @smart_parallel use_threads for p in 1:N
-            K_I_i[p] = is_boundary[p] ? zero_state :
-                       evaluate_sources(ts.implicit_sources, target[p], p, pg, t_i)
-        end
+        foreach_particle(_stage_implicit_rhs!, backend, N,
+            (ts.K_I_stages[i], target, pg.core.is_boundary, ts.implicit_sources, pg, t_i, zero(State{M, T})))
     end
 
     apply_boundary_conditions!(pg, target, ts, eq, t_i)
     return target, t_i
+end
+
+# Kernel bodies of the stage assembly (see Backend.jl).
+@inline function _stage_predictor!(p, target, x_target, U_n, x_n, K_E, K_I, K_X, rhos, is_boundary, bt, i, n_prev,
+                                   is_final, dt, moving, zero_T, zero_space)
+    if is_boundary[p]
+        target[p] = rhos[p]
+        moving && (x_target[p] = x_n[p])
+        return nothing
+    end
+    Y = U_n[p]
+    X = moving ? x_n[p] : zero_space
+    for j in 1:n_prev
+        a_t = is_final ? bt.b_t[j] : bt.a_t[i, j]
+        a   = is_final ? bt.b[j]   : bt.a[i, j]
+        if a_t != zero_T
+            Y += (dt * a_t) * K_E[j][p]
+            moving && (X += (dt * a_t) * K_X[j][p])
+        end
+        a != zero_T && (Y += (dt * a) * K_I[j][p])
+    end
+    target[p] = Y
+    moving && (x_target[p] = X)
+    return nothing
+end
+
+@inline function _stage_implicit_solve!(p, target, is_boundary, sources, dt_ii, pg, t_i)
+    is_boundary[p] && return nothing
+    target[p] = implicit_solve(sources, target[p], dt_ii, p, pg, t_i)
+    return nothing
+end
+
+@inline function _stage_implicit_rhs!(p, K_I_i, target, is_boundary, sources, pg, t_i, zero_state)
+    K_I_i[p] = is_boundary[p] ? zero_state : evaluate_sources(sources, target[p], p, pg, t_i)
+    return nothing
 end
 
 """
