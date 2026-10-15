@@ -162,11 +162,12 @@ function update_volumes!(pg::ParticleGrid{D, M, T}, est::ShepardVolumes) where {
         return nothing
     end
 
+    one_T = one(T)   # captured as a value (static parameters are runtime objects in a @batch body)
     @smart_parallel use_threads for i in 1:N
         s = w0
         @inbounds for k in nb.ranges[i]; s += nb.weights[k]; end
         S[i] = s
-        V[i] = one(T) / s
+        V[i] = one_T / s
     end
 
     for _ in 1:est.sweeps

@@ -370,6 +370,129 @@ end
     end)
 end
 
+# =========================================================================
+# CACHED MLS MOMENT MATRICES (frozen geometry)
+# =========================================================================
+"""
+    MLSWeights{B_LEN, IO, T}()
+
+Per-particle inverse moment matrices of the degree-`IO` MLS fit for a frozen geometry. With them a fit over
+the neighbour differences `df_k` is `inv_N * Σ_k w_k p_k df_kᵀ` (basis `p_k` of the scaled distance), which
+reproduces `Interpolator{D, IO, 1}` without assembling and factorising the moment matrix for every solve.
+Only `B_LEN²` numbers per particle are stored, so the neighbour-slot traffic of the hot loops does not grow
+(a per-slot weight cache was slower once the working set exceeded the caches).
+
+`ok[i]` is `false` where the moment matrix was not positive definite (callers use the direct solve there,
+which returns zero). `version` is the `geometry_version` the matrices belong to; see [`update_weights!`](@ref).
+"""
+struct MLSWeights{B_LEN, IO, T, L}   # L = B_LEN^2 (StaticArrays needs the matrix length as a parameter)
+    inv_moment::Vector{SMatrix{B_LEN, B_LEN, T, L}}
+    ok::Vector{Bool}
+    version::Base.RefValue{Int}
+    invL::Base.RefValue{T}
+    scales::Base.RefValue{SVector{B_LEN, T}}
+end
+function MLSWeights{B_LEN, IO, T}() where {B_LEN, IO, T}
+    return MLSWeights{B_LEN, IO, T, B_LEN * B_LEN}(SMatrix{B_LEN, B_LEN, T, B_LEN * B_LEN}[], Bool[], Ref(-1),
+                                                   Ref(one(T)), Ref(zero(SVector{B_LEN, T})))
+end
+
+"`true` if the cached matrices belong to the current geometry of `pg`."
+@inline is_current(w::MLSWeights, pg::ParticleGrid) = w.version[] == pg.meta.geometry_version
+
+"""
+    update_weights!(w::MLSWeights, pg::ParticleGrid)
+
+Recomputes the inverse moment matrices for the current neighbour lists, distances and weights of `pg` unless
+they are current already. One MLS factorisation per particle (parallel).
+"""
+function update_weights!(w::MLSWeights{B_LEN, IO, T}, pg::ParticleGrid{D, M, T}) where {B_LEN, IO, T, D, M}
+    is_current(w, pg) && return w
+    N  = pg.meta.N
+    nb = pg.neighbor
+    ensure_capacity!(w.inv_moment, N)
+    ensure_capacity!(w.ok, N)
+    # Captured as values (static parameters are runtime objects inside a @batch body, see Utils.jl).
+    invL   = one(T) / minimum(pg.meta.dx)
+    val_io = Val(IO)
+    ranges, dists, wts, inv_moment, ok = nb.ranges, nb.distances, nb.weights, w.inv_moment, w.ok
+    use_threads = get_use_threads()
+    @smart_parallel use_threads for i in 1:N
+        inv_moment[i], ok[i] = _inverse_moment(ranges[i], dists, wts, invL, val_io, inv_moment[i])
+    end
+    w.invL[]    = invL
+    w.scales[]  = build_scale_factors(Val(D), Val(IO), invL)
+    w.version[] = pg.meta.geometry_version
+    return w
+end
+
+# Inverse of the regularised moment matrix of one particle (the same fit as `_mls_solve`); `template` only
+# fixes the return type when the factorisation fails.
+function _inverse_moment(nb_slice::UnitRange{Int}, distVec::AbstractVector, wVec::AbstractVector{T}, invL::T,
+                         ::Val{IO}, template::SMatrix{B_LEN, B_LEN, T}) where {T, IO, B_LEN}
+    N_s = zero(SMatrix{B_LEN, B_LEN, T, B_LEN * B_LEN})
+    @inbounds for k in nb_slice
+        p_s = build_basis(Val(IO), distVec[k] * invL)
+        N_s += wVec[k] * (p_s * p_s')
+    end
+    eps_reg = T(1e-10) * tr(N_s) / B_LEN
+    C = cholesky(Symmetric(N_s + eps_reg * I), check = false)
+    LinearAlgebra.issuccess(C) || return (zero(template), false)
+    return (SMatrix{B_LEN, B_LEN, T, B_LEN * B_LEN}(inv(C)), true)
+end
+
+"""
+    apply_weights(w::MLSWeights, i, nb_slice, distVec, wVec, dfVec) -> SVector{B_LEN, State{M, T}}
+
+The MLS coefficients of the differences `dfVec` over `nb_slice` of particle `i` from the cached inverse moment
+matrix (replaces the factorisation of `Interpolator{D, IO, 1}`).
+"""
+@inline function apply_weights(w::MLSWeights{B_LEN, IO, T}, i::Int, nb_slice::UnitRange{Int},
+                               distVec::AbstractVector, wVec::AbstractVector{T},
+                               dfVec::AbstractVector{State{M, T}}) where {B_LEN, IO, T, M}
+    invL = w.invL[]
+    b_s = zero(SMatrix{B_LEN, M, T, B_LEN * M})
+    @inbounds for k in nb_slice
+        p_s = build_basis(Val(IO), distVec[k] * invL)
+        b_s += wVec[k] * (p_s * dfVec[k]')
+    end
+    return _scaled_rows(w.inv_moment[i] * b_s, w.scales[])
+end
+
+# Rows of the coefficient matrix as States, scaled to physical derivatives (as in `_mls_solve`).
+@inline function _scaled_rows(c_s::SMatrix{B_LEN, M, T}, scales::SVector{B_LEN, T}) where {B_LEN, M, T}
+    return SVector{B_LEN, State{M, T}}(ntuple(Val(B_LEN)) do b
+        State{M, T}(ntuple(m -> c_s[b, m], Val(M))) * scales[b]
+    end)
+end
+
+"""
+    apply_weights_divergence(w::MLSWeights, i, nb_slice, distVec, wVec, dfFluxVec) -> State{M, T}
+
+`Σ_d ∂_d F_d` of the flux differences `dfFluxVec` over `nb_slice` of particle `i` from the cached inverse
+moment matrix (replaces the factorisation in `_mls_divergence`).
+"""
+@inline function apply_weights_divergence(w::MLSWeights{B_LEN, IO, T}, i::Int, nb_slice::UnitRange{Int},
+                                          distVec::AbstractVector, wVec::AbstractVector{T},
+                                          dfFluxVec::AbstractVector{Flux{D, M, T}}) where {B_LEN, IO, T, D, M}
+    invL = w.invL[]
+    b_s = zero(SMatrix{B_LEN, D * M, T, B_LEN * D * M})
+    @inbounds for k in nb_slice
+        p_s = build_basis(Val(IO), distVec[k] * invL)
+        F   = dfFluxVec[k]
+        row = SVector{D * M, T}(ntuple(q -> F[(q - 1) ÷ M + 1][(q - 1) % M + 1], Val(D * M)))
+        b_s += wVec[k] * (p_s * row')
+    end
+    c_s = w.inv_moment[i] * b_s
+    return State{M, T}(ntuple(Val(M)) do m
+        acc = zero(T)
+        for d in 1:D
+            acc += c_s[d, (d - 1) * M + m]
+        end
+        acc * invL
+    end)
+end
+
 include("FluxFunctions.jl")
 
 include("Central.jl")

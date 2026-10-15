@@ -106,6 +106,7 @@ function refresh_geometry!(pg::ParticleGrid{D, M, T}) where {D, M, T}
     R_sq      = pg.meta.R^2
     wf        = nb.weight_func
     use_threads = get_use_threads()
+    zero_T    = zero(T)   # captured as a value (static parameters are runtime objects in a @batch body)
 
     @smart_parallel use_threads for i in 1:N
         @inbounds for k in nb.ranges[i]
@@ -113,9 +114,10 @@ function refresh_geometry!(pg::ParticleGrid{D, M, T}) where {D, M, T}
             dist = get_distance(pos, i, j, L, L_inv)
             d2   = sum(abs2, dist)
             nb.distances[k] = dist
-            nb.weights[k]   = d2 <= R_sq ? wf(d2) : zero(T)
+            nb.weights[k]   = d2 <= R_sq ? wf(d2) : zero_T
         end
     end
+    pg.meta.geometry_version += 1
     return nothing
 end
 

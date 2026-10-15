@@ -176,6 +176,64 @@ end
     end
 end
 
+@testset "Cached MLS moment matrices" begin
+    geom = get_rectangular_domain(Float64, (0.0, 0.0), (1.0, 1.0); is_periodic = true)
+    dx = 1 / 24
+    pg = ParticleGrid(geom, (dx, dx), ExponentialWeightFunction(1.0, 2.5dx), 2; randomness = (0.2dx, 0.2dx), rng = MersenneTwister(3))
+    nb = pg.neighbor
+    N = pg.meta.N
+    df = [State{2, Float64}(sin(3k), cos(k)) for k in 1:length(nb.indices)]
+    df_flux = [Flux{2, 2, Float64}((State{2, Float64}(sin(k), k / 10), State{2, Float64}(cos(2k), -k / 7))) for k in 1:length(nb.indices)]
+    scratch = similar(df)
+
+    for (order, div_order) in ((3, 0), (4, 2), (2, 0))
+        interp = MUSCL(Float64, 2, 2, order, NoLimiter(), RusanovFlux(); div_order = div_order)
+        @test !HyperCloudCore.is_current(interp.grad_weights, pg)
+        HyperCloudCore.prepare_geometry!(interp, pg)
+        @test HyperCloudCore.is_current(interp.grad_weights, pg) && HyperCloudCore.is_current(interp.div_weights, pg)
+        grad_deg = max(1, order - 1)
+        div_idx  = div_order == 0 ? max(2, order) : max(2, div_order)
+        @test (interp.div_weights === interp.grad_weights) == (div_idx - 1 == grad_deg)
+        for i in (1, N ÷ 3, N)
+            sl = nb.ranges[i]
+            interp.grad_weights.ok[i] || continue
+            direct = HyperCloudCore.Interpolator{2, grad_deg, 1}()(sl, nb.distances, nb.weights, df; scale = dx)
+            cached = HyperCloudCore.apply_weights(interp.grad_weights, i, sl, nb.distances, nb.weights, df)
+            @test all(isapprox.(direct, cached; atol = 1e-9))
+            direct_div = HyperCloudCore.compute_dynamic_divergence(interp.interpolators, div_idx, sl, nb.distances, nb.weights, df_flux, scratch, pg.meta.dx)
+            cached_div = HyperCloudCore.apply_weights_divergence(interp.div_weights, i, sl, nb.distances, nb.weights, df_flux)
+            @test isapprox(direct_div, cached_div; atol = 1e-9)
+        end
+        # A geometry change invalidates the cache; the next pass rebuilds it
+        refresh_geometry!(pg)
+        @test !HyperCloudCore.is_current(interp.grad_weights, pg)
+        HyperCloudCore.prepare_geometry!(interp, pg)
+        @test HyperCloudCore.is_current(interp.grad_weights, pg)
+    end
+
+    # The stepper produces the same solution with and without the cache. The wrapper hides the cache hook,
+    # so every particle takes the direct solves.
+    struct NoCacheMUSCL{I} <: DivergenceInterpolator; inner::I; end
+    HyperCloudCore.update_size!(w::NoCacheMUSCL, N::Int) = update_size!(w.inner, N)
+    HyperCloudCore.update_content!(w::NoCacheMUSCL, args...) = update_content!(w.inner, args...)
+    (w::NoCacheMUSCL)(args...) = w.inner(args...)
+    HyperCloudCore._extract_order(w::NoCacheMUSCL) = _extract_order(w.inner)
+    HyperCloudCore._divergence_degree(w::NoCacheMUSCL) = _divergence_degree(w.inner)
+    HyperCloudCore._order_reach(w::NoCacheMUSCL, s::MOODStrategy) = _order_reach(w.inner, s)
+    HyperCloudCore.has_cached_gradients(w::NoCacheMUSCL) = has_cached_gradients(w.inner)
+    HyperCloudCore.cached_gradients(w::NoCacheMUSCL) = HyperCloudCore.cached_gradients(w.inner)
+
+    N1 = 60; eq = make_advection_1d(); dt = 0.4 * (2 / N1)
+    pg_a = set_ic!(make_pg_1d(N1), x -> exp(-x^2 / 0.02)); pg_b = set_ic!(make_pg_1d(N1), x -> exp(-x^2 / 0.02))
+    m_a = MUSCL(Float64, 1, 1, 3, VenkatakrishnanLimiter(:hard), RusanovFlux())
+    m_b = NoCacheMUSCL(MUSCL(Float64, 1, 1, 3, VenkatakrishnanLimiter(:hard), RusanovFlux()))
+    ts_a = GeneralRKTimeStepper(eq, m_a, MOOD(EPD1(), MOODu1(1e-6)), RK3_SSP_Tableau(Float64))
+    ts_b = GeneralRKTimeStepper(eq, m_b, MOOD(EPD1(), MOODu1(1e-6)), RK3_SSP_Tableau(Float64))
+    for k in 0:3; ts_a(eq, pg_a, k * dt, dt); ts_b(eq, pg_b, k * dt, dt); end
+    @test HyperCloudCore.is_current(m_a.grad_weights, pg_a) && !HyperCloudCore.is_current(m_b.inner.grad_weights, pg_b)
+    @test all(i -> isapprox(pg_a.rhos[i][1], pg_b.rhos[i][1]; atol = 1e-11), 1:pg_a.meta.N)
+end
+
 @testset "Butcher tableaus" begin
     explicit = (RK1_Euler_Tableau, RK2_SSP_Tableau, RK2_Ralston_Tableau, RK3_SSP_Tableau, RK4_Classical_Tableau)
     imex     = (IMEX_Euler_Tableau, IMEX_ARS233_Tableau, IMEX_ARS222_Tableau, IMEX_PRSSP3_Tableau, IMEX_SSP2332_Tableau)
@@ -326,6 +384,36 @@ end
         ts = GeneralRKTimeStepper(eq, CentralDivergence(Float64, 1, 1, 2), MOOD(), RK2_SSP_Tableau(Float64))
         @test_throws MethodError ts(eq, pg, 0.0, Float32(dt))
     end
+end
+
+@testset "Threaded loops do not allocate" begin
+    # The @batch bodies used to build types from the method's static parameters (and the neighbour search
+    # captured a reassigned variable), which allocated per particle and destroyed the thread scaling.
+    N  = 4000   # large enough that any per-particle allocation dwarfs the per-call task overhead
+    eq = make_advection_1d()
+    pg = set_ic!(make_pg_1d(N), x -> exp(-x^2 / 0.02))
+    @test pg.meta.geometry_version >= 1
+    v0 = pg.meta.geometry_version
+    pg.neighbor(pg)
+    @test pg.meta.geometry_version == v0 + 1
+    refresh_geometry!(pg)
+    @test pg.meta.geometry_version == v0 + 2
+    @test (@allocated pg.neighbor(pg)) < 16_384
+
+    dt = 0.4 * (2 / N)
+    for use_threads in (false, true)
+        set_threads!(use_threads)
+        interp = MUSCL(Float64, 1, 1, 3, VenkatakrishnanLimiter(:hard), RusanovFlux())
+        ts = GeneralRKTimeStepper(eq, interp, MOOD(EPD1(), MOODu1(1e-6)), RK3_SSP_Tableau(Float64))
+        ts(eq, pg, 0.0, dt); ts(eq, pg, dt, dt)
+        a = @allocated ts(eq, pg, 2dt, dt)
+        # Polyester: nothing per particle. Base threads: only the task spawns of each loop (< 100 B per task).
+        @test a < (use_threads ? 256 * 1024 : 16_384)
+        get_time_step(pg, eq, interp); update_volumes!(pg, ShepardVolumes())   # compile first
+        @test (@allocated get_time_step(pg, eq, interp)) < (use_threads ? 32_768 : 4096)
+        @test (@allocated update_volumes!(pg, ShepardVolumes())) < (use_threads ? 32_768 : 4096)
+    end
+    set_threads!(false)
 end
 
 @testset "Moving grids" begin
