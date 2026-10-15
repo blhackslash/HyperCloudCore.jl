@@ -76,7 +76,7 @@ struct NoStrategy <: MOODStrategy end
 Base type for discrete maximum principles (DMP) and physical admissibility checks.
 
 # API Requirements
-- Must implement the functor: `(m::MOOD{<:MOODStrategy, C})(interp, p_idx, U_prev, nb_slice, U_cand, pg, f_neighbours) -> Bool`
+- Must implement the functor: `(m::MOOD{<:MOODStrategy, C})(interp, p_idx, U_prev_i, nb_slice, U_cand_i, pg, U_prev) -> Bool`, where `U_prev` is the state vector of the previous stage (neighbour states via `neighbour_states(U_prev, pg)`)
 - Returns `true` if the locally updated state `f_new` violates the criterion, triggering an order drop.
 """
 abstract type MOODCriterion end
@@ -112,9 +112,12 @@ abstract type AbstractSlopeLimiter end
 Central component for executing spatial reconstruction and computing the flux divergence.
 
 # API Requirements
-- Must implement the primary execution functor: `(::DivergenceInterpolator)(eq::HyperbolicPDE, i::Int, f_i::State, nb_slice::OrdinalRange, pg::ParticleGrid, ib::InteractionBuffer, strategy::MOODStrategy) -> State{M, T}`. (Note: The return value is typically scaled by 2.0 depending on the internal integration rules).
+- Must implement the primary execution functor: `(::DivergenceInterpolator)(eq::HyperbolicPDE, i::Int, f_i::State, nb_slice::OrdinalRange, pg::ParticleGrid, U::AbstractVector{State}, ib::InteractionBuffer, strategy::MOODStrategy) -> State{M, T}`,
+  where `U` is the stage state vector (`f_i == U[i]`); neighbour states are read through
+  `neighbour_states(U, pg)[k]` / `neighbour_differences(U, pg, f_i)[k]` for a slot `k` of `nb_slice`, and
+  `ib` holds the per-slot scratch (`df_flux`, `df_scratch`, `mask`). (Note: The return value is typically scaled by 2.0 depending on the internal integration rules).
 - Must implement `update_size!(interp, N_particles)` for memory allocation.
-- Must implement `update_content!(interp, i, f_i, nb_slice, pg, ib)` for pre-gather passes (e.g., caching gradients).
+- Must implement `update_content!(interp, i, f_i, nb_slice, pg, U, ib)` for the pre-pass (e.g., caching gradients).
 - Must implement `@inline _extract_order(interp) -> Int`: the maximum **consistency order**. Every
   scheme reads `pg.core.particle_orders` in this convention (MUSCL: reconstruction degree = order − 1).
 - Optional: `prepare_geometry!(interp, pg)` (refresh geometry-dependent caches), `_divergence_degree(interp)`, `_order_reach(interp, strategy)` (see `API.jl`); on moving grids the interpolator receives the PDE wrapped in an `ALEFrame`.

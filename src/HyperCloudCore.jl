@@ -41,6 +41,7 @@ const Velocity{D, M, T, L} = SVector{D, SMatrix{M, M, T, L}}
 
 include("Backend.jl")
 include("Growable.jl")
+include("NeighbourViews.jl")
 include("Utils.jl")
 include("Types.jl")
 include("API.jl")

@@ -29,47 +29,31 @@ end
 """
     InteractionBuffer{D, M, T}(storage = Array)
 
-Pre-allocated neighbour workspace, indexed by global neighbour slot (so per-particle slices are
+Per-slot scratch of the schemes, indexed by global neighbour slot (so per-particle slices are
 disjoint and the passes are thread-safe). The host object holds `Growable` buffers with arrays of
-type `storage`; kernels receive it with the raw arrays (see `DeviceAdapt.jl`).
+type `storage`; kernels receive it with the raw arrays (see `DeviceAdapt.jl`). Neighbour states are
+not buffered: schemes read them from the state vector through `neighbour_states` /
+`neighbour_differences`.
 
 # Fields
-- `f`, `df`: neighbour states and differences to the centre particle.
 - `df_flux`: numerical flux differences / non-conservative jumps.
 - `df_scratch`: MLS scratch.
 - `mask`: directional stencil filter.
 """
 struct InteractionBuffer{D, M, T, VS <: AbstractVector{State{M, T}}, VF <: AbstractVector{Flux{D, M, T}}, VB <: AbstractVector{Bool}}
-    f::VS
-    df::VS
     df_flux::VF
     df_scratch::VS
     mask::VB
 end
-InteractionBuffer{D, M, T}(f::VS, df::VS, df_flux::VF, df_scratch::VS, mask::VB) where {D, M, T, VS, VF, VB} =
-    InteractionBuffer{D, M, T, VS, VF, VB}(f, df, df_flux, df_scratch, mask)
+InteractionBuffer{D, M, T}(df_flux::VF, df_scratch::VS, mask::VB) where {D, M, T, VS, VF, VB} =
+    InteractionBuffer{D, M, T, VS, VF, VB}(df_flux, df_scratch, mask)
 InteractionBuffer{D, M, T}(::Type{AT} = Array) where {D, M, T, AT <: AbstractArray} =
-    InteractionBuffer{D, M, T}(Growable{State{M, T}}(AT), Growable{State{M, T}}(AT), Growable{Flux{D, M, T}}(AT),
-                               Growable{State{M, T}}(AT), Growable{Bool}(AT))
+    InteractionBuffer{D, M, T}(Growable{Flux{D, M, T}}(AT), Growable{State{M, T}}(AT), Growable{Bool}(AT))
 
 function update_size!(ib::InteractionBuffer, num_interactions::Int)
-    ensure_capacity!(ib.f, num_interactions)
-    ensure_capacity!(ib.df, num_interactions)
     ensure_capacity!(ib.df_flux, num_interactions)
     ensure_capacity!(ib.df_scratch, num_interactions)
     ensure_capacity!(ib.mask, num_interactions)
-    return nothing
-end
-
-@inline function update_content!(
-    ib::InteractionBuffer{D, M, T}, nb_indices::AbstractVector{Int},
-    f_i::State{M, T}, nb_slice::OrdinalRange{Int, Int}, fVec::AbstractVector{State{M, T}}
-) where {D, M, T}
-    @inbounds for k in nb_slice
-        f_j = fVec[nb_indices[k]]
-        ib.f[k]  = f_j
-        ib.df[k] = f_j - f_i
-    end
     return nothing
 end
 
@@ -257,10 +241,11 @@ update_size!(ts::GeneralRKTimeStepper, N::Int, M_neighbors::Int) = update_size!(
 """
     compute_explicit_rhs!(ts, eq, pg, K_E, K_X, Y, t, full)
 
-Pre-gather (neighbour states, cached gradients) and flux pass at the CURRENT grid geometry:
+Scheme pre-pass (cached gradients) and flux pass at the CURRENT grid geometry:
 `K_E = -div(F − w_i ρ) + S_expl` (the PDE wrapped in an `ALEFrame` with the particle's own grid
-velocity), and `K_X = w` when the grid moves. `full = true` covers all
-interior particles; otherwise gradients are recomputed on `work.changed` and fluxes on `work.dirty`.
+velocity), and `K_X = w` when the grid moves. Both passes read neighbour states straight from `Y`.
+`full = true` covers all interior particles; otherwise gradients are recomputed on `work.changed`
+and fluxes on `work.dirty`.
 """
 function compute_explicit_rhs!(ts::GeneralRKTimeStepper{D, M, T}, eq, pg, K_E, K_X, Y, t, full::Bool) where {D, M, T}
     N       = pg.meta.N
@@ -271,19 +256,18 @@ function compute_explicit_rhs!(ts::GeneralRKTimeStepper{D, M, T}, eq, pg, K_E, K
     prepare_geometry!(interp, pg)   # refreshes geometry caches only if the grid changed
 
     foreach_particle(_rhs_gather!, backend, N,
-        (Y, pg.core.is_boundary, pg.neighbor.ranges, pg.neighbor.indices, ts.int_buffer, interp, pg, ts.work.changed, full))
+        (Y, pg.core.is_boundary, pg.neighbor.ranges, ts.int_buffer, interp, pg, ts.work.changed, full))
     foreach_particle(_rhs_flux!, backend, N,
         (eq, Y, K_E, K_X, pg.core.is_boundary, pg.neighbor.ranges, ts.int_buffer, interp, ts.mood.strategy, pg.mover, pg,
          ts.explicit_sources, ts.work.dirty, full, moving, t, zero(State{M, T}), zero(Space{D, T})))
     return nothing
 end
 
-# Kernel bodies of the right-hand side (see Backend.jl): neighbour gather + scheme caches, then the flux pass.
-@inline function _rhs_gather!(p, Y, is_boundary, nb_slices, nb_indices, ib, interp, pg, grad_mask, full)
+# Kernel bodies of the right-hand side (see Backend.jl): the scheme's pre-pass (cached gradients), then the flux pass.
+@inline function _rhs_gather!(p, Y, is_boundary, nb_slices, ib, interp, pg, grad_mask, full)
     (is_boundary[p] || !(full || grad_mask[p])) && return nothing
     fi = Y[p]; nb = nb_slices[p]
-    update_content!(ib, nb_indices, fi, nb, Y)
-    update_content!(interp, p, fi, nb, pg, ib)
+    update_content!(interp, p, fi, nb, pg, Y, ib)
     return nothing
 end
 
@@ -301,9 +285,9 @@ end
     if moving
         w      = grid_velocity(mover, eq, p, fi, pg, t)
         K_X[p] = w
-        div_F  = interp(ALEFrame(eq, w), p, fi, nb, pg, ib, strategy)   # relative flux F − w_i ρ
+        div_F  = interp(ALEFrame(eq, w), p, fi, nb, pg, Y, ib, strategy)   # relative flux F − w_i ρ
     else
-        div_F  = interp(eq, p, fi, nb, pg, ib, strategy)
+        div_F  = interp(eq, p, fi, nb, pg, Y, ib, strategy)
     end
     K_E[p] = -div_F + evaluate_sources(sources, fi, p, pg, t)
     return nothing
@@ -402,7 +386,7 @@ function mood_checkpoint!(ts::GeneralRKTimeStepper{D, M, T}, eq, pg, i::Int, dt:
     full = true
     while true
         target, _ = form_candidate!(ts, eq, pg, i, dt, time)
-        detect_and_drop!(ts.mood, work, interp, pg, ts.int_buffer, Y_prev, target, full) || return nothing
+        detect_and_drop!(ts.mood, work, interp, pg, Y_prev, target, full) || return nothing
 
         copyto!(parent(work.dirty), 1, parent(work.changed), 1, N)
         expand_mask!(parent(work.dirty), parent(work.scratch), pg, reach)

@@ -84,9 +84,9 @@ end
 # --- Classic Algorithm ---
 function (upwind::UpwindDivergence{D, M, T, MAX_ORDER, DIV_ORDER, B_LEN, INTERPS, ClassicAlgorithm, NF})(
     eq::HyperbolicPDE, i::Int, f_i::State{M, T}, nb_slice::OrdinalRange{Int, Int},
-    pg::ParticleGrid{D, M, T}, ib::InteractionBuffer{D, M, T}, ::MOODStrategy
+    pg::ParticleGrid{D, M, T}, U::AbstractVector{State{M, T}}, ib::InteractionBuffer{D, M, T}, ::MOODStrategy
 ) where {D, M, T, MAX_ORDER, DIV_ORDER, B_LEN, INTERPS, NF}
-    
+
     num_nb = length(nb_slice)
     p_order = pg.core.particle_orders[i]
 
@@ -100,12 +100,13 @@ function (upwind::UpwindDivergence{D, M, T, MAX_ORDER, DIV_ORDER, B_LEN, INTERPS
         return zero(State{M, T})
     end
 
-    F_i = flux(eq, f_i) 
+    F_i = flux(eq, f_i)
     dist_all = get_distances(pg)
-    
+    f_nb = neighbour_states(U, pg)
+
     @inbounds for global_idx in nb_slice
         dist_k = dist_all[global_idx]
-        f_j    = ib.f[global_idx]
+        f_j    = f_nb[global_idx]
         F_j    = flux(eq, f_j)
         
         f_L, f_R, F_L, F_R = sort_flux(f_i, f_j, F_i, F_j, dist_k)
@@ -129,11 +130,12 @@ end
 # --- Tiwari Algorithm ---
 function (upwind::UpwindDivergence{D, 1, T, MAX_ORDER, DIV_ORDER, B_LEN, INTERPS, TiwariAlgorithm, NF})(
     eq::HyperbolicPDE, i::Int, f_i::State{1, T}, nb_slice::OrdinalRange{Int, Int},
-    pg::ParticleGrid{D, 1, T}, ib::InteractionBuffer{D, 1, T}, ::MOODStrategy
+    pg::ParticleGrid{D, 1, T}, U::AbstractVector{State{1, T}}, ib::InteractionBuffer{D, 1, T}, ::MOODStrategy
 ) where {D, T, MAX_ORDER, DIV_ORDER, B_LEN, INTERPS, NF}
 
     dist_all = get_distances(pg)
-    w_all = get_weights(pg) 
+    w_all = get_weights(pg)
+    df = neighbour_differences(U, pg, f_i)
 
     num_nb = length(nb_slice)
     p_order_base = pg.core.particle_orders[i]
@@ -169,7 +171,7 @@ function (upwind::UpwindDivergence{D, 1, T, MAX_ORDER, DIV_ORDER, B_LEN, INTERPS
         
         raw_grad = dispatch_interpolator(
             upwind.interpolators, div_idx_d, 
-            nb_slice, dist_all, w_all, ib.df, ib.mask, scale[d], Val(B_LEN_D_VAL), State{1, T}
+            nb_slice, dist_all, w_all, df, ib.mask, scale[d], Val(B_LEN_D_VAL), State{1, T}
         )
         
         dF_dx = raw_grad[d]
@@ -182,7 +184,7 @@ end
 # --- Praveen Algorithm (Strictly 1st Order, Stateless) ---
 function (upwind::UpwindDivergence{2, 1, T, MAX_ORDER, DIV_ORDER, B_LEN, INTERPS, PraveenAlgorithm, NF})(
     eq::HyperbolicPDE, i::Int, f_i::State{1, T}, nb_slice::OrdinalRange{Int, Int},
-    pg::ParticleGrid{2, 1, T}, ib::InteractionBuffer{2, 1, T}, ::MOODStrategy
+    pg::ParticleGrid{2, 1, T}, U::AbstractVector{State{1, T}}, ib::InteractionBuffer{2, 1, T}, ::MOODStrategy
 ) where {T, MAX_ORDER, DIV_ORDER, B_LEN, INTERPS, NF}
 
     vel_x = velocity(eq, f_i, 1)[1, 1]
@@ -191,6 +193,7 @@ function (upwind::UpwindDivergence{2, 1, T, MAX_ORDER, DIV_ORDER, B_LEN, INTERPS
 
     dist_all = get_distances(pg)
     w_all = get_weights(pg)
+    df = neighbour_differences(U, pg, f_i)
 
     num_nb = length(nb_slice)
     if num_nb < 3; return zero(State{1, T}); end 
@@ -236,7 +239,7 @@ function (upwind::UpwindDivergence{2, 1, T, MAX_ORDER, DIV_ORDER, B_LEN, INTERPS
         bracketMinus2 = min(betaBar * vel_s, zero(T))
         cij = alfaBar * bracketMinus1 + bracketMinus2
         
-        div += cij * ib.df[global_idx] 
+        div += cij * df[global_idx]
     end
     return T(2.0) * div
 end

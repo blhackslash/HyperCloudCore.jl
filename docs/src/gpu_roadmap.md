@@ -104,11 +104,17 @@ Kernel bodies only iterate `ranges[i]`, so they serve both; `device_grid` conver
 layouts on host arrays, and the search writes whichever layout the grid has. On the RX 9070 XT the
 neighbour gather and flux passes, which are over 90 % of a step, run 2.7 times faster slot-major (a step 2.4 times, 250 000 particles, Float64).
 
-With that, both passes move their bytes at roughly 70–90 % of the card's bandwidth, so further gains
-need fewer bytes per slot. The largest remaining item is the gather buffer round trip: the gather
-pass writes a neighbour's state and difference per slot and the flux pass reads them back, about a
-fifth of the slot traffic. Dropping it means the flux functor gathers the state itself, which
-changes the interpolator API (it would receive the state vector), so it is left for a separate step.
+Neighbour states are not buffered per slot either: the schemes read them from the stage state vector
+through the lazy views `neighbour_states(U, pg)` and `neighbour_differences(U, pg, f_i)`
+(`src/NeighbourViews.jl`), which index like the former gather buffers, so the MLS solves, limiters
+and MOOD criteria are unchanged. That removed a write and a read of every neighbour state per stage
+(a step 5 % faster in Float64, 8 % in Float32 at 250 000 particles).
+
+Where the two passes stand now, 250 000 particles on the RX 9070 XT: in Float32 they stream their
+bytes at about the card's bandwidth (600 GB/s), so the next byte saver would be 32-bit neighbour
+indices (a third of the slot traffic in Float32). In Float64 they are bound by the card's Float64
+arithmetic rate instead, which on this consumer part is a small fraction of its Float32 rate; the
+Float32 step is 2.5 times faster for that reason, and fewer bytes no longer help Float64 much.
 The moment matrices of a moving grid (`_moment_body!`, a fifth of a moving step) are recomputed at
 every stage because every stage has its own geometry; that is the scheme, not the layout.
 

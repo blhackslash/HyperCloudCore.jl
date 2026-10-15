@@ -35,7 +35,7 @@ Adapt.adapt_structure(to, pg::ParticleGrid) = ParticleGrid(
     adapt(to, pg.bins), pg.mover, adapt(to, pg.rhos), adapt(to, pg.curvatures))
 
 Adapt.adapt_structure(to, ib::InteractionBuffer{D, M, T}) where {D, M, T} = InteractionBuffer{D, M, T}(
-    adapt(to, ib.f), adapt(to, ib.df), adapt(to, ib.df_flux), adapt(to, ib.df_scratch), adapt(to, ib.mask))
+    adapt(to, ib.df_flux), adapt(to, ib.df_scratch), adapt(to, ib.mask))
 
 Adapt.adapt_structure(to, w::MLSWeights{B, IO, T, L}) where {B, IO, T, L} =
     MLSWeightsView{B, IO, T, L, typeof(adapt(to, w.inv_moment)), typeof(adapt(to, w.ok))}(

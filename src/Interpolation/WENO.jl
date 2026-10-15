@@ -54,13 +54,14 @@ end
 
 function (weno::WENO{D, M, T, MAX_ORDER, DIV_ORDER, INTERPS})(
     eq::HyperbolicPDE, i::Int, f_i::State{M, T}, nb_slice::OrdinalRange{Int, Int},
-    pg::ParticleGrid{D, M, T}, ib::InteractionBuffer{D, M, T}, ::MOODStrategy
+    pg::ParticleGrid{D, M, T}, U::AbstractVector{State{M, T}}, ib::InteractionBuffer{D, M, T}, ::MOODStrategy
 ) where {D, M, T, MAX_ORDER, DIV_ORDER, INTERPS}
 
     # Scalar advection speed per spatial direction (WENO is a scalar scheme, see constructor)
     vel = SVector{D, T}(ntuple(d -> velocity(eq, f_i, d)[1, 1], Val(D)))
     dist_all = get_distances(pg)
     w_all = get_weights(pg)
+    df = neighbour_differences(U, pg, f_i)
 
     num_nb = length(nb_slice)
     p_order = pg.core.particle_orders[i]
@@ -88,7 +89,7 @@ function (weno::WENO{D, M, T, MAX_ORDER, DIV_ORDER, INTERPS})(
     
     resC_raw = dispatch_interpolator(
         weno.interpolators, div_idx_C, 
-        nb_slice, dist_all, w_all, ib.df, ib.mask, scale_val, Val(B_LEN_C_VAL), State{M, T}
+        nb_slice, dist_all, w_all, df, ib.mask, scale_val, Val(B_LEN_C_VAL), State{M, T}
     )
     resC = SVector{D, State{M, T}}(ntuple(d -> resC_raw[d], Val(D)))
 
@@ -133,7 +134,7 @@ function (weno::WENO{D, M, T, MAX_ORDER, DIV_ORDER, INTERPS})(
         
         resS_raw = dispatch_interpolator(
             weno.interpolators, div_idx_S, 
-            nb_slice, dist_all, w_all, ib.df, ib.mask, scale_val, Val(B_LEN_D_VAL), State{M, T}
+            nb_slice, dist_all, w_all, df, ib.mask, scale_val, Val(B_LEN_D_VAL), State{M, T}
         )
         resS = SVector{D, State{M, T}}(ntuple(k -> resS_raw[k], Val(D)))
 

@@ -128,9 +128,9 @@ end
 
 function update_content!(
     muscl::MUSCL{D, M, T, B_LEN, MAX_ORDER}, i::Int, f_i::State{M, T}, nb_slice::OrdinalRange{Int, Int},
-    pg::ParticleGrid{D, M, T}, ib::InteractionBuffer{D, M, T}
+    pg::ParticleGrid{D, M, T}, U::AbstractVector{State{M, T}}, ib::InteractionBuffer{D, M, T}
 ) where {D, M, T, B_LEN, MAX_ORDER}
-    
+    df = neighbour_differences(U, pg, f_i)
     num_nb = length(nb_slice)
     p_order = pg.core.particle_orders[i]
 
@@ -148,16 +148,16 @@ function update_content!(
 
     wg = muscl.grad_weights
     raw_grad = if p_order == MAX_ORDER && p_order > 1 && is_current(wg, pg) && wg.ok[i]
-        apply_weights(wg, i, nb_slice, dist_all, w_all, ib.df)   # cached full-order fit
+        apply_weights(wg, i, nb_slice, dist_all, w_all, df)   # cached full-order fit
     else
         scale_val = minimum(pg.meta.dx)
-        dispatch_interpolator(muscl.interpolators, p_order, nb_slice, dist_all, w_all, ib.df, scale_val, Val(B_LEN), State{M, T})
+        dispatch_interpolator(muscl.interpolators, p_order, nb_slice, dist_all, w_all, df, scale_val, Val(B_LEN), State{M, T})
     end
-    
+
     if p_order == 1
-        muscl.gradients[i] = raw_grad 
+        muscl.gradients[i] = raw_grad
     else
-        muscl.gradients[i] = _limit_slopes(muscl.limiter, raw_grad, nb_slice, f_i, ib.f, pg, dist_all, Val(MAX_ORDER - 1))
+        muscl.gradients[i] = _limit_slopes(muscl.limiter, raw_grad, nb_slice, f_i, neighbour_states(U, pg), pg, dist_all, Val(MAX_ORDER - 1))
     end
     return nothing
 end
@@ -168,7 +168,7 @@ end
 
 function (muscl::MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER})(
     eq::HyperbolicPDE, i::Int, f_i::State{M, T}, nb_slice::OrdinalRange{Int, Int},
-    pg::ParticleGrid{D, M, T}, ib::InteractionBuffer{D, M, T}, strategy::MOODStrategy
+    pg::ParticleGrid{D, M, T}, U::AbstractVector{State{M, T}}, ib::InteractionBuffer{D, M, T}, strategy::MOODStrategy
 ) where {D, M, T, B_LEN, MAX_ORDER, DIV_ORDER}
 
     if isempty(nb_slice)
@@ -185,8 +185,8 @@ function (muscl::MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER})(
 
     @inbounds for global_idx in nb_slice
         dist_k = dist_all[global_idx]
-        f_j    = ib.f[global_idx]
         j_idx  = nb_indices[global_idx]
+        f_j    = U[j_idx]
         grad_j = muscl.gradients[j_idx]
 
         p_interface_i_raw = build_basis(degree,  T(0.5) * dist_k)

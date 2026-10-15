@@ -308,7 +308,7 @@ end
         ts = GeneralRKTimeStepper(eq, interp, MOOD(), RK3_SSP_Tableau(Float64))
         @test ts.rho_n isa Growable && parent(ts.rho_n) isa Vector{State{1, Float64}}
         @test interp.gradients isa Growable && interp.grad_weights.inv_moment isa Growable
-        @test HyperCloudCore.kernel_view(ts.int_buffer).f isa Vector{State{1, Float64}}
+        @test HyperCloudCore.kernel_view(ts.int_buffer).df_flux isa Vector{Flux{1, 1, Float64}}
         @test HyperCloudCore.kernel_view(interp).gradients isa Vector
         pg = set_ic!(make_pg_1d(20), x -> exp(-x^2 / 0.02))
         ts(eq, pg, 0.0, 0.01)
@@ -482,7 +482,7 @@ end
         update_size!(interp, N)
         fill!(orders, 3)
         fill!(ts.work.dirty, false); fill!(ts.work.triggered_step, false)   # resize! leaves them undefined
-        f = (full) -> HyperCloudCore.detect_and_drop!(ts.mood, ts.work, interp, pg, ts.int_buffer, pg.rhos, pg.rhos, full)
+        f = (full) -> HyperCloudCore.detect_and_drop!(ts.mood, ts.work, interp, pg, pg.rhos, pg.rhos, full)
         @test f(true)  == true  && all(==(2), view(orders, 1:N))
         @test f(false) == false                              # dirty mask empty → nobody checked
         fill!(ts.work.dirty, true)
@@ -492,7 +492,7 @@ end
         # NoMOOD short-circuits
         ts0 = GeneralRKTimeStepper(eq, interp, MOOD(), RK3_SSP_Tableau(Float64))
         update_size!(ts0, N, length(nb_i), false)
-        @test HyperCloudCore.detect_and_drop!(ts0.mood, ts0.work, interp, pg, ts0.int_buffer, pg.rhos, pg.rhos, true) == false
+        @test HyperCloudCore.detect_and_drop!(ts0.mood, ts0.work, interp, pg, pg.rhos, pg.rhos, true) == false
     end
 end
 

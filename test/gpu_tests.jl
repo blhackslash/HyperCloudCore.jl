@@ -33,7 +33,7 @@ const device_backend = ROCBackend()
             dg     = HyperCloudCore.device_grid(DeviceArray, set_ic!(make_pg_1d(N), ic))
             interp = make_interp(DeviceArray)
             ts     = GeneralRKTimeStepper(eq, interp, mood, tab; storage = DeviceArray)
-            @test parent(ts.rho_n) isa DeviceArray && parent(ts.int_buffer.f) isa DeviceArray
+            @test parent(ts.rho_n) isa DeviceArray && parent(ts.int_buffer.df_flux) isa DeviceArray
             set_backend!(device_backend)
             @test isapprox(get_time_step(dg, eq, interp), dt_ref; rtol = 1e-12)
             for k in 0:3; ts(eq, dg, k * dt, dt); end

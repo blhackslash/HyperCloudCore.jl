@@ -141,8 +141,9 @@ end
     return mini, maxi, minAbs, maxAbs
 end
 
-@inline function _dmp_fails(δ::T, rho_i::State{M, T}, nb_slice, newRho::State{M, T}, int_buffer_f) where {M, T}
-    minU, maxU = findLocalExtrema(rho_i, nb_slice, int_buffer_f)
+# `neighbour_fs` is slot-indexed: the neighbour states of the previous stage (`neighbour_states(U_prev, pg)`).
+@inline function _dmp_fails(δ::T, rho_i::State{M, T}, nb_slice, newRho::State{M, T}, neighbour_fs) where {M, T}
+    minU, maxU = findLocalExtrema(rho_i, nb_slice, neighbour_fs)
     for m in 1:M
         if abs(maxU[m] - minU[m]) >= δ^3 && (newRho[m] < minU[m] - δ || newRho[m] > maxU[m] + δ)
             return true
@@ -156,17 +157,17 @@ end
 
 function (m::MOOD{<:MOODStrategy, MOODu1{T}})(
     g::DivergenceInterpolator, p_idx::Int, rho_i::State{M, T}, nb_slice::OrdinalRange{Int, Int},
-    newRho::State{M, T}, pg::ParticleGrid{D, M, T}, int_buffer_f::AbstractVector{State{M, T}}
+    newRho::State{M, T}, pg::ParticleGrid{D, M, T}, U_prev::AbstractVector{State{M, T}}
 ) where {D, M, T}
-    return _dmp_fails(m.criterion.d, rho_i, nb_slice, newRho, int_buffer_f)
+    return _dmp_fails(m.criterion.d, rho_i, nb_slice, newRho, neighbour_states(U_prev, pg))
 end
 
 function (m::MOOD{<:MOODStrategy, MOODu2{T}})(
     g::DivergenceInterpolator, p_idx::Int, rho_i::State{M, T}, nb_slice::OrdinalRange{Int, Int},
-    newRho::State{M, T}, pg::ParticleGrid{D, M, T}, int_buffer_f::AbstractVector{State{M, T}}
+    newRho::State{M, T}, pg::ParticleGrid{D, M, T}, U_prev::AbstractVector{State{M, T}}
 ) where {D, M, T}
     δ = m.criterion.d
-    _dmp_fails(δ, rho_i, nb_slice, newRho, int_buffer_f) || return false
+    _dmp_fails(δ, rho_i, nb_slice, newRho, neighbour_states(U_prev, pg)) || return false
 
     # The curvature override needs cached gradients with a degree-2 reconstruction, i.e. a scheme
     # that caches them (trait) at consistency order ≥ 3. Otherwise behave like MOODu1.
@@ -196,9 +197,9 @@ end
 
 
 # Kernel body of the candidate check (see Backend.jl).
-@inline function _mood_flag!(p, mood, interp, pg, nb_f, rho_prev, rho_cand, nb_slices, is_boundary, dirty, triggered, full)
+@inline function _mood_flag!(p, mood, interp, pg, rho_prev, rho_cand, nb_slices, is_boundary, dirty, triggered, full)
     (is_boundary[p] || !(full || dirty[p])) && return nothing
-    mood(interp, p, rho_prev[p], nb_slices[p], rho_cand[p], pg, nb_f) && (triggered[p] = true)
+    mood(interp, p, rho_prev[p], nb_slices[p], rho_cand[p], pg, rho_prev) && (triggered[p] = true)
     return nothing
 end
 
@@ -271,9 +272,9 @@ function force_neighbours!(strategy::MOODStrategy, pg::ParticleGrid, triggered, 
 end
 
 """
-    detect_and_drop!(mood, work, interp, pg, int_buffer, rho_prev, rho_cand, full) -> Bool
+    detect_and_drop!(mood, work, interp, pg, rho_prev, rho_cand, full) -> Bool
 
-Checks `rho_cand` against the neighbourhood of `rho_prev` (neighbour states in `int_buffer.f`,
+Checks `rho_cand` against the neighbourhood of `rho_prev` (neighbour states read from `rho_prev`,
 gradients cached in `interp`) for all interior particles (`full`) or only those in `work.dirty`.
 Drops one order on every flagged particle, applies forcing halos from a snapshot, and records the
 set of changed orders in `work.changed`. Returns `true` if any order changed. Three kernel passes
@@ -281,7 +282,7 @@ set of changed orders in `work.changed`. Returns `true` if any order changed. Th
 """
 function detect_and_drop!(
     mood::MOOD, work::MOODWork, interp::DivergenceInterpolator, pg::ParticleGrid{D, M, T},
-    int_buffer::InteractionBuffer{D, M, T}, rho_prev::AbstractVector, rho_cand::AbstractVector, full::Bool
+    rho_prev::AbstractVector, rho_cand::AbstractVector, full::Bool
 ) where {D, M, T}
     mood.criterion isa NoMOOD && return false
 
@@ -297,7 +298,7 @@ function detect_and_drop!(
 
     # 1. Candidate check (per-particle writes only)
     foreach_particle(_mood_flag!, get_backend(), N,
-        (mood, interp, pg, int_buffer.f, rho_prev, rho_cand, nb_slices, is_boundary, dirty, triggered, full))
+        (mood, interp, pg, rho_prev, rho_cand, nb_slices, is_boundary, dirty, triggered, full))
 
     # 2. Decrement. Particles already at order 1 are un-flagged so they don't force.
     foreach_particle(_mood_drop!, get_backend(), N, (orders, triggered, changed, triggered_step))
