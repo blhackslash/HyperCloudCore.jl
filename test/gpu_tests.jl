@@ -44,6 +44,33 @@ const device_backend = ROCBackend()
             ic === box && @test any(view(mood_flags(ts_ref), 1:N))        # the MOOD passes were exercised
         end
 
+        @testset "boundary conditions: $(nameof(typeof(bc)))" for bc in (FixedDirichlet(), OutflowBC())
+            function make_pg_bc(bc)
+                dx   = 2.0 / N
+                geom = get_rectangular_domain(Float64, (-1.0,), (1.0,); is_periodic = false,
+                                              bc_map = Dict{Int, AbstractBoundaryCondition}(1 => bc))
+                return set_ic!(ParticleGrid(geom, (dx,), ExponentialWeightFunction(1.0, 2.5dx), 1), x -> exp(-(x + 0.5)^2 / 0.02))
+            end
+            mood = MOOD(EPD1(), MOODu1(1e-6))
+            tab  = RK3_SSP_Tableau(Float64)
+            set_backend!(PolyesterBackend())
+            pg_ref     = make_pg_bc(bc)
+            interp_ref = muscl(3, NoLimiter())(Array)
+            ts_ref     = GeneralRKTimeStepper(eq, interp_ref, mood, tab)
+            n = pg_ref.meta.N
+            for k in 0:5; ts_ref(eq, pg_ref, k * dt, dt); end
+
+            dg     = HyperCloudCore.device_grid(DeviceArray, make_pg_bc(bc))
+            interp = muscl(3, NoLimiter())(DeviceArray)
+            ts     = GeneralRKTimeStepper(eq, interp, mood, tab; storage = DeviceArray)
+            set_backend!(device_backend)
+            for k in 0:5; ts(eq, dg, k * dt, dt); end
+            out = Array(dg.rhos)
+            @test all(isapprox.(first.(out[1:n]), first.(pg_ref.rhos[1:n]); atol = 1e-12))
+            @test Array(dg.core.particle_orders)[1:n] == pg_ref.core.particle_orders[1:n]
+            @test any(pg_ref.core.is_boundary[1:n])                        # the condition had particles to act on
+        end
+
         @testset "host buffers are rejected" begin
             set_backend!(PolyesterBackend())                              # grids are built on the host
             pg_host = set_ic!(make_pg_1d(N), gauss)

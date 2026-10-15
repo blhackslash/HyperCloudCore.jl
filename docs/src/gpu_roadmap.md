@@ -25,6 +25,7 @@ set_backend!(CUDABackend())                 # from CUDA.jl (likewise ROCBackend(
 | Shepard volumes | `_shepard_sums!`, `_shepard_sweep!` | `Grid/Volumes.jl` |
 | CFL estimate | `_cfl_body!` | `Grid/ParticleGrids.jl` |
 | periodic wrap, neighbour counting and writing | `_wrap_position!`, `_count_neighbours!`, `_write_neighbours!` | `Grid/NeighborLogic.jl` |
+| boundary conditions (Dirichlet; outflow donor search, one pass per hop) | `_dirichlet_body!`, `_outflow_init!`, `_outflow_pass!`, `_outflow_fallback!` | `Grid/BoundaryConditions.jl` |
 
 With the KernelAbstractions backend these bodies are compiled as device kernels. The 0.10 `CPU()`
 backend compiles through PoCL (OpenCL on the host), so running the test suite with it validates the
@@ -79,11 +80,10 @@ the kernel's writes to it.
 | prefix sum of the neighbour search | host loop between the two kernel passes | exclusive scan on the device (`accumulate!`), or a counting-sort cell list |
 | `build_global_bins!` (linked lists) | host | atomic insertion into cell heads, or a sort-based cell list |
 | Morton reordering | host (`sort!`) | device sort of the keys + permutation kernels |
-| boundary conditions (`FixedDirichlet`, `OutflowBC`) | host (`bc_map::Dict`) | tag-indexed tuple of conditions; `OutflowBC`'s donor search as iterated kernels |
 | particle adaptivity | host | stays on the host (rare, inherently serial); transfer the grid around the call |
 | WENO, Tiwari upwind | not device-compatible: the stencil order is a runtime `Val` | pad to the maximum basis length and mask |
 | reductions (`get_time_step`, `total_mass`) | `minimum`/loop on host arrays | `mapreduce` on device arrays |
-| data residency | the grid (`device_grid`), the stepper and MUSCL (`storage`) live on the device; a static grid without boundary conditions steps entirely there, MOOD included | transfer only around the remaining host passes above; `storage` for the builders |
+| data residency | the grid (`device_grid`), the stepper and MUSCL (`storage`) live on the device; a static grid steps entirely there, MOOD and boundary conditions included (the `bc_map` loop itself is on the host, its conditions are kernels) | transfer only around the remaining host passes above; `storage` for the builders |
 | growing a device grid | `ensure_capacity!` on the grid uses `resize!` (host arrays only) | rebuild the device grid after adaptivity on the host |
 
 ## Testing on the device

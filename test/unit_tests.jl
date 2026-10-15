@@ -317,6 +317,69 @@ end
     end
 end
 
+@testset "Boundary conditions as kernels" begin
+    N  = 60
+    dx = 2.0 / N
+    make_pg_bc(bc) = ParticleGrid(get_rectangular_domain(Float64, (-1.0,), (1.0,); is_periodic = false,
+                                                         bc_map = Dict{Int, AbstractBoundaryCondition}(1 => bc)),
+                                  (dx,), ExponentialWeightFunction(1.0, 2.5dx), 1)
+    eq     = make_advection_1d()
+    interp = MUSCL(Float64, 1, 1, 3, NoLimiter(), RusanovFlux())
+    ts     = GeneralRKTimeStepper(eq, interp, MOOD(), RK3_SSP_Tableau(Float64))
+
+    @testset "FixedDirichlet restores the initial state" begin
+        pg  = set_ic!(make_pg_bc(FixedDirichlet()), x -> x)
+        n   = pg.meta.N
+        buf = fill(State{1, Float64}(99.0), n)
+        HyperCloudCore.apply_boundary_conditions!(pg, buf, ts, eq, 0.0)
+        ghosts = findall(view(pg.core.is_boundary, 1:n))
+        @test !isempty(ghosts) && all(buf[i] == pg.rhos[i] for i in ghosts)
+        @test all(buf[i][1] == 99.0 for i in interior_indices(pg))
+    end
+
+    @testset "OutflowBC copies the nearest resolved donor outwards" begin
+        pg  = set_ic!(make_pg_bc(OutflowBC()), x -> x)
+        n   = pg.meta.N
+        x   = i -> pg.core.positions[i][1]
+        buf = copy(pg.rhos)
+        HyperCloudCore.apply_boundary_conditions!(pg, buf, ts, eq, 0.0)
+        inner = interior_indices(pg)
+        x_lo, x_hi = minimum(x, inner), maximum(x, inner)
+        for i in findall(view(pg.core.is_boundary, 1:n))
+            @test buf[i][1] == (x(i) < 0 ? x_lo : x_hi)       # zero gradient: the outermost interior value
+        end
+        @test all(buf[i] == pg.rhos[i] for i in inner)
+        # Orphaned targets (no donor within reach) fall back to their initial state
+        pg2 = set_ic!(make_pg_bc(OutflowBC()), x -> x)
+        fill!(view(pg2.core.is_boundary, 1:pg2.meta.N), true)   # nobody is a donor ...
+        fill!(view(pg2.core.tags, 1:pg2.meta.N), 1)             # ... and everybody is a target of tag 1
+        buf2 = fill(State{1, Float64}(99.0), pg2.meta.N)
+        HyperCloudCore.apply_boundary_conditions!(pg2, buf2, ts, eq, 0.0)
+        @test all(buf2[i] == pg2.rhos[i] for i in 1:pg2.meta.N)
+    end
+
+    @testset "Backends agree with boundary conditions" begin
+        dt = 0.4dx
+        function run(backend, bc)
+            set_backend!(backend)
+            pg = set_ic!(make_pg_bc(bc), x -> exp(-(x + 0.5)^2 / 0.02))
+            ts = GeneralRKTimeStepper(eq, MUSCL(Float64, 1, 1, 3, NoLimiter(), RusanovFlux()), MOOD(EPD1(), MOODu1(1e-6)), RK3_SSP_Tableau(Float64))
+            for k in 0:3; ts(eq, pg, k * dt, dt); end
+            return copy(view(pg.rhos, 1:pg.meta.N))
+        end
+        try
+            for bc in (FixedDirichlet(), OutflowBC())
+                ref = run(PolyesterBackend(), bc)
+                @test run(ThreadsBackend(), bc) == ref
+                dev = run(KABackend(HyperCloudCore.KA.CPU(); workgroupsize = 32), bc)
+                @test all(isapprox.(first.(dev), first.(ref); atol = 1e-12))
+            end
+        finally
+            set_backend!(PolyesterBackend())
+        end
+    end
+end
+
 @testset "Butcher tableaus" begin
     explicit = (RK1_Euler_Tableau, RK2_SSP_Tableau, RK2_Ralston_Tableau, RK3_SSP_Tableau, RK4_Classical_Tableau)
     imex     = (IMEX_Euler_Tableau, IMEX_ARS233_Tableau, IMEX_ARS222_Tableau, IMEX_PRSSP3_Tableau, IMEX_SSP2332_Tableau)
