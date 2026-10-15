@@ -328,6 +328,36 @@ end
     end
 end
 
+@testset "Threaded loops do not allocate" begin
+    # The @batch bodies used to build types from the method's static parameters (and the neighbour search
+    # captured a reassigned variable), which allocated per particle and destroyed the thread scaling.
+    N  = 4000   # large enough that any per-particle allocation dwarfs the per-call task overhead
+    eq = make_advection_1d()
+    pg = set_ic!(make_pg_1d(N), x -> exp(-x^2 / 0.02))
+    @test pg.meta.geometry_version >= 1
+    v0 = pg.meta.geometry_version
+    pg.neighbor(pg)
+    @test pg.meta.geometry_version == v0 + 1
+    refresh_geometry!(pg)
+    @test pg.meta.geometry_version == v0 + 2
+    @test (@allocated pg.neighbor(pg)) < 16_384
+
+    dt = 0.4 * (2 / N)
+    for use_threads in (false, true)
+        set_threads!(use_threads)
+        interp = MUSCL(Float64, 1, 1, 3, VenkatakrishnanLimiter(:hard), RusanovFlux())
+        ts = GeneralRKTimeStepper(eq, interp, MOOD(EPD1(), MOODu1(1e-6)), RK3_SSP_Tableau(Float64))
+        ts(eq, pg, 0.0, dt); ts(eq, pg, dt, dt)
+        a = @allocated ts(eq, pg, 2dt, dt)
+        # Polyester: nothing per particle. Base threads: only the task spawns of each loop (< 100 B per task).
+        @test a < (use_threads ? 256 * 1024 : 16_384)
+        get_time_step(pg, eq, interp); update_volumes!(pg, ShepardVolumes())   # compile first
+        @test (@allocated get_time_step(pg, eq, interp)) < (use_threads ? 32_768 : 4096)
+        @test (@allocated update_volumes!(pg, ShepardVolumes())) < (use_threads ? 32_768 : 4096)
+    end
+    set_threads!(false)
+end
+
 @testset "Moving grids" begin
     N  = 60
     c  = 0.7

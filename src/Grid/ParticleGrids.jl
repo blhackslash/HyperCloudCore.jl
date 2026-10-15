@@ -32,6 +32,9 @@ mutable struct GridMetadata{D, T}
     
     interp_range_factor::T
     max_nb::Int
+    # Incremented whenever neighbour lists, distances or weights change (neighbour search,
+    # `refresh_geometry!`), so caches derived from the geometry can detect that they are stale.
+    geometry_version::Int
 end
 
 # ---------------------------------------------------------
@@ -186,7 +189,7 @@ function ParticleGrid(
     N_interior = count(!, is_boundary)
     N_ghost = N - N_interior
     
-    meta = GridMetadata{D, T}(N, N_interior, N_ghost, R, max_dx, dxs_f, interp_range_factor, 0)
+    meta = GridMetadata{D, T}(N, N_interior, N_ghost, R, max_dx, dxs_f, interp_range_factor, 0, 0)
     
     core = ParticleGridCore{D, T}(positions, is_boundary, volumes, tags, zeros(Int, N))
     
@@ -299,17 +302,20 @@ Computes the exact geometric CFL-restricted time step dynamically across the act
     w_vec = get_weights(pg)
     dist_vec = get_distances(pg)
 
+    # Everything the @batch body needs from the type parameters is captured as a value: Polyester passes
+    # static parameters into the loop closure as runtime objects, which makes `T(...)`/`Val(D)` dynamic.
     valD = Val(D)
-    dim = D 
     invL = one(T) / minimum(pg.meta.dx)
-    
+    tol = T(1e-14)
+    inv_dim = one(T) / D
+
     degree = _divergence_degree(main_grad)
 
     @batch for i in 1:pg.meta.N
         if pg.core.is_boundary[i]
             continue
         end
-        
+
         nb_slice = pg.neighbor.ranges[i]
         if isempty(nb_slice)
             continue
@@ -318,11 +324,11 @@ Computes the exact geometric CFL-restricted time step dynamically across the act
         U_i = pg.rhos[i]
         Lambda = _get_Lambda(eq, U_i, valD)
 
-        sum_c_vec = dispatch_cfl(degree, valD, nb_slice, dist_vec, w_vec, invL, T)
+        sum_c_vec = dispatch_cfl(degree, valD, nb_slice, dist_vec, w_vec, invL, typeof(invL))
         sum_c = dot(Lambda, sum_c_vec)
 
-        if sum_c > T(1e-14)
-            dt_buffer[i] = one(T) / (dim * sum_c)
+        if sum_c > tol
+            dt_buffer[i] = inv_dim / sum_c
         end
     end
     

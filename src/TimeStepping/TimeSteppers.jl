@@ -260,6 +260,9 @@ function compute_explicit_rhs!(ts::GeneralRKTimeStepper{D, M, T}, eq, pg, K_E, K
     grad_mask   = ts.work.changed
     flux_mask   = ts.work.dirty
     use_threads = get_use_threads()
+    # Captured as values: static parameters are runtime objects inside a @batch body (see Utils.jl).
+    zero_state  = zero(State{M, T})
+    zero_space  = zero(Space{D, T})
 
     @smart_parallel use_threads for p in 1:N
         if is_boundary[p] || !(full || grad_mask[p]); continue; end
@@ -271,8 +274,8 @@ function compute_explicit_rhs!(ts::GeneralRKTimeStepper{D, M, T}, eq, pg, K_E, K
     @smart_parallel use_threads for p in 1:N
         if is_boundary[p]
             if full
-                K_E[p] = zero(State{M, T})
-                moving && (K_X[p] = zero(Space{D, T}))
+                K_E[p] = zero_state
+                moving && (K_X[p] = zero_space)
             end
             continue
         end
@@ -312,6 +315,11 @@ function form_candidate!(ts::GeneralRKTimeStepper{D, M, T}, eq, pg, i::Int, dt::
     x_target = is_final ? ts.x_cand   : ts.X_stages[i]
     t_i      = is_final ? time + dt : time + bt.c_t[i] * dt
     n_prev   = is_final ? s : i - 1
+    # Captured as values: `zero(Space{D, T})` inside the @batch body built the type at runtime for every
+    # particle (several MiB of allocations per stage and no thread scaling).
+    zero_T      = zero(T)
+    zero_state  = zero(State{M, T})
+    zero_space  = zero(Space{D, T})
 
     @smart_parallel use_threads for p in 1:N
         if is_boundary[p]
@@ -320,15 +328,15 @@ function form_candidate!(ts::GeneralRKTimeStepper{D, M, T}, eq, pg, i::Int, dt::
             continue
         end
         Y = U_n[p]
-        X = moving ? x_n[p] : zero(Space{D, T})
+        X = moving ? x_n[p] : zero_space
         for j in 1:n_prev
             a_t = is_final ? bt.b_t[j] : bt.a_t[i, j]
             a   = is_final ? bt.b[j]   : bt.a[i, j]
-            if a_t != zero(T)
+            if a_t != zero_T
                 Y += (dt * a_t) * K_E[j][p]
                 moving && (X += (dt * a_t) * K_X[j][p])
             end
-            a != zero(T) && (Y += (dt * a) * K_I[j][p])
+            a != zero_T && (Y += (dt * a) * K_I[j][p])
         end
         target[p] = Y
         moving && (x_target[p] = X)
@@ -338,14 +346,15 @@ function form_candidate!(ts::GeneralRKTimeStepper{D, M, T}, eq, pg, i::Int, dt::
         pre_solve_updates!(ts.implicit_sources, target, pg, t_i)
         a_ii = bt.a[i, i]
         if abs(a_ii) > T(1e-14)
+            dt_ii = dt * a_ii
             @smart_parallel use_threads for p in 1:N
                 if is_boundary[p]; continue; end
-                target[p] = implicit_solve(ts.implicit_sources, target[p], dt * a_ii, p, pg, t_i)
+                target[p] = implicit_solve(ts.implicit_sources, target[p], dt_ii, p, pg, t_i)
             end
         end
         K_I_i = K_I[i]
         @smart_parallel use_threads for p in 1:N
-            K_I_i[p] = is_boundary[p] ? zero(State{M, T}) :
+            K_I_i[p] = is_boundary[p] ? zero_state :
                        evaluate_sources(ts.implicit_sources, target[p], p, pg, t_i)
         end
     end

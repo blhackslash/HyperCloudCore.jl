@@ -13,7 +13,17 @@ set_threads!(B::Bool) = (_USE_THREADS[] = B)
 
 A scheduling macro that dynamically dispatches for-loops to different multithreading backends based on a boolean condition.
 - Dispatches to `Base.Threads.@threads :dynamic` if the condition is true.
-- Dispatches to `Polyester.@batch` for lower-overhead threading if the condition is false.
+- Dispatches to `Polyester.@batch per=core` (one Polyester thread per physical core) if the condition is false.
+  Polyester's spin-waiting workers collapse when they oversubscribe SMT siblings: with 32 Julia threads on 16
+  cores a step took 60 times longer than with 16 threads before `per=core`.
+
+Rules for the loop body (they apply to every `@batch` loop of this package):
+- Do not use the static parameters of the enclosing method (`T`, `D`, `M`, `Val(D)`, `zero(T)`, `T(1e-14)`)
+  inside the body. Polyester passes them into the loop closure as runtime objects, so such expressions are
+  evaluated dynamically for every iteration (allocations, no scaling). Compute the values before the loop and
+  capture them.
+- Every captured variable must be assigned exactly once in the enclosing function; a reassigned captured
+  variable is boxed and every access allocates.
 """
 macro smart_parallel(condition, loop)
     if loop.head !== :for
@@ -23,7 +33,7 @@ macro smart_parallel(condition, loop)
         if $condition
             Base.Threads.@threads :dynamic $loop
         else
-            @batch $loop
+            @batch per=core $loop
         end
     end)
 end

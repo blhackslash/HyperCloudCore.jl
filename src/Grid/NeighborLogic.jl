@@ -185,8 +185,9 @@ function (nd::NeighborData{D, T, WF})(pg::ParticleGrid{D, M, T, WF, GM, N_OFF, D
 
     build_global_bins!(pg)
 
+    # `pos` must stay single-assignment: the @batch bodies below capture it, and a captured variable that is
+    # assigned twice is boxed by the closure conversion (every access then allocates).
     N = pg.meta.N
-    pos = get_positions(pg)
     R_sq = pg.meta.R^2
     weightFunc = nd.weight_func
     
@@ -263,7 +264,7 @@ function (nd::NeighborData{D, T, WF})(pg::ParticleGrid{D, M, T, WF, GM, N_OFF, D
                         offsets[i] += 1
                         
                         indices[write_idx]   = j
-                        weights[write_idx]   = weightFunc(d2) 
+                        weights[write_idx]   = weightFunc(d2)
                         distances[write_idx] = dist
                     end
                 end
@@ -271,5 +272,6 @@ function (nd::NeighborData{D, T, WF})(pg::ParticleGrid{D, M, T, WF, GM, N_OFF, D
             end
         end
     end
+    pg.meta.geometry_version += 1   # neighbour lists, distances and weights changed
     return nothing
 end
