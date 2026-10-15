@@ -242,7 +242,7 @@ end
 # =========================================================================
 
 function (interp::Interpolator{D, IO, DO})(
-    nb_slice::UnitRange{Int}, dists::AbstractVector{Space{D, T}}, weights::AbstractVector{T},
+    nb_slice::OrdinalRange{Int, Int}, dists::AbstractVector{Space{D, T}}, weights::AbstractVector{T},
     dfFluxVec::AbstractVector{Flux{D, M, T}}, dfVec_workspace::AbstractVector{State{M, T}};
     scale::Space{D, T}
 ) where {D, IO, DO, M, T}
@@ -255,7 +255,7 @@ end
 # One moment matrix and one factorisation for all D flux components (instead of one per direction):
 # the right-hand side holds the D·M flux differences side by side and the divergence is Σ_d ∂_d F_d.
 @inline function _mls_divergence(
-    nb_slice::UnitRange{Int}, distVec::AbstractVector{Space{D, T}}, wVec::AbstractVector{T},
+    nb_slice::OrdinalRange{Int, Int}, distVec::AbstractVector{Space{D, T}}, wVec::AbstractVector{T},
     dfFluxVec::AbstractVector{Flux{D, M, T}}, scale::T, ::Val{B_LEN}, ::Val{IO}, ::Val{D}
 ) where {B_LEN, IO, D, M, T}
     invL = one(T) / scale
@@ -291,7 +291,7 @@ end
 # =========================================================================
 
 function (interp::Interpolator{D, IO, 1})(
-    nb_slice::UnitRange{Int},
+    nb_slice::OrdinalRange{Int, Int},
     distVec::AbstractVector{Space{D, T}}, 
     wVec::AbstractVector{T},
     dfVec::AbstractVector{State{M, T}};
@@ -303,7 +303,7 @@ function (interp::Interpolator{D, IO, 1})(
 end
 
 @inline function _mls_solve(
-    nb_slice::UnitRange{Int}, distVec::AbstractVector, wVec::AbstractVector,
+    nb_slice::OrdinalRange{Int, Int}, distVec::AbstractVector, wVec::AbstractVector,
     dfVec::AbstractVector{State{M, T}}, scale::T,
     ::Val{B_LEN}, ::Val{IO}, ::Val{D}
 ) where {B_LEN, IO, D, M, T}
@@ -340,7 +340,7 @@ end
 end
 
 function (interp::Interpolator{D, IO, 1})(
-    nb_slice::UnitRange{Int}, distVec::AbstractVector{Space{D, T}}, 
+    nb_slice::OrdinalRange{Int, Int}, distVec::AbstractVector{Space{D, T}}, 
     wVec::AbstractVector{T}, dfVec::AbstractVector{State{M, T}},
     mask::AbstractVector{Bool}; scale::T=one(T)
 ) where {D, IO, M, T}
@@ -350,7 +350,7 @@ function (interp::Interpolator{D, IO, 1})(
 end
 
 @inline function _mls_solve_masked(
-    nb_slice::UnitRange{Int}, distVec::AbstractVector{Space{D, T}}, 
+    nb_slice::OrdinalRange{Int, Int}, distVec::AbstractVector{Space{D, T}}, 
     wVec::AbstractVector{T}, dfVec::AbstractVector{State{M, T}},
     mask::AbstractVector{Bool}, scale::T,
     ::Val{B_LEN}, ::Val{IO}, ::Val{D}
@@ -468,7 +468,7 @@ end
 
 # Inverse of the regularised moment matrix of one particle (the same fit as `_mls_solve`); `template` only
 # fixes the return type when the factorisation fails.
-function _inverse_moment(nb_slice::UnitRange{Int}, distVec::AbstractVector, wVec::AbstractVector{T}, invL::T,
+function _inverse_moment(nb_slice::OrdinalRange{Int, Int}, distVec::AbstractVector, wVec::AbstractVector{T}, invL::T,
                          ::Val{IO}, template::SMatrix{B_LEN, B_LEN, T}) where {T, IO, B_LEN}
     N_s = zero(SMatrix{B_LEN, B_LEN, T, B_LEN * B_LEN})
     @inbounds for k in nb_slice
@@ -487,7 +487,7 @@ end
 The MLS coefficients of the differences `dfVec` over `nb_slice` of particle `i` from the cached inverse moment
 matrix (replaces the factorisation of `Interpolator{D, IO, 1}`).
 """
-@inline function apply_weights(w::AbstractMLSWeights{B_LEN, IO, T}, i::Int, nb_slice::UnitRange{Int},
+@inline function apply_weights(w::AbstractMLSWeights{B_LEN, IO, T}, i::Int, nb_slice::OrdinalRange{Int, Int},
                                distVec::AbstractVector, wVec::AbstractVector{T},
                                dfVec::AbstractVector{State{M, T}}) where {B_LEN, IO, T, M}
     invL = _cache_invL(w)
@@ -512,7 +512,7 @@ end
 `Σ_d ∂_d F_d` of the flux differences `dfFluxVec` over `nb_slice` of particle `i` from the cached inverse
 moment matrix (replaces the factorisation in `_mls_divergence`).
 """
-@inline function apply_weights_divergence(w::AbstractMLSWeights{B_LEN, IO, T}, i::Int, nb_slice::UnitRange{Int},
+@inline function apply_weights_divergence(w::AbstractMLSWeights{B_LEN, IO, T}, i::Int, nb_slice::OrdinalRange{Int, Int},
                                           distVec::AbstractVector, wVec::AbstractVector{T},
                                           dfFluxVec::AbstractVector{Flux{D, M, T}}) where {B_LEN, IO, T, D, M}
     invL = _cache_invL(w)

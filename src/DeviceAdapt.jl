@@ -67,7 +67,11 @@ function device_grid(::Type{AT}, pg::ParticleGrid{D, M, T}) where {AT <: Abstrac
     m  = pg.meta
     to = ToStorage{AT}()
     meta = GridMetadata{D, T}(m.N, m.N_interior, m.N_ghost, m.R, m.max_dx, m.dx, m.interp_range_factor, m.max_nb, m.geometry_version)
-    return ParticleGrid(meta, pg.geometry, pg.domain, adapt(to, pg.core), adapt(to, pg.shared), adapt(to, pg.neighbor),
+    # Neighbour slots: row-major on the host, slot-major on a device (converted on host arrays).
+    nd_host = parent(pg.rhos) isa Array ? pg.neighbor : adapt(ToStorage{Array}(), pg.neighbor)
+    nd_host = with_slot_layout(nd_host, m.N, AT === Array ? RowMajorSlots : SlotMajorSlots)
+    neighbor = AT === Array ? nd_host : adapt(to, nd_host)
+    return ParticleGrid(meta, pg.geometry, pg.domain, adapt(to, pg.core), adapt(to, pg.shared), neighbor,
                         pg.reorder, adapt(to, pg.bins), pg.mover, adapt(to, pg.rhos), adapt(to, pg.curvatures))
 end
 

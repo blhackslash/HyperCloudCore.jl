@@ -184,7 +184,7 @@ Dynamically resizes internal evaluation buffers (like cached gradients) to match
 @inline update_size!(::DivergenceInterpolator, ::Int) = error("`update_size!` not implemented!")
 
 """
-    update_content!(interp::DivergenceInterpolator, i::Int, f_i::State, nb_slice::UnitRange, pg::ParticleGrid, ib::InteractionBuffer)
+    update_content!(interp::DivergenceInterpolator, i::Int, f_i::State, nb_slice::OrdinalRange, pg::ParticleGrid, ib::InteractionBuffer)
 
 Executes pre-gather computations (such as resolving MLS gradients or limiting slopes) prior to the primary flux pass. Defaults to a no-op for stateless algorithms.
 """

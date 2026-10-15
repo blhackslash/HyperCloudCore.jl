@@ -53,7 +53,7 @@ function WENO(::Type{T}, dimension::Int, M::Int, order::Int; div_order::Int=0) w
 end
 
 function (weno::WENO{D, M, T, MAX_ORDER, DIV_ORDER, INTERPS})(
-    eq::HyperbolicPDE, i::Int, f_i::State{M, T}, nb_slice::UnitRange{Int},
+    eq::HyperbolicPDE, i::Int, f_i::State{M, T}, nb_slice::OrdinalRange{Int, Int},
     pg::ParticleGrid{D, M, T}, ib::InteractionBuffer{D, M, T}, ::MOODStrategy
 ) where {D, M, T, MAX_ORDER, DIV_ORDER, INTERPS}
 

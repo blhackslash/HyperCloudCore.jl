@@ -83,7 +83,7 @@ end
 
 # --- Classic Algorithm ---
 function (upwind::UpwindDivergence{D, M, T, MAX_ORDER, DIV_ORDER, B_LEN, INTERPS, ClassicAlgorithm, NF})(
-    eq::HyperbolicPDE, i::Int, f_i::State{M, T}, nb_slice::UnitRange{Int},
+    eq::HyperbolicPDE, i::Int, f_i::State{M, T}, nb_slice::OrdinalRange{Int, Int},
     pg::ParticleGrid{D, M, T}, ib::InteractionBuffer{D, M, T}, ::MOODStrategy
 ) where {D, M, T, MAX_ORDER, DIV_ORDER, B_LEN, INTERPS, NF}
     
@@ -128,7 +128,7 @@ end
 
 # --- Tiwari Algorithm ---
 function (upwind::UpwindDivergence{D, 1, T, MAX_ORDER, DIV_ORDER, B_LEN, INTERPS, TiwariAlgorithm, NF})(
-    eq::HyperbolicPDE, i::Int, f_i::State{1, T}, nb_slice::UnitRange{Int},
+    eq::HyperbolicPDE, i::Int, f_i::State{1, T}, nb_slice::OrdinalRange{Int, Int},
     pg::ParticleGrid{D, 1, T}, ib::InteractionBuffer{D, 1, T}, ::MOODStrategy
 ) where {D, T, MAX_ORDER, DIV_ORDER, B_LEN, INTERPS, NF}
 
@@ -181,7 +181,7 @@ end
 
 # --- Praveen Algorithm (Strictly 1st Order, Stateless) ---
 function (upwind::UpwindDivergence{2, 1, T, MAX_ORDER, DIV_ORDER, B_LEN, INTERPS, PraveenAlgorithm, NF})(
-    eq::HyperbolicPDE, i::Int, f_i::State{1, T}, nb_slice::UnitRange{Int},
+    eq::HyperbolicPDE, i::Int, f_i::State{1, T}, nb_slice::OrdinalRange{Int, Int},
     pg::ParticleGrid{2, 1, T}, ib::InteractionBuffer{2, 1, T}, ::MOODStrategy
 ) where {T, MAX_ORDER, DIV_ORDER, B_LEN, INTERPS, NF}
 

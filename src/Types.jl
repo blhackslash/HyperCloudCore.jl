@@ -112,7 +112,7 @@ abstract type AbstractSlopeLimiter end
 Central component for executing spatial reconstruction and computing the flux divergence.
 
 # API Requirements
-- Must implement the primary execution functor: `(::DivergenceInterpolator)(eq::HyperbolicPDE, i::Int, f_i::State, nb_slice::UnitRange, pg::ParticleGrid, ib::InteractionBuffer, strategy::MOODStrategy) -> State{M, T}`. (Note: The return value is typically scaled by 2.0 depending on the internal integration rules).
+- Must implement the primary execution functor: `(::DivergenceInterpolator)(eq::HyperbolicPDE, i::Int, f_i::State, nb_slice::OrdinalRange, pg::ParticleGrid, ib::InteractionBuffer, strategy::MOODStrategy) -> State{M, T}`. (Note: The return value is typically scaled by 2.0 depending on the internal integration rules).
 - Must implement `update_size!(interp, N_particles)` for memory allocation.
 - Must implement `update_content!(interp, i, f_i, nb_slice, pg, ib)` for pre-gather passes (e.g., caching gradients).
 - Must implement `@inline _extract_order(interp) -> Int`: the maximum **consistency order**. Every

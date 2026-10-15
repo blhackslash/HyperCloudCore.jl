@@ -167,6 +167,55 @@ end
 end
 
 # =========================================================================
+# SLOT LAYOUTS
+#
+# Row-major (`UnitRange{Int}` slot ranges): the slots of a particle are contiguous, the layout the
+# host likes. Slot-major (`StepRange{Int, Int}` with stride N): slot k of all particles is contiguous,
+# so the threads of a wavefront, which handle consecutive particles, read consecutive addresses; the
+# layout a device likes (it pads every particle to `max_nb` slots). The element type of `ranges`
+# selects the layout; `device_grid` converts between them.
+# =========================================================================
+const RowMajorSlots  = UnitRange{Int}
+const SlotMajorSlots = StepRange{Int, Int}
+
+@inline _slot_range(::Type{RowMajorSlots}, i, c, incl, N)  = (incl - c + 1):incl
+@inline _slot_range(::Type{SlotMajorSlots}, i, c, incl, N) = i:N:(i + (c - 1) * N)
+_slot_capacity(::Type{RowMajorSlots}, total, max_nb, N)  = total
+_slot_capacity(::Type{SlotMajorSlots}, total, max_nb, N) = max_nb * N
+_empty_slots(::Type{RowMajorSlots})  = 1:0
+_empty_slots(::Type{SlotMajorSlots}) = 1:1:0
+_slot_sentinel(::Type{RowMajorSlots}, cap, N)  = (cap + 1):cap              # `first - 1` is the number of slots in use
+_slot_sentinel(::Type{SlotMajorSlots}, cap, N) = (cap + 1):max(N, 1):cap
+
+"""
+    with_slot_layout(nd::NeighborData, N, R) -> NeighborData
+
+The neighbour data of `N` particles in the layout `R` (`RowMajorSlots` or `SlotMajorSlots`), the same
+object if it already has it. Host arrays only.
+"""
+function with_slot_layout(nd::NeighborData{D, T, WF}, N::Int, ::Type{R}) where {D, T, WF, R}
+    eltype(nd.ranges) === R && return nd
+    old    = nd.ranges
+    counts = [length(old[i]) for i in 1:N]
+    max_nb = maximum(counts; init = 0)
+    cap    = _slot_capacity(R, sum(counts), max_nb, N)
+    incl   = cumsum(counts)
+    ranges = fill(_empty_slots(R), length(old))
+    for i in 1:N; ranges[i] = _slot_range(R, i, counts[i], incl[i], N); end
+    ranges[N + 1] = _slot_sentinel(R, cap, N)
+    indices = Vector{Int}(undef, cap); weights = Vector{T}(undef, cap); distances = Vector{Space{D, T}}(undef, cap)
+    for i in 1:N
+        for (k_new, k_old) in zip(ranges[i], old[i])
+            indices[k_new]   = nd.indices[k_old]
+            weights[k_new]   = nd.weights[k_old]
+            distances[k_new] = nd.distances[k_old]
+        end
+    end
+    return NeighborData{D, T, WF}(nd.weight_func, Growable(ranges), Growable(indices), Growable(weights), Growable(distances),
+                                  nd.counts, nd.offsets)
+end
+
+# =========================================================================
 # UNIFIED NEIGHBOR SEARCH (Branchless & Type-Stable)
 # =========================================================================
 """
@@ -179,13 +228,14 @@ or a device reduction, so it runs on a grid built with `device_grid` as well.
 - Forces physical coordinates back into the primary periodic domain limits if periodicity is active.
 - Rebuilds the cell list (`build_global_bins!`).
 - **Pass 1 (Counting):** Scans the adjacent bins to count the neighbours within the interaction radius
-  `R_sq` of each particle. A prefix sum of the counts gives the neighbour slots (`ranges`), and the
-  slot arrays are grown to the total.
+  `R_sq` of each particle. A prefix sum of the counts gives the neighbour slots (`ranges`, in the
+  layout of the grid), and the slot arrays are grown to the capacity.
 - **Pass 2 (Writing):** Rescans the bins, writing neighbour indices, weights and distances into the slots.
 """
 function (nd::NeighborData{D, T})(pg::ParticleGrid{D, M, T}) where {D, M, T}
     backend = get_backend()
     N = pg.meta.N
+    R = eltype(nd.ranges)                                 # the slot layout
 
     # --- ENFORCE PER-AXIS PERIODIC WRAPPING ---
     foreach_particle(_wrap_position!, backend, N, (pg.core.positions, pg.domain.is_periodic, pg.domain.L, pg.domain.canvas_mins))
@@ -203,20 +253,21 @@ function (nd::NeighborData{D, T})(pg::ParticleGrid{D, M, T}) where {D, M, T}
         (counts, pos, bins.bin_of, bins.cell_start, bins.cell_particles, bins.bin_neighbors, L, L_inv, R_sq))
 
     # --- PREFIX SUM → neighbour slots ---
-    starts = pg.shared.int_buffer
-    cumsum!(view(starts, 1:N), view(counts, 1:N))        # inclusive; turned into slot starts below
+    incl = pg.shared.int_buffer
+    cumsum!(view(incl, 1:N), view(counts, 1:N))
     total_neighbors = N == 0 ? 0 : sum(view(counts, 1:N))
     pg.meta.max_nb  = maximum(view(counts, 1:N); init = 0)
-    foreach_particle(_neighbour_ranges!, backend, N, (nd.ranges, starts, counts))
-    fill!(view(nd.ranges, (N + 1):(N + 1)), (total_neighbors + 1):total_neighbors)
-    ensure_capacity!(nd, total_neighbors)
+    capacity = _slot_capacity(R, total_neighbors, pg.meta.max_nb, N)
+    foreach_particle(_neighbour_ranges!, backend, N, (nd.ranges, incl, counts, N))
+    fill!(view(nd.ranges, (N + 1):(N + 1)), _slot_sentinel(R, capacity, N))
+    ensure_capacity!(nd, capacity)
 
     # --- PASS 2: WRITING ---
     offsets = nd.offsets
     fill!(offsets, 0)
     foreach_particle(_write_neighbours!, backend, N,
         (pos, bins.bin_of, bins.cell_start, bins.cell_particles, bins.bin_neighbors, L, L_inv, R_sq,
-         starts, offsets, nd.indices, nd.weights, nd.distances, nd.weight_func))
+         nd.ranges, offsets, nd.indices, nd.weights, nd.distances, nd.weight_func))
 
     pg.meta.geometry_version += 1   # neighbour lists, distances and weights changed
     return nothing
@@ -249,17 +300,15 @@ end
     return nothing
 end
 
-# Slot range of particle `i` from the inclusive prefix sum of the counts (`starts` holds it on entry).
-@inline function _neighbour_ranges!(i, ranges, starts, counts)
-    last  = starts[i]
-    first = last - counts[i] + 1
-    ranges[i] = first:last
-    starts[i] = first
+# Slot range of particle `i` in the layout of `ranges`, from its count and the inclusive prefix sum of the counts.
+@inline function _neighbour_ranges!(i, ranges, incl, counts, N)
+    ranges[i] = _slot_range(eltype(ranges), i, counts[i], incl[i], N)
     return nothing
 end
 
 @inline function _write_neighbours!(i, pos, bin_of, cell_start, cell_particles, bin_neighbors, L, L_inv, R_sq,
-                                    starts, offsets, indices, weights, distances, weight_func)
+                                    ranges, offsets, indices, weights, distances, weight_func)
+    r = ranges[i]
     @inbounds for b in bin_neighbors[bin_of[i]]
         for s in cell_start[b]:(cell_start[b + 1] - 1)
             j = cell_particles[s]
@@ -267,7 +316,7 @@ end
                 dist = get_distance(pos, i, j, L, L_inv)
                 d2 = sum(abs2, dist)
                 if d2 <= R_sq
-                    write_idx = starts[i] + offsets[i]
+                    write_idx = first(r) + offsets[i] * step(r)
                     offsets[i] += 1
                     indices[write_idx]   = j
                     weights[write_idx]   = weight_func(d2)

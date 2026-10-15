@@ -118,7 +118,7 @@ struct OnlyMOOD <: MOODCriterion end
 
 MOOD(criterion::MOODCriterion) = MOOD(EPD1(), criterion)
 
-@inline function findLocalExtrema(rho_i::State{M, T}, nb_slice::UnitRange{Int}, neighbor_fs::AbstractVector{State{M, T}}) where {M, T}
+@inline function findLocalExtrema(rho_i::State{M, T}, nb_slice::OrdinalRange{Int, Int}, neighbor_fs::AbstractVector{State{M, T}}) where {M, T}
     minU = rho_i; maxU = rho_i
     @inbounds for k in nb_slice
         rho_j = neighbor_fs[k]
@@ -128,7 +128,7 @@ MOOD(criterion::MOODCriterion) = MOOD(EPD1(), criterion)
     return minU, maxU
 end
 
-@inline function findLocalExtremaAbs(c_i::State{M, T}, curve_idx::Int, nb_slice::UnitRange{Int},
+@inline function findLocalExtremaAbs(c_i::State{M, T}, curve_idx::Int, nb_slice::OrdinalRange{Int, Int},
                                      neighbor_indices::AbstractVector{Int}, grad_vec::AbstractVector) where {M, T}
     mini = c_i; maxi = c_i
     minAbs = abs.(c_i); maxAbs = minAbs
@@ -155,14 +155,14 @@ end
 (m::MOOD{<:MOODStrategy, OnlyMOOD})(args...) = true
 
 function (m::MOOD{<:MOODStrategy, MOODu1{T}})(
-    g::DivergenceInterpolator, p_idx::Int, rho_i::State{M, T}, nb_slice::UnitRange{Int},
+    g::DivergenceInterpolator, p_idx::Int, rho_i::State{M, T}, nb_slice::OrdinalRange{Int, Int},
     newRho::State{M, T}, pg::ParticleGrid{D, M, T}, int_buffer_f::AbstractVector{State{M, T}}
 ) where {D, M, T}
     return _dmp_fails(m.criterion.d, rho_i, nb_slice, newRho, int_buffer_f)
 end
 
 function (m::MOOD{<:MOODStrategy, MOODu2{T}})(
-    g::DivergenceInterpolator, p_idx::Int, rho_i::State{M, T}, nb_slice::UnitRange{Int},
+    g::DivergenceInterpolator, p_idx::Int, rho_i::State{M, T}, nb_slice::OrdinalRange{Int, Int},
     newRho::State{M, T}, pg::ParticleGrid{D, M, T}, int_buffer_f::AbstractVector{State{M, T}}
 ) where {D, M, T}
     δ = m.criterion.d

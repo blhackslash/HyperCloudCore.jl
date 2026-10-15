@@ -89,6 +89,29 @@ the kernel's writes to it.
 | growing a device grid | every per-particle and per-slot array of the grid is a `Growable`, so `ensure_capacity!` works on the device (adaptivity relies on it) | |
 | MLS volumes | host (point queries on the cell list) | `ShepardVolumes` is on the device; `MLSVolumes` is a construction-time choice |
 
+## Slot layout
+
+The per-slot arrays (`indices`, `weights`, `distances`, and the stepper's gather buffers) have two
+layouts, selected by the element type of `neighbor.ranges`:
+
+- **row-major** (`UnitRange` slots, host grids): a particle's slots are contiguous, which is what the
+  CPU's caches want;
+- **slot-major** (`StepRange` slots with stride `N`, device grids): slot `k` of all particles is
+  contiguous, so the threads of a wavefront, which handle consecutive particles, read consecutive
+  addresses. Every particle is padded to `max_nb` slots.
+
+Kernel bodies only iterate `ranges[i]`, so they serve both; `device_grid` converts between the
+layouts on host arrays, and the search writes whichever layout the grid has. On the RX 9070 XT the
+neighbour gather and flux passes, which are over 90 % of a step, run 2.7 times faster slot-major (a step 2.4 times, 250 000 particles, Float64).
+
+With that, both passes move their bytes at roughly 70–90 % of the card's bandwidth, so further gains
+need fewer bytes per slot. The largest remaining item is the gather buffer round trip: the gather
+pass writes a neighbour's state and difference per slot and the flux pass reads them back, about a
+fifth of the slot traffic. Dropping it means the flux functor gathers the state itself, which
+changes the interpolator API (it would receive the state vector), so it is left for a separate step.
+The moment matrices of a moving grid (`_moment_body!`, a fifth of a moving step) are recomputed at
+every stage because every stage has its own geometry; that is the scheme, not the layout.
+
 ## The neighbour search
 
 The cell list is a counting sort: a kernel writes every particle's bin and bumps the bin's count with

@@ -85,12 +85,14 @@ const device_backend = ROCBackend()
             set_backend!(device_backend)
             for k in 0:3; ts(eq, dg, k * dt, dt); end
 
-            n   = pg_ref.meta.N
-            tot = first(pg_ref.neighbor.ranges[n + 1]) - 1
+            n = pg_ref.meta.N
             @test dg.meta.max_nb == pg_ref.meta.max_nb && dg.meta.geometry_version == pg_ref.meta.geometry_version
-            @test Array(dg.neighbor.ranges)[1:n + 1] == pg_ref.neighbor.ranges[1:n + 1]
-            @test Array(parent(dg.neighbor.indices))[1:tot] == parent(pg_ref.neighbor.indices)[1:tot]   # same lists, same order
-            @test Array(parent(dg.neighbor.weights))[1:tot] == parent(pg_ref.neighbor.weights)[1:tot]
+            dr, di, dw = Array(dg.neighbor.ranges), Array(dg.neighbor.indices), Array(dg.neighbor.weights)
+            rr, ri, rw = pg_ref.neighbor.ranges, pg_ref.neighbor.indices, pg_ref.neighbor.weights
+            @test eltype(dr) === StepRange{Int, Int} && eltype(rr) === UnitRange{Int}   # slot-major on the device
+            @test all(step(dr[i]) == n for i in 1:n) && length(parent(dg.neighbor.indices)) >= n * dg.meta.max_nb
+            @test all(i -> [di[k] for k in dr[i]] == [ri[k] for k in rr[i]], 1:n)       # same lists, same order
+            @test all(i -> [dw[k] for k in dr[i]] == [rw[k] for k in rr[i]], 1:n)
             @test all(isapprox.(first.(Array(dg.core.positions)[1:n]), first.(pg_ref.core.positions[1:n]); atol = 1e-12))
             @test all(isapprox.(first.(Array(dg.rhos)[1:n]), first.(pg_ref.rhos[1:n]); atol = 1e-12))
             @test all(isapprox.(Array(dg.core.volumes)[1:n], pg_ref.core.volumes[1:n]; rtol = 1e-12))
@@ -145,7 +147,7 @@ const device_backend = ROCBackend()
             n = dg.meta.N
             @test Array(dg.core.positions)[1:n] == pg_ref.core.positions[1:n]
             @test Array(dg.rhos)[1:n] == pg_ref.rhos[1:n] && Array(dg.core.volumes)[1:n] == pg_ref.core.volumes[1:n]
-            @test Array(dg.neighbor.ranges)[1:n + 1] == pg_ref.neighbor.ranges[1:n + 1]
+            @test length.(Array(dg.neighbor.ranges)[1:n]) == length.(pg_ref.neighbor.ranges[1:n])
             @test parent(dg.rhos) isa DeviceArray && length(dg.rhos) >= n
             rep2 = adapt_particles!(dg, ad, kmax)                          # well spaced: the pre-check alone
             @test rep2.inserted == 0 && rep2.removed == 0

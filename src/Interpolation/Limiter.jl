@@ -63,7 +63,7 @@ Applies the specified slope limiter strategy to the raw gradient of a target par
 function _limit_slopes(
     strategy::Union{BarthJespersenLimiter{Mode}, VenkatakrishnanLimiter{Mode}},
     raw_grad::SVector{B_LEN, State{M, T}},
-    nb_slice::UnitRange{Int},
+    nb_slice::OrdinalRange{Int, Int},
     f_i::State{M, T},
     f_neighbors::AbstractVector{State{M, T}}, 
     pg::ParticleGrid{D, M, T},
@@ -128,7 +128,7 @@ end
 function _limit_slopes(
     strategy::Union{SuperbeeLimiter{Mode}, MinmodLimiter{Mode}},
     raw_grad::SVector{B_LEN, State{M, T}},
-    nb_slice::UnitRange{Int},
+    nb_slice::OrdinalRange{Int, Int},
     f_i::State{M, T},
     f_neighbors::AbstractVector{State{M, T}},
     pg::ParticleGrid{1, M, T},

@@ -63,7 +63,7 @@ end
 
 @inline function update_content!(
     ib::InteractionBuffer{D, M, T}, nb_indices::AbstractVector{Int},
-    f_i::State{M, T}, nb_slice::UnitRange{Int}, fVec::AbstractVector{State{M, T}}
+    f_i::State{M, T}, nb_slice::OrdinalRange{Int, Int}, fVec::AbstractVector{State{M, T}}
 ) where {D, M, T}
     @inbounds for k in nb_slice
         f_j = fVec[nb_indices[k]]

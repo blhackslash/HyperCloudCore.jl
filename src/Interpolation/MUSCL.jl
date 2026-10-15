@@ -127,7 +127,7 @@ end
 # =========================================================================
 
 function update_content!(
-    muscl::MUSCL{D, M, T, B_LEN, MAX_ORDER}, i::Int, f_i::State{M, T}, nb_slice::UnitRange{Int},
+    muscl::MUSCL{D, M, T, B_LEN, MAX_ORDER}, i::Int, f_i::State{M, T}, nb_slice::OrdinalRange{Int, Int},
     pg::ParticleGrid{D, M, T}, ib::InteractionBuffer{D, M, T}
 ) where {D, M, T, B_LEN, MAX_ORDER}
     
@@ -167,7 +167,7 @@ end
 # =========================================================================
 
 function (muscl::MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER})(
-    eq::HyperbolicPDE, i::Int, f_i::State{M, T}, nb_slice::UnitRange{Int},
+    eq::HyperbolicPDE, i::Int, f_i::State{M, T}, nb_slice::OrdinalRange{Int, Int},
     pg::ParticleGrid{D, M, T}, ib::InteractionBuffer{D, M, T}, strategy::MOODStrategy
 ) where {D, M, T, B_LEN, MAX_ORDER, DIV_ORDER}
 

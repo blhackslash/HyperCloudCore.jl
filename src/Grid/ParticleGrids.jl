@@ -82,7 +82,11 @@ SharedBuffers{D, M, T}(rho, pos, f1::VT, f2::VT, bit, int) where {D, M, T, VT} =
 # The per-slot arrays (`indices`, `weights`, `distances`) are `Growable`s on the host grid: their length is
 # the neighbour total, which every search may change, on the device too. The per-particle arrays grow
 # only with adaptivity (host).
-struct NeighborData{D, T, WF, VR <: AbstractVector{UnitRange{Int}}, VI <: AbstractVector{Int},
+# `ranges[i]` is the slot range of particle `i`: a `UnitRange` in the row-major layout (host grids: a
+# particle's slots are contiguous) or a `StepRange` with stride `N` in the slot-major layout (device
+# grids: slot k of all particles is contiguous, so a wavefront reads consecutive addresses). Kernel
+# bodies only ever iterate the range, so they serve both. See `NeighborLogic.jl`.
+struct NeighborData{D, T, WF, VR <: AbstractVector{<:OrdinalRange{Int, Int}}, VI <: AbstractVector{Int},
                     GI <: AbstractVector{Int}, GT <: AbstractVector{T}, GP <: AbstractVector{Space{D, T}}}
     weight_func::WF
     ranges::VR
@@ -442,7 +446,7 @@ function ensure_particle_capacity!(nd::NeighborData, N::Int)
     old_len = length(nd.ranges)
     if old_len < N + 1
         ensure_capacity!(nd.ranges, N + 1)
-        fill!(view(nd.ranges, (old_len + 1):length(nd.ranges)), 1:0)
+        fill!(view(nd.ranges, (old_len + 1):length(nd.ranges)), _empty_slots(eltype(nd.ranges)))
     end
     ensure_capacity!(nd.counts, N)
     ensure_capacity!(nd.offsets, N)
