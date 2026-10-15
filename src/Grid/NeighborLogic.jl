@@ -35,8 +35,8 @@ function GlobalBins(::Type{T}, domain_mins::Space{D, T}, domain_maxs::Space{D, T
     _fill_bin_neighbors!(bin_neighbors, coarse_dims, is_periodic)
 
     return GlobalBins{D, T, N_OFF}(domain_mins, domain_maxs, coarse_size, coarse_dims,
-                                   fill(num_bins + 1, num_bins + 2), zeros(Int, num_bins + 1), zeros(Int, cap), zeros(Int, cap),
-                                   bin_neighbors)
+                                   fill(num_bins + 1, num_bins + 2), zeros(Int, num_bins + 1),
+                                   Growable(zeros(Int, cap)), Growable(zeros(Int, cap)), bin_neighbors)
 end
 
 # The 3^D window around every bin, with per-axis periodic wrapping (host, once per grid).

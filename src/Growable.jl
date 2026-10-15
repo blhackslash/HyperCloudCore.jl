@@ -35,6 +35,18 @@ Base.@propagate_inbounds Base.setindex!(g::Growable, v, i::Int) = (g.data[i] = v
 Base.view(g::Growable, I...) = view(g.data, I...)
 Base.fill!(g::Growable, v) = (fill!(g.data, v); g)
 Base.similar(g::Growable, ::Type{S}, dims::Dims) where {S} = similar(g.data, S, dims)
+# Whole-array operations go to the held array, so they work for device storage (no scalar indexing).
+Base.copy(g::Growable) = copy(g.data)
+Base.collect(g::Growable) = collect(g.data)
+Base.Array(g::Growable) = Array(g.data)
+Base.Array{S}(g::Growable) where {S} = Array{S}(g.data)
+Base.Array{S, 1}(g::Growable) where {S} = Array{S, 1}(g.data)
+Base.copyto!(dest::Growable, doffs::Integer, src::AbstractArray, soffs::Integer, n::Integer) = (copyto!(dest.data, doffs, src, soffs, n); dest)
+Base.copyto!(dest::AbstractArray, doffs::Integer, src::Growable, soffs::Integer, n::Integer) = copyto!(dest, doffs, src.data, soffs, n)
+Base.copyto!(dest::Growable, doffs::Integer, src::Growable, soffs::Integer, n::Integer) = (copyto!(dest.data, doffs, src.data, soffs, n); dest)
+Base.copyto!(dest::Growable, src::AbstractArray) = (copyto!(dest.data, src); dest)
+Base.copyto!(dest::AbstractArray, src::Growable) = copyto!(dest, src.data)
+Base.copyto!(dest::Growable, src::Growable) = (copyto!(dest.data, src.data); dest)
 Base.show(io::IO, g::Growable) = (print(io, "Growable("); show(io, g.data); print(io, ")"))
 Base.show(io::IO, m::MIME"text/plain", g::Growable) = (print(io, "Growable wrapping "); show(io, m, g.data))
 

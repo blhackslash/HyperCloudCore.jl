@@ -283,7 +283,7 @@ end
         kv = HyperCloudCore.Adapt.adapt(Array, pg)                      # what a kernel receives
         @test kv.meta isa HyperCloudCore.GridMetadataView && kv.meta.N == pg.meta.N
         @test kv.geometry === nothing && kv.shared === nothing && kv.reorder === nothing
-        @test kv.core.positions === pg.core.positions                    # no copy on the host
+        @test kv.core.positions === parent(pg.core.positions)            # no copy on the host, wrapper gone
         dg = HyperCloudCore.device_grid(Array, pg)
         @test dg.meta isa HyperCloudCore.GridMetadata && dg.meta.geometry_version == pg.meta.geometry_version
         @test dg.core.positions == pg.core.positions && dg.geometry === pg.geometry

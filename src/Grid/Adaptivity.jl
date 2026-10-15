@@ -65,30 +65,106 @@ changes the particle set, and rebuilds the neighbour lists. `max_order` is the s
 consistency order (new particles start there, and `exclude_reduced_order` compares against it).
 Requires valid neighbour lists and volumes (`update_volumes!`). `mass_residual` is the change of
 `total_mass` over the call, which should be at round-off level.
+
+The event work (detection, remap, compaction) is serial and runs on the host. On a grid built with
+`device_grid` a kernel first checks whether any neighbour pair violates the spacing rules; only then
+is the grid copied to the host, adapted there, and copied back into the device grid in place (its
+arrays grow as needed), where the neighbour search runs. A well-spaced cloud costs one kernel and
+one reduction per call.
 """
 function adapt_particles!(pg::ParticleGrid{D, M, T}, ad::ParticleAdaptivity{T}, max_order::Int) where {D, M, T}
-    N = pg.meta.N
-    N == 0 && return (inserted = 0, removed = 0, mass_residual = zero(State{M, T}))
+    nothing_done = (inserted = 0, removed = 0, mass_residual = zero(State{M, T}))
+    pg.meta.N == 0 && return nothing_done
+    _has_adapt_candidates(pg, ad) || return nothing_done
     mass0 = total_mass(pg)
 
-    events = _detect_events(pg, ad, max_order)
-    isempty(events) && return (inserted = 0, removed = 0, mass_residual = zero(State{M, T}))
+    on_host = parent(pg.rhos) isa Array
+    hg = on_host ? pg : device_grid(Array, pg)            # the event work is serial: on a host copy of a device grid
+    N  = hg.meta.N
 
-    remove_mask = pg.shared.bit_buffer
+    events = _detect_events(hg, ad, max_order)
+    isempty(events) && return nothing_done
+
+    remove_mask = hg.shared.bit_buffer
     fill!(view(remove_mask, 1:N), false)
     new_pos, new_rho, new_vol = Space{D, T}[], State{M, T}[], T[]
-    df = Vector{State{M, T}}(undef, length(pg.neighbor.indices))   # neighbour-slot scratch shared by all events
+    df = Vector{State{M, T}}(undef, length(hg.neighbor.indices))   # neighbour-slot scratch shared by all events
 
     for ev in events
-        _remap_event!(pg, ad, ev, new_pos, new_rho, new_vol, df)
+        _remap_event!(hg, ad, ev, new_pos, new_rho, new_vol, df)
         for r in ev.removed; remove_mask[r] = true; end
     end
 
     n_removed = count(view(remove_mask, 1:N))
-    _apply_topology!(pg, remove_mask, new_pos, new_rho, new_vol, max_order)
+    _apply_topology!(hg, remove_mask, new_pos, new_rho, new_vol, max_order)
+    on_host || _upload_particles!(pg, hg)
     pg.neighbor(pg)
 
     return (inserted = length(new_pos), removed = n_removed, mass_residual = total_mass(pg) - mass0)
+end
+
+"""
+    _has_adapt_candidates(pg, ad) -> Bool
+
+`true` if some interior particle has a neighbour pair that could trigger an event: closer than
+`min_gap` (merge) or farther than `max_gap` with an empty midpoint (insertion). A superset of what
+`_detect_events` selects (which also spaces events apart and skips the shock band). One kernel and one
+reduction, on the grid's backend.
+"""
+function _has_adapt_candidates(pg::ParticleGrid{D, M, T}, ad::ParticleAdaptivity{T}) where {D, M, T}
+    N    = pg.meta.N
+    nb   = pg.neighbor
+    dom  = pg.domain
+    dx   = minimum(pg.meta.dx)
+    flag = pg.shared.bit_buffer
+    foreach_particle(_adapt_candidate!, get_backend(), N,
+        (flag, pg.core.positions, pg.core.is_boundary, nb.ranges, nb.indices, nb.distances, dom.L_wrap, dom.invL_wrap,
+         dom.is_periodic, dom.L, dom.canvas_mins, (ad.min_gap * dx)^2, (ad.max_gap * dx)^2, (ad.clearance * dx)^2))
+    return any(view(flag, 1:N))
+end
+
+# Kernel body (see Backend.jl): the pair tests of `_detect_events` without the event bookkeeping.
+@inline function _adapt_candidate!(i, flag, pos, isb, ranges, indices, dists, L, Li, is_per, Lv, mins,
+                                   min_gap_sq, max_gap_sq, clear_sq)
+    found = false
+    if !isb[i]
+        @inbounds for k in ranges[i]
+            j = indices[k]
+            j > i || continue
+            d2 = sum(abs2, dists[k])
+            if d2 < min_gap_sq
+                isb[j] || (found = true)
+            elseif d2 > max_gap_sq
+                mid   = _wrap_coords(pos[i] + dists[k] / 2, is_per, Lv, mins)
+                empty = true
+                for k2 in ranges[i]
+                    if sum(abs2, _wrapped_diff(pos[indices[k2]], mid, L, Li)) < clear_sq
+                        empty = false
+                        break
+                    end
+                end
+                empty && (found = true)
+            end
+            found && break
+        end
+    end
+    flag[i] = found
+    return nothing
+end
+
+# Copies the adapted particle set of the host copy `hg` back into the device grid `pg` (growing it as needed).
+function _upload_particles!(pg::ParticleGrid, hg::ParticleGrid)
+    N = hg.meta.N
+    ensure_capacity!(pg, N)
+    for (dst, src) in ((pg.core.positions, hg.core.positions), (pg.core.is_boundary, hg.core.is_boundary),
+                       (pg.core.tags, hg.core.tags), (pg.core.particle_orders, hg.core.particle_orders),
+                       (pg.core.volumes, hg.core.volumes), (pg.rhos, hg.rhos), (pg.curvatures, hg.curvatures))
+        copyto!(parent(dst), 1, parent(src), 1, N)
+    end
+    pg.meta.N          = N
+    pg.meta.N_interior = hg.meta.N_interior
+    pg.meta.N_ghost    = hg.meta.N_ghost
+    return nothing
 end
 
 # -------------------------------------------------------------------------

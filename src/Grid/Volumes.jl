@@ -74,11 +74,9 @@ domain_volume(pg::ParticleGrid) = domain_volume(pg.geometry)
 Discrete conserved content `Σ_i V_i U_i` over all particles of the current cloud.
 """
 function total_mass(pg::ParticleGrid{D, M, T}) where {D, M, T}
-    acc = zero(State{M, T})
-    @inbounds for i in 1:pg.meta.N
-        acc += pg.core.volumes[i] * pg.rhos[i]
-    end
-    return acc
+    N = pg.meta.N
+    N == 0 && return zero(State{M, T})
+    return mapreduce((v, u) -> v * u, +, view(pg.core.volumes, 1:N), view(pg.rhos, 1:N); init = zero(State{M, T}))
 end
 
 # -------------------------------------------------------------------------
@@ -137,8 +135,8 @@ function _collect_near!(pg::ParticleGrid{D, M, T}, y::Space{D, T}, R_sq::T,
 end
 
 # Wrap a point into the primary cell on periodic axes (no-op otherwise)
-@inline function _wrap_point(pg::ParticleGrid{D, M, T}, y::Space{D, T}) where {D, M, T}
-    is_per, Lv, mins = pg.domain.is_periodic, pg.domain.L, pg.domain.canvas_mins
+@inline _wrap_point(pg::ParticleGrid, y::Space) = _wrap_coords(y, pg.domain.is_periodic, pg.domain.L, pg.domain.canvas_mins)
+@inline function _wrap_coords(y::Space{D, T}, is_per, Lv, mins) where {D, T}
     return Space{D, T}(ntuple(d -> is_per[d] ? mins[d] + mod(y[d] - mins[d], Lv[d]) : y[d], Val(D)))
 end
 

@@ -80,7 +80,7 @@ const device_backend = ROCBackend()
             for k in 0:3; ts_ref(eq, pg_ref, k * dt, dt); end
 
             dg = HyperCloudCore.device_grid(DeviceArray, set_ic!(make_pg_1d(N; mover = mover), gauss))
-            @test parent(dg.neighbor.indices) isa DeviceArray && dg.bins.cell_particles isa DeviceArray
+            @test parent(dg.neighbor.indices) isa DeviceArray && parent(dg.bins.cell_particles) isa DeviceArray
             ts = GeneralRKTimeStepper(eq, muscl(3, NoLimiter())(DeviceArray), MOOD(), tab; storage = DeviceArray)
             set_backend!(device_backend)
             for k in 0:3; ts(eq, dg, k * dt, dt); end
@@ -103,7 +103,7 @@ const device_backend = ROCBackend()
             ctx[:WeightConf] = Dict{Symbol, Any}(:name => :exponential, :range => 2.5, :alpha => 1.0)
             set_backend!(PolyesterBackend())                              # the grid is built on the host, then moved
             pg = build_particle_grid(Dict{Symbol, Any}(:Ns => (N,)), ctx)
-            @test pg.rhos isa DeviceArray && ctx[:Grid] === pg
+            @test parent(pg.rhos) isa DeviceArray && ctx[:Grid] === pg
             ctx[:Flux]    = build_flux(Dict{Symbol, Any}(:name => :Rusanov), ctx)
             ctx[:Limiter] = build_limiter(Dict{Symbol, Any}(:name => :none), ctx)
             ctx[:MOOD]    = build_mood(Dict{Symbol, Any}(:criterion => :U1, :strategy => :EPD1, :delta_relax => 1e-6), ctx)
@@ -116,6 +116,51 @@ const device_backend = ROCBackend()
             set_backend!(device_backend)
             for k in 0:3; ts(eq, pg, k * dt, dt); end
             @test all(isfinite, first.(Array(pg.rhos)[1:n]))
+        end
+
+        @testset "adaptivity: host remap, device grid updated in place" begin
+            ic_s = x -> 1.0 + 0.5 * sin(π * x)
+            ad   = ParticleAdaptivity(Float64)
+            kmax = 3
+            function punch_hole!(pg, p)                                   # as in the host unit test
+                N0 = pg.meta.N
+                ev = HyperCloudCore._AdaptEvent{1, Float64}(pg.core.positions[p], [p], Space{1, Float64}[])
+                np, nr, nv = Space{1, Float64}[], State{1, Float64}[], Float64[]
+                HyperCloudCore._remap_event!(pg, ad, ev, np, nr, nv)
+                mask = pg.shared.bit_buffer; fill!(view(mask, 1:N0), false); mask[p] = true
+                HyperCloudCore._apply_topology!(pg, mask, np, nr, nv, kmax)
+                pg.neighbor(pg)
+            end
+            set_backend!(PolyesterBackend())
+            pg_ref = set_ic!(make_pg_1d(40), ic_s); punch_hole!(pg_ref, 10)
+            dg     = HyperCloudCore.device_grid(DeviceArray, pg_ref)       # same hole on the device
+            N0     = pg_ref.meta.N
+            rep_ref = adapt_particles!(pg_ref, ad, kmax)
+            set_backend!(device_backend)
+            m0  = total_mass(dg)
+            rep = adapt_particles!(dg, ad, kmax)
+            @test (rep.inserted, rep.removed) == (rep_ref.inserted, rep_ref.removed) == (1, 0)
+            @test dg.meta.N == pg_ref.meta.N == N0 + 1 && dg.meta.N_interior == pg_ref.meta.N_interior
+            @test maximum(abs.(rep.mass_residual)) < 1e-12 && maximum(abs.(total_mass(dg) - m0)) < 1e-12
+            n = dg.meta.N
+            @test Array(dg.core.positions)[1:n] == pg_ref.core.positions[1:n]
+            @test Array(dg.rhos)[1:n] == pg_ref.rhos[1:n] && Array(dg.core.volumes)[1:n] == pg_ref.core.volumes[1:n]
+            @test Array(dg.neighbor.ranges)[1:n + 1] == pg_ref.neighbor.ranges[1:n + 1]
+            @test parent(dg.rhos) isa DeviceArray && length(dg.rhos) >= n
+            rep2 = adapt_particles!(dg, ad, kmax)                          # well spaced: the pre-check alone
+            @test rep2.inserted == 0 && rep2.removed == 0
+
+            set_backend!(PolyesterBackend())
+            pg_m = set_ic!(make_pg_1d(40), ic_s)
+            pg_m.core.positions[21] = pg_m.core.positions[20] + Space{1, Float64}(0.2 * 2 / 40)
+            pg_m.neighbor(pg_m); update_volumes!(pg_m, ShepardVolumes())
+            dg_m = HyperCloudCore.device_grid(DeviceArray, pg_m)
+            rep_ref = adapt_particles!(pg_m, ad, kmax)
+            set_backend!(device_backend)
+            rep = adapt_particles!(dg_m, ad, kmax)
+            @test (rep.inserted, rep.removed) == (rep_ref.inserted, rep_ref.removed) == (1, 2)
+            @test dg_m.meta.N == pg_m.meta.N && maximum(abs.(rep.mass_residual)) < 1e-12
+            @test Array(dg_m.rhos)[1:dg_m.meta.N] == pg_m.rhos[1:pg_m.meta.N]
         end
 
         @testset "host buffers are rejected" begin

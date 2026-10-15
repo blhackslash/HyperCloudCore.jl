@@ -27,6 +27,7 @@ set_backend!(CUDABackend())                 # from CUDA.jl (likewise ROCBackend(
 | cell list (bin histogram, scatter, per-bin sort) | `_bin_count!`, `_bin_scatter!`, `_bin_sort!` | `Grid/NeighborLogic.jl` |
 | periodic wrap, neighbour counting, slot ranges, writing | `_wrap_position!`, `_count_neighbours!`, `_neighbour_ranges!`, `_write_neighbours!` | `Grid/NeighborLogic.jl` |
 | boundary conditions (Dirichlet; outflow donor search, one pass per hop) | `_dirichlet_body!`, `_outflow_init!`, `_outflow_pass!`, `_outflow_fallback!` | `Grid/BoundaryConditions.jl` |
+| adaptivity pre-check (any pair violating the spacing rules) | `_adapt_candidate!` | `Grid/Adaptivity.jl` |
 
 With the KernelAbstractions backend these bodies are compiled as device kernels. The 0.10 `CPU()`
 backend compiles through PoCL (OpenCL on the host), so running the test suite with it validates the
@@ -82,11 +83,11 @@ the kernel's writes to it.
 | part | status | plan |
 |---|---|---|
 | Morton reordering | host (`sort!`); only runs when a grid is constructed | device sort of the keys + permutation kernels, if ever needed between steps |
-| particle adaptivity | host | stays on the host (rare, inherently serial); transfer the grid around the call |
+| particle adaptivity (events) | host: detection, remap and compaction are serial per event | stays there; a kernel pre-check (`_adapt_candidate!`) skips the round trip when the cloud is well spaced, otherwise the grid is copied to the host, adapted, and copied back in place |
 | WENO, Tiwari upwind | not device-compatible: the stencil order is a runtime `Val` | pad to the maximum basis length and mask |
-| reductions (`get_time_step`, `total_mass`) | `minimum`/loop on host arrays | `mapreduce` on device arrays |
-| data residency | the grid (`device_grid`), the stepper and MUSCL (`storage`) live on the device; static and moving grids step entirely there, neighbour search, MOOD and boundary conditions included (the `bc_map` loop itself is on the host, its conditions are kernels); the builders follow `context[:Storage]` | transfer only around the remaining host passes above |
-| growing a device grid | the neighbour-slot arrays grow on the device (`Growable`); the per-particle arrays use `resize!` (host) | rebuild the device grid after adaptivity on the host |
+| data residency | the grid (`device_grid`), the stepper and MUSCL (`storage`) live on the device; static and moving grids step entirely there, neighbour search, MOOD, boundary conditions and the reductions included (the `bc_map` loop itself is on the host, its conditions are kernels); the builders follow `context[:Storage]` | |
+| growing a device grid | every per-particle and per-slot array of the grid is a `Growable`, so `ensure_capacity!` works on the device (adaptivity relies on it) | |
+| MLS volumes | host (point queries on the cell list) | `ShepardVolumes` is on the device; `MLSVolumes` is a construction-time choice |
 
 ## The neighbour search
 

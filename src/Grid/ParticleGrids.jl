@@ -107,21 +107,21 @@ struct ReorderData{D}
 end
 
 # Counting-sort cell list; see `GlobalBins(...)` in NeighborLogic.jl for the layout.
-struct GlobalBins{D, T, N_OFF, VI <: AbstractVector{Int}, VN <: AbstractVector{SVector{N_OFF, Int}}}
+struct GlobalBins{D, T, N_OFF, VI <: AbstractVector{Int}, GI <: AbstractVector{Int}, VN <: AbstractVector{SVector{N_OFF, Int}}}
     mins::Space{D, T}
     maxs::Space{D, T}
     coarse_size::Space{D, T}
     coarse_dims::NTuple{D, Int}
     cell_start::VI          # per bin (+ dummy bin + end sentinel)
     cell_count::VI          # per bin (+ dummy bin)
-    cell_particles::VI      # per particle: indices sorted by bin
-    bin_of::VI              # per particle: its bin
+    cell_particles::GI      # per particle: indices sorted by bin (`Growable` on the host grid)
+    bin_of::GI              # per particle: its bin
     bin_neighbors::VN       # per bin: the 3^D window
 end
-GlobalBins{D, T, N_OFF}(mins, maxs, coarse_size, coarse_dims, cell_start::VI, cell_count::VI, cell_particles::VI, bin_of::VI,
-                        bin_neighbors) where {D, T, N_OFF, VI} =
-    GlobalBins{D, T, N_OFF, VI, typeof(bin_neighbors)}(mins, maxs, coarse_size, coarse_dims, cell_start, cell_count,
-                                                        cell_particles, bin_of, bin_neighbors)
+GlobalBins{D, T, N_OFF}(mins, maxs, coarse_size, coarse_dims, cell_start::VI, cell_count::VI, cell_particles::GI, bin_of::GI,
+                        bin_neighbors) where {D, T, N_OFF, VI, GI} =
+    GlobalBins{D, T, N_OFF, VI, GI, typeof(bin_neighbors)}(mins, maxs, coarse_size, coarse_dims, cell_start, cell_count,
+                                                            cell_particles, bin_of, bin_neighbors)
 
 # ---------------------------------------------------------
 # 6. Particle Grid Core (Geometry & Topology)
@@ -249,19 +249,22 @@ function ParticleGrid(
     
     meta = GridMetadata{D, T}(N, N_interior, N_ghost, R, max_dx, dxs_f, interp_range_factor, 0, 0)
     
-    core = ParticleGridCore{D, T}(positions, is_boundary, volumes, tags, zeros(Int, N))
-    
-    shared = SharedBuffers{D, M, T}(zeros(State{M, T}, N), similar(positions), zeros(T, N), zeros(T, N), zeros(Bool, N), zeros(Int, N))
+    # Every per-particle array is a `Growable`, so a grid can grow on a device as well (adaptivity copies
+    # its result back into the device grid in place). The reordering state stays a host object.
+    core = ParticleGridCore{D, T}(Growable(positions), Growable(is_boundary), Growable(volumes), Growable(tags), Growable(zeros(Int, N)))
+
+    shared = SharedBuffers{D, M, T}(Growable(zeros(State{M, T}, N)), Growable(similar(positions)), Growable(zeros(T, N)),
+                                    Growable(zeros(T, N)), Growable(zeros(Bool, N)), Growable(zeros(Int, N)))
     reorder = ReorderData{D}(collect(1:N), collect(1:N), zeros(Int, N), zeros(Bool, N))
-    
+
     bins = GlobalBins(T, comp_domain.canvas_mins, comp_domain.canvas_maxs, R, N, comp_domain.is_periodic)
     neighbors = NeighborData{D, T, typeof(weight_func)}(
-        weight_func, fill(1:0, N + 1), Growable{Int}(Array), Growable{T}(Array), Growable{Space{D, T}}(Array),
-        zeros(Int, N), zeros(Int, N)
+        weight_func, Growable(fill(1:0, N + 1)), Growable{Int}(Array), Growable{T}(Array), Growable{Space{D, T}}(Array),
+        Growable(zeros(Int, N)), Growable(zeros(Int, N))
     )
 
     pg = ParticleGrid(meta, geom, comp_domain, core, shared, neighbors, reorder, bins, mover,
-                      zeros(State{M, T}, N), zeros(State{M, T}, N))
+                      Growable(zeros(State{M, T}, N)), Growable(zeros(State{M, T}, N)))
 
     # The spatial reordering only needs positions and the canvas box, so the neighbour search is run
     # once, after the particles have been laid out in memory.
@@ -401,15 +404,11 @@ end
     ensure_capacity!(core::ParticleGridCore, req_capacity::Int)
 """
 @inline function ensure_capacity!(core::ParticleGridCore{D, T}, req_capacity::Int) where {D, T}
-    if length(core.positions) < req_capacity
-        new_cap = ceil(Int, req_capacity * 1.25)
-        
-        resize!(core.positions, new_cap)
-        resize!(core.is_boundary, new_cap)
-        resize!(core.volumes, new_cap)
-        resize!(core.tags, new_cap)
-        resize!(core.particle_orders, new_cap)
-    end
+    ensure_capacity!(core.positions, req_capacity)
+    ensure_capacity!(core.is_boundary, req_capacity)
+    ensure_capacity!(core.volumes, req_capacity)
+    ensure_capacity!(core.tags, req_capacity)
+    ensure_capacity!(core.particle_orders, req_capacity)
     return nothing
 end
 
@@ -417,11 +416,8 @@ end
     ensure_capacity!(bins::GlobalBins, req_particles::Int)
 """
 @inline function ensure_capacity!(bins::GlobalBins, req_particles::Int)
-    if length(bins.cell_particles) < req_particles
-        new_cap = ceil(Int, req_particles * 1.25)
-        resize!(bins.cell_particles, new_cap)
-        resize!(bins.bin_of, new_cap)
-    end
+    ensure_capacity!(bins.cell_particles, req_particles)
+    ensure_capacity!(bins.bin_of, req_particles)
     return nothing
 end
 
@@ -443,39 +439,34 @@ end
 Grows the per-particle arrays of the neighbour structure (`ranges` needs `N + 1` entries).
 """
 function ensure_particle_capacity!(nd::NeighborData, N::Int)
-    if length(nd.ranges) < N + 1
-        new_cap = ceil(Int, (N + 1) * 1.25)
-        old_len = length(nd.ranges)
-        resize!(nd.ranges, new_cap)
-        for k in (old_len + 1):new_cap; nd.ranges[k] = 1:0; end
+    old_len = length(nd.ranges)
+    if old_len < N + 1
+        ensure_capacity!(nd.ranges, N + 1)
+        fill!(view(nd.ranges, (old_len + 1):length(nd.ranges)), 1:0)
     end
-    length(nd.counts)  < N && resize!(nd.counts,  ceil(Int, N * 1.25))
-    length(nd.offsets) < N && resize!(nd.offsets, ceil(Int, N * 1.25))
+    ensure_capacity!(nd.counts, N)
+    ensure_capacity!(nd.offsets, N)
     return nothing
 end
 
 @inline function ensure_capacity!(sb::SharedBuffers{D, M, T}, req_capacity::Int) where {D, M, T}
-    if length(sb.pos_buffer) < req_capacity
-        new_cap = ceil(Int, req_capacity * 1.25)
-        
-        resize!(sb.pos_buffer, new_cap)
-        resize!(sb.bit_buffer, new_cap)
-        resize!(sb.float_buffer, new_cap)
-        resize!(sb.float_buffer2, new_cap)
-        resize!(sb.int_buffer, new_cap)
-        resize!(sb.rho_buffer, new_cap)
-    end
+    ensure_capacity!(sb.pos_buffer, req_capacity)
+    ensure_capacity!(sb.bit_buffer, req_capacity)
+    ensure_capacity!(sb.float_buffer, req_capacity)
+    ensure_capacity!(sb.float_buffer2, req_capacity)
+    ensure_capacity!(sb.int_buffer, req_capacity)
+    ensure_capacity!(sb.rho_buffer, req_capacity)
     return nothing
 end
 
+"""
+    ensure_capacity!(pg::ParticleGrid, req_capacity::Int)
+
+Makes room for `req_capacity` particles in every per-particle array of the grid (on the device too).
+"""
 @inline function ensure_capacity!(pg::ParticleGrid, req_capacity::Int)
-    if length(pg.rhos) < req_capacity
-        new_cap = ceil(Int, req_capacity * 1.25)
-        
-        resize!(pg.rhos, new_cap)
-        resize!(pg.curvatures, new_cap)
-    end
-    
+    ensure_capacity!(pg.rhos, req_capacity)
+    ensure_capacity!(pg.curvatures, req_capacity)
     ensure_capacity!(pg.core, req_capacity)
     ensure_capacity!(pg.shared, req_capacity)
     ensure_capacity!(pg.reorder, req_capacity)
