@@ -19,7 +19,7 @@ set_backend!(CUDABackend())                 # from CUDA.jl (likewise ROCBackend(
 | neighbour gather + scheme caches | `_rhs_gather!` | `TimeStepping/TimeSteppers.jl` |
 | flux divergence + explicit sources | `_rhs_flux!` | `TimeStepping/TimeSteppers.jl` |
 | stage assembly, implicit solve, implicit RHS | `_stage_predictor!`, `_stage_implicit_solve!`, `_stage_implicit_rhs!` | `TimeStepping/TimeSteppers.jl` |
-| MOOD candidate check | `_mood_flag!` | `TimeStepping/MOOD.jl` |
+| MOOD candidate check, decrement, forcing, mask expansion | `_mood_flag!`, `_mood_drop!`, `_mood_force!`, `_expand_body!` | `TimeStepping/MOOD.jl` |
 | geometry refresh (moving grids) | `_refresh_slots!` | `TimeStepping/GridMovers.jl` |
 | inverse MLS moment matrices | `_moment_body!` | `Interpolation/Interpolators.jl` |
 | Shepard volumes | `_shepard_sums!`, `_shepard_sweep!` | `Grid/Volumes.jl` |
@@ -68,6 +68,9 @@ the kernel's writes to it.
 - No dynamic dispatch: a runtime integer must not become a `Val` (use `basis_count(D, degree)` for the
   basis size of a runtime degree; the interpolator tables are selected by the generated dispatchers).
 - Arrays of arrays are not device-indexable; the stage arrays of the stepper are tuples for that reason.
+- No two particles write the same entry: neighbour-to-neighbour effects are written in the *pull* form
+  (every particle gathers from its neighbours, as the MOOD forcing and `expand_mask!` do), which the
+  symmetric neighbour relation allows and which keeps the result independent of the launch order.
 
 ## Not yet on the device
 
@@ -75,14 +78,12 @@ the kernel's writes to it.
 |---|---|---|
 | prefix sum of the neighbour search | host loop between the two kernel passes | exclusive scan on the device (`accumulate!`), or a counting-sort cell list |
 | `build_global_bins!` (linked lists) | host | atomic insertion into cell heads, or a sort-based cell list |
-| MOOD decrement and forcing halo | host (serial by design: no cascade) | per-particle kernel with the snapshot; forcing with atomics |
-| `expand_mask!` | host | one kernel per hop |
 | Morton reordering | host (`sort!`) | device sort of the keys + permutation kernels |
 | boundary conditions (`FixedDirichlet`, `OutflowBC`) | host (`bc_map::Dict`) | tag-indexed tuple of conditions; `OutflowBC`'s donor search as iterated kernels |
 | particle adaptivity | host | stays on the host (rare, inherently serial); transfer the grid around the call |
 | WENO, Tiwari upwind | not device-compatible: the stencil order is a runtime `Val` | pad to the maximum basis length and mask |
 | reductions (`get_time_step`, `total_mass`) | `minimum`/loop on host arrays | `mapreduce` on device arrays |
-| data residency | the grid (`device_grid`), the stepper and MUSCL (`storage`) live on the device; a static grid without MOOD and boundary conditions steps entirely there | transfer only around the remaining host passes above; `storage` for the builders |
+| data residency | the grid (`device_grid`), the stepper and MUSCL (`storage`) live on the device; a static grid without boundary conditions steps entirely there, MOOD included | transfer only around the remaining host passes above; `storage` for the builders |
 | growing a device grid | `ensure_capacity!` on the grid uses `resize!` (host arrays only) | rebuild the device grid after adaptivity on the host |
 
 ## Testing on the device

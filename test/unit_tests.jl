@@ -386,17 +386,30 @@ end
     @testset "Forcing halo uses the snapshot (no cascade)" begin
         p = 20
         fill!(orders, 3)
-        snapshot = copy(orders); snapshot[p] = 1
-        changed  = zeros(Bool, N)
-        HyperCloudCore.trigger_halo!(StrictEPD0(), p, pg, orders, snapshot, changed)
+        orders[p] = 1                                          # p dropped to 1 in this pass
+        triggered = zeros(Bool, N); triggered[p] = true
+        snapshot  = copy(orders)
+        changed   = zeros(Bool, N)
         nbs = [nb_i[k] for k in nb_r[p]]
+        @test HyperCloudCore.forces_neighbours(StrictEPD0()) && !HyperCloudCore.forces_neighbours(EPD2())
+        @test all(HyperCloudCore.forced_order(StrictEPD0(), j, pg, triggered, snapshot) == 1 for j in nbs)
+        @test HyperCloudCore.forced_order(StrictEPD0(), p + 3, pg, triggered, snapshot) == 3
+        @test HyperCloudCore.forced_order(EPD2(), nbs[1], pg, triggered, snapshot) == 3
+        HyperCloudCore.force_neighbours!(StrictEPD0(), pg, triggered, snapshot, orders, changed)
         @test all(orders[j] == 1 for j in nbs)
         @test all(changed[j] for j in nbs)
         @test orders[p + 3] == 3 && !changed[p + 3]           # two hops away: untouched
-        @test count(changed) == n_nb
+        @test count(changed) == n_nb && !changed[p]            # p itself is not "changed" by forcing
+        # A neighbour that dropped itself (to 2) is forced down to 1 from the snapshot, not from p's new value
+        q = nbs[1]
+        fill!(orders, 3); orders[p] = 1; orders[q] = 2; fill!(changed, false)
+        triggered[q] = true; snapshot = copy(orders)
+        HyperCloudCore.force_neighbours!(StrictEPD0(), pg, triggered, snapshot, orders, changed)
+        @test orders[q] == 1 && changed[q]
+        @test all(orders[j] == 1 for j in nbs)
         # EPD* strategies never force
         fill!(orders, 3); fill!(changed, false)
-        HyperCloudCore.trigger_halo!(EPD2(), p, pg, orders, snapshot, changed)
+        HyperCloudCore.force_neighbours!(EPD2(), pg, triggered, snapshot, orders, changed)
         @test all(==(3), orders) && !any(changed)
     end
 

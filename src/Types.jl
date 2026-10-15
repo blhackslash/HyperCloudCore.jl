@@ -58,8 +58,10 @@ Base type dictating how polynomial order degradation cascades through the spatia
 
 # API Requirements
 - `_get_interface_orders(strategy, pg, i, j) -> (o_i, o_j)`: interface degrees of the edge `(i, j)` (MUSCL).
-- `trigger_halo!(strategy, p_idx, pg, orders, snapshot, changed)`: optional forcing of neighbours
-  after `p_idx` dropped its order; must mark every lowered particle in `changed`. Defaults to a no-op.
+- `forced_order(strategy, j, pg, triggered, snapshot) -> Int`: optional forcing; the order particle
+  `j` is lowered to given the particles that dropped (`triggered`) and the post-decrement `snapshot`
+  of the orders (a kernel body: per-particle reads only). Defaults to `snapshot[j]`; strategies that
+  force also return `true` from `forces_neighbours(strategy)`.
 - `_order_reach(interp, strategy)` on the interpolator side declares how far (hops) fluxes depend
   on neighbours' orders, so the stepper can recompute only `C ⊕ reach`.
 """

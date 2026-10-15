@@ -9,25 +9,30 @@ const device_backend = ROCBackend()
     N  = 80
     eq = make_advection_1d()
     dt = 0.4 * (2 / N)
-    ic = x -> exp(-x^2 / 0.02)
+    gauss = x -> exp(-x^2 / 0.02)
+    box   = x -> abs(x) < 0.3 ? 1.0 : 0.0                     # discontinuous: makes MOOD drop orders
+    muscl(order, limiter) = st -> MUSCL(Float64, 1, 1, order, limiter, RusanovFlux(); storage = st)
     cases = [
-        ("MUSCL3 NoLimiter RK3", st -> MUSCL(Float64, 1, 1, 3, NoLimiter(), RusanovFlux(); storage = st), RK3_SSP_Tableau(Float64)),
-        ("MUSCL3 VK RK2",        st -> MUSCL(Float64, 1, 1, 3, VenkatakrishnanLimiter(:hard), RusanovFlux(); storage = st), RK2_SSP_Tableau(Float64)),
-        ("MUSCL2 Euler",         st -> MUSCL(Float64, 1, 1, 2, NoLimiter(), RusanovFlux(); storage = st), RK1_Euler_Tableau(Float64)),
-        ("Central2 RK2",         st -> CentralDivergence(Float64, 1, 1, 2), RK2_SSP_Tableau(Float64)),
+        ("MUSCL3 NoLimiter RK3",        muscl(3, NoLimiter()),                     MOOD(),                           RK3_SSP_Tableau(Float64), gauss),
+        ("MUSCL3 VK RK2",               muscl(3, VenkatakrishnanLimiter(:hard)),   MOOD(),                           RK2_SSP_Tableau(Float64), gauss),
+        ("MUSCL2 Euler",                muscl(2, NoLimiter()),                     MOOD(),                           RK1_Euler_Tableau(Float64), gauss),
+        ("Central2 RK2",                st -> CentralDivergence(Float64, 1, 1, 2), MOOD(),                           RK2_SSP_Tableau(Float64), gauss),
+        ("MUSCL3 MOODu2 EPD1 RK3 box",  muscl(3, NoLimiter()),                     MOOD(EPD1(), MOODu2(1e-6)),       RK3_SSP_Tableau(Float64), box),
+        ("MUSCL3 MOODu1 SEPD0 RK2 box", muscl(3, NoLimiter()),                     MOOD(StrictEPD0(), MOODu1(1e-6)), RK2_SSP_Tableau(Float64), box),
+        ("MUSCL2 MOODu1 EPD2 RK2 box",  muscl(2, NoLimiter()),                     MOOD(EPD2(), MOODu1(1e-6)),       RK2_SSP_Tableau(Float64), box),
     ]
     try
-        @testset "$name" for (name, make_interp, tab) in cases
+        @testset "$name" for (name, make_interp, mood, tab, ic) in cases
             set_backend!(PolyesterBackend())                              # host reference
             pg_ref     = set_ic!(make_pg_1d(N), ic)
             interp_ref = make_interp(Array)
-            ts_ref     = GeneralRKTimeStepper(eq, interp_ref, MOOD(), tab)
+            ts_ref     = GeneralRKTimeStepper(eq, interp_ref, mood, tab)
             dt_ref     = get_time_step(pg_ref, eq, interp_ref)
             for k in 0:3; ts_ref(eq, pg_ref, k * dt, dt); end
 
             dg     = HyperCloudCore.device_grid(DeviceArray, set_ic!(make_pg_1d(N), ic))
             interp = make_interp(DeviceArray)
-            ts     = GeneralRKTimeStepper(eq, interp, MOOD(), tab; storage = DeviceArray)
+            ts     = GeneralRKTimeStepper(eq, interp, mood, tab; storage = DeviceArray)
             @test parent(ts.rho_n) isa DeviceArray && parent(ts.int_buffer.f) isa DeviceArray
             set_backend!(device_backend)
             @test isapprox(get_time_step(dg, eq, interp), dt_ref; rtol = 1e-12)
@@ -35,12 +40,14 @@ const device_backend = ROCBackend()
             out = Array(dg.rhos)
             @test all(isapprox.(first.(out[1:N]), first.(pg_ref.rhos[1:N]); atol = 1e-12))
             @test Array(dg.core.particle_orders)[1:N] == pg_ref.core.particle_orders[1:N]
+            @test Array(mood_flags(ts))[1:N] == mood_flags(ts_ref)[1:N]
+            ic === box && @test any(view(mood_flags(ts_ref), 1:N))        # the MOOD passes were exercised
         end
 
         @testset "host buffers are rejected" begin
             set_backend!(PolyesterBackend())                              # grids are built on the host
-            pg_host = set_ic!(make_pg_1d(N), ic)
-            dg = HyperCloudCore.device_grid(DeviceArray, set_ic!(make_pg_1d(N), ic))
+            pg_host = set_ic!(make_pg_1d(N), gauss)
+            dg = HyperCloudCore.device_grid(DeviceArray, set_ic!(make_pg_1d(N), gauss))
             interp_host = MUSCL(Float64, 1, 1, 3, NoLimiter(), RusanovFlux())
             interp_dev  = MUSCL(Float64, 1, 1, 3, NoLimiter(), RusanovFlux(); storage = DeviceArray)
             ts_host = GeneralRKTimeStepper(eq, interp_host, MOOD(), RK3_SSP_Tableau(Float64))
