@@ -51,13 +51,23 @@ Computes the divergence of the flux at particle `i`. Note that `MUSCL` relies on
 - `limiter`: The assigned slope limiter.
 - `flux`: The associated numerical flux function (`NF`).
 - `gradients`: A pre-allocated vector storing the reconstructed, limited spatial gradients for all particles.
+- `grad_weights`, `div_weights`: cached inverse MLS moment matrices (`MLSWeights`) of the full-order reconstruction and divergence fits, refreshed by `prepare_geometry!` when the grid geometry changes.
 """
-struct MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER, INTERPS, L, NF} <: DivergenceInterpolator
+struct MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER, INTERPS, L, NF, WG, WD} <: DivergenceInterpolator
     interpolators::INTERPS
     limiter::L
     flux::NF
-    gradients::Vector{SVector{B_LEN, State{M, T}}} 
+    gradients::Vector{SVector{B_LEN, State{M, T}}}
+    # Cached inverse MLS moment matrices for a frozen geometry (see `MLSWeights`): the full-order reconstruction and the
+    # divergence fit. They are the same object when both use the same degree. Particles at reduced (MOOD)
+    # order fall back to the direct solves.
+    grad_weights::WG
+    div_weights::WD
 end
+
+# Interpolator-table entry the divergence uses at full order (see `_resolve_div_idx`).
+@inline _full_div_idx(::Val{MAX_ORDER}, ::Val{DIV_ORDER}) where {MAX_ORDER, DIV_ORDER} =
+    DIV_ORDER == 0 ? max(2, MAX_ORDER) : max(2, DIV_ORDER)
 
 @inline _extract_order(::MUSCL{D, M, T, B_LEN, MAX_ORDER}) where {D, M, T, B_LEN, MAX_ORDER} = MAX_ORDER
 
@@ -81,10 +91,23 @@ function MUSCL(
     interps = ntuple(Val(max(2, max_order))) do k
         k == 1 ? ConstantReconstruction() : Interpolator{dimension, k - 1, 1}()
     end
-    
-    return MUSCL{dimension, M, T, B_LEN, max_order, div_order, typeof(interps), typeof(limiter), typeof(flux)}(
-        interps, limiter, flux, SVector{B_LEN, State{M, T}}[]
+
+    # Cached weights: the reconstruction degree at full order and the divergence degree at full order.
+    div_degree = _full_div_idx(Val(max_order), Val(div_order)) - 1
+    grad_weights = MLSWeights{B_LEN, max_degree, T}()
+    div_weights  = div_degree == max_degree ? grad_weights :
+                   MLSWeights{typeof(basis_length(Val(dimension), Val(div_degree))).parameters[1], div_degree, T}()
+
+    return MUSCL{dimension, M, T, B_LEN, max_order, div_order, typeof(interps), typeof(limiter), typeof(flux),
+                 typeof(grad_weights), typeof(div_weights)}(
+        interps, limiter, flux, SVector{B_LEN, State{M, T}}[], grad_weights, div_weights
     )
+end
+
+function prepare_geometry!(muscl::MUSCL, pg::ParticleGrid)
+    update_weights!(muscl.grad_weights, pg)
+    muscl.div_weights === muscl.grad_weights || update_weights!(muscl.div_weights, pg)
+    return nothing
 end
 
 function update_size!(muscl::MUSCL{D, M, T, B_LEN, MAX_ORDER}, N_particles::Int) where {D, M, T, B_LEN, MAX_ORDER}
@@ -117,8 +140,13 @@ function update_content!(
     dist_all = get_distances(pg)
     w_all = get_weights(pg)
 
-    scale_val = minimum(pg.meta.dx)
-    raw_grad = dispatch_interpolator(muscl.interpolators, p_order, nb_slice, dist_all, w_all, ib.df, scale_val, Val(B_LEN), State{M, T})
+    wg = muscl.grad_weights
+    raw_grad = if p_order == MAX_ORDER && p_order > 1 && is_current(wg, pg) && wg.ok[i]
+        apply_weights(wg, i, nb_slice, dist_all, w_all, ib.df)   # cached full-order fit
+    else
+        scale_val = minimum(pg.meta.dx)
+        dispatch_interpolator(muscl.interpolators, p_order, nb_slice, dist_all, w_all, ib.df, scale_val, Val(B_LEN), State{M, T})
+    end
     
     if p_order == 1
         muscl.gradients[i] = raw_grad 
@@ -178,12 +206,13 @@ function (muscl::MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER})(
     end
 
     div_idx = _resolve_div_idx(Val(DIV_ORDER), eff_order_i)
-
-    div = compute_dynamic_divergence(
-        muscl.interpolators, div_idx,
-        nb_slice, dist_all, get_weights(pg),
-        ib.df_flux, ib.df_scratch, pg.meta.dx
-    )
+    wd = muscl.div_weights
+    div = if div_idx == _full_div_idx(Val(MAX_ORDER), Val(DIV_ORDER)) && is_current(wd, pg) && wd.ok[i]
+        apply_weights_divergence(wd, i, nb_slice, dist_all, get_weights(pg), ib.df_flux)   # cached full-order fit
+    else
+        compute_dynamic_divergence(muscl.interpolators, div_idx, nb_slice, dist_all, get_weights(pg),
+                                   ib.df_flux, ib.df_scratch, pg.meta.dx)
+    end
 
     return T(2.0) * div
 end

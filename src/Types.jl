@@ -115,7 +115,7 @@ Central component for executing spatial reconstruction and computing the flux di
 - Must implement `update_content!(interp, i, f_i, nb_slice, pg, ib)` for pre-gather passes (e.g., caching gradients).
 - Must implement `@inline _extract_order(interp) -> Int`: the maximum **consistency order**. Every
   scheme reads `pg.core.particle_orders` in this convention (MUSCL: reconstruction degree = order − 1).
-- Optional: `_divergence_degree(interp)`, `_order_reach(interp, strategy)` (see `API.jl`); on moving grids the interpolator receives the PDE wrapped in an `ALEFrame`.
+- Optional: `prepare_geometry!(interp, pg)` (refresh geometry-dependent caches), `_divergence_degree(interp)`, `_order_reach(interp, strategy)` (see `API.jl`); on moving grids the interpolator receives the PDE wrapped in an `ALEFrame`.
 """
 abstract type DivergenceInterpolator end
 

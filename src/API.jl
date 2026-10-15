@@ -1,7 +1,7 @@
 export flux, max_eigenvalue, prim2cons, cons2prim, velocity, fluid_velocity
 export evaluate_nc_jump
 export pre_solve_update!, evaluate_source, implicit_solve
-export update_size!, update_content!, _extract_order, _divergence_degree, _order_reach
+export update_size!, update_content!, prepare_geometry!, _extract_order, _divergence_degree, _order_reach
 export has_cached_gradients, cached_gradients
 
 # =========================================================================
@@ -189,6 +189,15 @@ Dynamically resizes internal evaluation buffers (like cached gradients) to match
 Executes pre-gather computations (such as resolving MLS gradients or limiting slopes) prior to the primary flux pass. Defaults to a no-op for stateless algorithms.
 """
 @inline update_content!(::DivergenceInterpolator, args...) = nothing
+
+"""
+    prepare_geometry!(interp::DivergenceInterpolator, pg::ParticleGrid)
+
+Called by the time stepper before every right-hand-side pass. Schemes that cache geometry-dependent data
+(MUSCL caches its inverse MLS moment matrices) refresh it here when `pg.meta.geometry_version` has moved on
+since the last call. Defaults to a no-op.
+"""
+@inline prepare_geometry!(::DivergenceInterpolator, pg) = nothing
 
 """
     _extract_order(interp::DivergenceInterpolator) -> Int

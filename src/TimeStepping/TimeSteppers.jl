@@ -264,6 +264,8 @@ function compute_explicit_rhs!(ts::GeneralRKTimeStepper{D, M, T}, eq, pg, K_E, K
     zero_state  = zero(State{M, T})
     zero_space  = zero(Space{D, T})
 
+    prepare_geometry!(interp, pg)   # refreshes geometry caches only if the grid changed
+
     @smart_parallel use_threads for p in 1:N
         if is_boundary[p] || !(full || grad_mask[p]); continue; end
         fi = Y[p]; nb = nb_slices[p]
