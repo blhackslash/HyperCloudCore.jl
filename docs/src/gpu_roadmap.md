@@ -141,3 +141,31 @@ HYPERCLOUD_BACKEND=amdgpu julia --project=test/gpu test/runtests.jl
 ```
 
 Float64 throughput on consumer GPUs is a small fraction of Float32; everything is parametric in `T`.
+
+## Measured throughput
+
+`benchmark/step.jl`, 2026-10-15: one RK3 step of linear advection with MUSCL3 on a uniform periodic
+cloud, RX 9070 XT (gfx1201, ROCm 7.2) against an i5-13600K limited to 8 cores, milliseconds per step.
+"both" is the Venkatakrishnan limiter plus MOOD (EPD1 / u1); "moving" runs a prescribed grid motion
+with a neighbour search every step.
+
+| case | particles | Float64 CPU | Float64 GPU | Float32 CPU | Float32 GPU |
+|---|---|---|---|---|---|
+| 2-D, both, static | 250 000 | 98 | 8.7 | 71 | 3.5 |
+| 2-D, both, static | 1 000 000 | 387 | 29 | 284 | 9.8 |
+| 2-D, both, moving | 1 000 000 | 744 | 57 | 539 | 23 |
+| 2-D, both, 5 equations | 250 000 | 323 | 31 | | 5.8 |
+| 2-D, unlimited | 250 000 | 71 | 5.3 | | 2.1 |
+| 2-D, limiter only | 250 000 | 87 | 7.1 | | 2.3 |
+| 2-D, MOOD only | 250 000 | 82 | 7.3 | | 3.8 |
+| 3-D, both, static | 262 144 | 468 | 49 | | 14 |
+| 3-D, both, moving | 262 144 | 990 | 106 | | 33 |
+| 3-D, both, static | 1 000 000 | 1450 | 176 | | 48 |
+| 3-D, both, moving | 1 000 000 | | 379 | | 118 |
+
+Reading the table: a 5-equation system costs 3.6 times a scalar in Float64 on the GPU but only 1.7
+times in Float32, the signature of the Float64 passes being arithmetic-bound and the Float32 passes
+bandwidth-bound. The limiter and MOOD each add about a third to a Float64 step; in Float32 MOOD costs
+more than the limiter because `MOODu1(1e-6)` sits below Float32 round-off on a smooth profile and
+triggers spurious iterations (scale `δ` with the precision). A 3-D particle costs about six times a 2-D
+one: three times the neighbours (about 65 against 20) and twice the basis length.

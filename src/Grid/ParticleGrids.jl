@@ -327,10 +327,10 @@ end
     end
 end
 
-# Dispatch on the polynomial DEGREE of the divergence MLS (1..4; higher degrees clamp to 4,
+# Dispatch on the polynomial DEGREE of the divergence MLS (1..4, 1..3 in 3-D; higher degrees clamp,
 # which slightly over-estimates dt for such schemes).
 @generated function dispatch_cfl(degree::Int, ::Val{D}, nb_slice, dist_vec, w_vec, invL, ::Type{T}) where {D, T}
-    MAX_DEG = 4
+    MAX_DEG = D == 3 ? 3 : 4          # keep the basis small enough for the inline Cholesky (35 terms at degree 4 in 3-D would not be)
     B = typeof(basis_length(Val(D), Val(MAX_DEG))).parameters[1]
     expr = :(_compute_cfl_coeffs(Val($D), Val($MAX_DEG), Val($B), nb_slice, dist_vec, w_vec, invL, T))
     for deg in (MAX_DEG - 1):-1:1
