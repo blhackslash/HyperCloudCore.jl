@@ -52,6 +52,9 @@ Computes the divergence of the flux at particle `i`. Note that `MUSCL` relies on
 - `flux`: The associated numerical flux function (`NF`).
 - `gradients`: A pre-allocated vector storing the reconstructed, limited spatial gradients for all particles.
 - `grad_weights`, `div_weights`: cached inverse MLS moment matrices (`MLSWeights`) of the full-order reconstruction and divergence fits, refreshed by `prepare_geometry!` when the grid geometry changes.
+
+The per-particle caches are `Growable` buffers whose array type is the `storage` keyword of the constructor
+(`Array` by default; `ROCArray` etc. for a grid built with `device_grid`).
 """
 struct MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER, INTERPS, L, NF, VG <: AbstractVector{SVector{B_LEN, State{M, T}}}, WG, WD} <: DivergenceInterpolator
     interpolators::INTERPS
@@ -72,10 +75,10 @@ end
 @inline _extract_order(::MUSCL{D, M, T, B_LEN, MAX_ORDER}) where {D, M, T, B_LEN, MAX_ORDER} = MAX_ORDER
 
 function MUSCL(
-    ::Type{T}, dimension::Int, M::Int, max_order::Int, 
-    limiter, flux; 
-    div_order::Int=0
-) where {T}
+    ::Type{T}, dimension::Int, M::Int, max_order::Int,
+    limiter, flux;
+    div_order::Int=0, storage::Type{AT} = Array
+) where {T, AT <: AbstractArray}
     @assert max_order >= 1 "MUSCL must have a maximum order of at least 1."
     @assert div_order >= 0 "Divergence order only supports 0 (adaptive) or positive values!"
     
@@ -94,11 +97,11 @@ function MUSCL(
 
     # Cached weights: the reconstruction degree at full order and the divergence degree at full order.
     div_degree = _full_div_idx(Val(max_order), Val(div_order)) - 1
-    grad_weights = MLSWeights{B_LEN, max_degree, T}()
+    grad_weights = MLSWeights{B_LEN, max_degree, T}(AT)
     div_weights  = div_degree == max_degree ? grad_weights :
-                   MLSWeights{typeof(basis_length(Val(dimension), Val(div_degree))).parameters[1], div_degree, T}()
+                   MLSWeights{typeof(basis_length(Val(dimension), Val(div_degree))).parameters[1], div_degree, T}(AT)
 
-    return MUSCL{dimension, M, T, B_LEN, max_order, div_order}(interps, limiter, flux, SVector{B_LEN, State{M, T}}[],
+    return MUSCL{dimension, M, T, B_LEN, max_order, div_order}(interps, limiter, flux, Growable{SVector{B_LEN, State{M, T}}}(AT),
                                                               grad_weights, div_weights)
 end
 

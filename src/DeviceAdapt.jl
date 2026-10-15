@@ -39,6 +39,10 @@ Adapt.adapt_structure(to, ib::InteractionBuffer{D, M, T}) where {D, M, T} = Inte
 Adapt.adapt_structure(to, w::MLSWeights{B, IO, T, L}) where {B, IO, T, L} =
     MLSWeightsView{B, IO, T, L, typeof(adapt(to, w.inv_moment)), typeof(adapt(to, w.ok))}(
         adapt(to, w.inv_moment), adapt(to, w.ok), w.version[], w.invL[], w.scales[])
+# A view is adapted twice on a KernelAbstractions backend: by `kernel_view` at the launch, then by the kernel itself.
+Adapt.adapt_structure(to, w::MLSWeightsView{B, IO, T, L}) where {B, IO, T, L} =
+    MLSWeightsView{B, IO, T, L, typeof(adapt(to, w.inv_moment)), typeof(adapt(to, w.ok))}(
+        adapt(to, w.inv_moment), adapt(to, w.ok), w.version, w.invL, w.scales)
 
 Adapt.adapt_structure(to, m::MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER}) where {D, M, T, B_LEN, MAX_ORDER, DIV_ORDER} =
     MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER}(m.interpolators, m.limiter, m.flux, adapt(to, m.gradients),

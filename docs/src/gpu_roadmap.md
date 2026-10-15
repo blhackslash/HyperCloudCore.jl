@@ -41,6 +41,26 @@ kernel launch: arrays become device arrays, the mutable `GridMetadata` an immuta
 buffers, reordering state) become `nothing`. `device_grid(CuArray, pg)` builds a grid whose arrays live on a
 device.
 
+The per-particle scratch of the time stepper and the interpolators (stage states, neighbour gathers, MOOD
+masks, cached gradients and moment matrices) grows with the particle count. Those buffers are `Growable`s
+(`src/Growable.jl`): a mutable holder of an array of the `storage` type given to the constructor, reallocated
+with `similar` when the capacity is exceeded (`resize!` only exists for `Vector`). `Adapt` unwraps a
+`Growable` to the array it holds, and *every* `foreach_particle` launch passes its arguments through
+`kernel_view` (`adapt(KernelView(), args)`), so kernel bodies see the same argument types on the CPU
+backends as on a device. A step on a device therefore reads
+
+```julia
+dg     = device_grid(ROCArray, pg)
+interp = MUSCL(Float64, D, M, 3, NoLimiter(), RusanovFlux(); storage = ROCArray)
+ts     = GeneralRKTimeStepper(eq, interp, MOOD(), RK3_SSP_Tableau(Float64); storage = ROCArray)
+set_backend!(ROCBackend())
+ts(eq, dg, t, dt)
+```
+
+Before a `KABackend` launch, `check_resident` walks the arguments and throws if an array does not live on
+that backend. Without it AMDGPU.jl would copy a host array to the device for the launch and silently drop
+the kernel's writes to it.
+
 ## Rules for kernel bodies
 
 - Only `args` as input; no closures over the enclosing method's variables or static parameters.
@@ -62,6 +82,18 @@ device.
 | particle adaptivity | host | stays on the host (rare, inherently serial); transfer the grid around the call |
 | WENO, Tiwari upwind | not device-compatible: the stencil order is a runtime `Val` | pad to the maximum basis length and mask |
 | reductions (`get_time_step`, `total_mass`) | `minimum`/loop on host arrays | `mapreduce` on device arrays |
-| data residency | arrays are copied into kernel views; host arrays on the CPU backends | keep the grid on the device (`device_grid`) and transfer only around host passes |
+| data residency | the grid (`device_grid`), the stepper and MUSCL (`storage`) live on the device; a static grid without MOOD and boundary conditions steps entirely there | transfer only around the remaining host passes above; `storage` for the builders |
+| growing a device grid | `ensure_capacity!` on the grid uses `resize!` (host arrays only) | rebuild the device grid after adaptivity on the host |
+
+## Testing on the device
+
+`HYPERCLOUD_BACKEND=amdgpu` adds the device tests (`test/gpu_tests.jl`) to the suite. They need AMDGPU.jl,
+which is not a test dependency of the package (no release supports KernelAbstractions 0.10 yet, it comes
+from the main branch), so they run in the `test/gpu` environment:
+
+```sh
+julia --project=test/gpu -e 'using Pkg; Pkg.instantiate()'     # once
+HYPERCLOUD_BACKEND=amdgpu julia --project=test/gpu test/runtests.jl
+```
 
 Float64 throughput on consumer GPUs is a small fraction of Float32; everything is parametric in `T`.

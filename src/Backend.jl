@@ -16,6 +16,7 @@
 # boundary donor searches) stay on the host for now; see docs/src/gpu_roadmap.md.
 # =========================================================================
 using KernelAbstractions
+using Adapt
 const KA = KernelAbstractions
 
 export ExecutionBackend, PolyesterBackend, ThreadsBackend, KABackend
@@ -58,21 +59,37 @@ set_backend!(backend::ExecutionBackend) = (_BACKEND[] = backend)
 set_backend!(backend::KA.Backend; kwargs...) = set_backend!(KABackend(backend; kwargs...))
 
 """
+    KernelView
+
+`Adapt` target that turns host objects into the form a kernel body sees (see `DeviceAdapt.jl`): mutable
+metadata becomes an immutable snapshot, `Ref`s plain values, `Growable` buffers the arrays they hold, and
+host-only parts are dropped. Arrays are left where they are. Every `foreach_particle` launch adapts its
+arguments this way, so kernel bodies see the same argument types on every backend.
+"""
+struct KernelView end
+
+"The kernel-body form of `x` (see `KernelView`)."
+kernel_view(x) = adapt(KernelView(), x)
+
+"""
     foreach_particle(body, backend, N, args::Tuple)
 
 Runs `body(i, args...)` for `i in 1:N` on `backend`. `body` must be a kernel body in the sense of
-`Backend.jl` (no allocation, no dynamic dispatch, only `args` as input).
+`Backend.jl` (no allocation, no dynamic dispatch, only `args` as input). The arguments are passed
+through `kernel_view` first; on a `KABackend` every array among them must live on that backend.
 """
 function foreach_particle(body::F, ::PolyesterBackend, N::Int, args::Tuple) where {F}
+    kargs = kernel_view(args)
     @batch per=core for i in 1:N
-        body(i, args...)
+        body(i, kargs...)
     end
     return nothing
 end
 
 function foreach_particle(body::F, ::ThreadsBackend, N::Int, args::Tuple) where {F}
+    kargs = kernel_view(args)
     Threads.@threads :dynamic for i in 1:N
-        body(i, args...)
+        body(i, kargs...)
     end
     return nothing
 end
@@ -84,8 +101,33 @@ end
 
 function foreach_particle(body::F, b::KABackend, N::Int, args::Tuple) where {F}
     N == 0 && return nothing
+    kargs = kernel_view(args)
+    check_resident(b.backend, kargs)
     kernel = _foreach_kernel(b.backend, b.workgroupsize)
-    kernel(body, args; ndrange = N)
+    kernel(body, kargs; ndrange = N)
     KA.synchronize(b.backend)
     return nothing
+end
+
+"""
+    check_resident(backend::KernelAbstractions.Backend, x)
+
+Throws an `ArgumentError` if any array reachable from `x` (through tuples and struct fields) does not live
+on `backend`. Guards the kernel launches: AMDGPU.jl, for one, would otherwise copy a host array to the
+device for the launch and silently drop the kernel's writes to it.
+"""
+@generated function check_resident(backend, x)
+    (isbitstype(x) || x <: Type || !isconcretetype(x)) && return :(nothing)
+    checks = [:(check_resident(backend, getfield(x, $i))) for i in 1:fieldcount(x)]
+    return quote
+        $(checks...)
+        return nothing
+    end
+end
+
+function check_resident(backend, x::AbstractArray)
+    isbits(x) && return nothing
+    KA.get_backend(x) == backend && return nothing
+    throw(ArgumentError("a kernel argument of type $(typeof(x)) is not resident on $(backend); build the grid " *
+                        "with `device_grid` and the interpolator and time stepper with the matching `storage` type"))
 end

@@ -3,7 +3,8 @@
 
 ## Commands
 - Tests (CPU): `julia --project -e 'using Pkg; Pkg.test()'`
-- Tests (GPU): `HYPERCLOUD_BACKEND=amdgpu julia --project -e 'using Pkg; Pkg.test()'`
+- Tests (GPU): `HYPERCLOUD_BACKEND=amdgpu julia --project=test/gpu test/runtests.jl`
+  (once: `julia --project=test/gpu -e 'using Pkg; Pkg.instantiate()'`; AMDGPU.jl comes from its main branch, see test/gpu/Project.toml)
 - Single test file: `julia --project test/runtests.jl <name>`
 
 ## Conventions

@@ -390,9 +390,10 @@ end
 # CACHED MLS MOMENT MATRICES (frozen geometry)
 # =========================================================================
 """
-    MLSWeights{B_LEN, IO, T}()
+    MLSWeights{B_LEN, IO, T}(storage = Array)
 
-Per-particle inverse moment matrices of the degree-`IO` MLS fit for a frozen geometry. With them a fit over
+Per-particle inverse moment matrices of the degree-`IO` MLS fit for a frozen geometry (`Growable` buffers
+with arrays of type `storage`). With them a fit over
 the neighbour differences `df_k` is `inv_N * Σ_k w_k p_k df_kᵀ` (basis `p_k` of the scaled distance), which
 reproduces `Interpolator{D, IO, 1}` without assembling and factorising the moment matrix for every solve.
 Only `B_LEN²` numbers per particle are stored, so the neighbour-slot traffic of the hot loops does not grow
@@ -403,16 +404,18 @@ which returns zero). `version` is the `geometry_version` the matrices belong to;
 """
 abstract type AbstractMLSWeights{B_LEN, IO, T} end
 
-struct MLSWeights{B_LEN, IO, T, L} <: AbstractMLSWeights{B_LEN, IO, T}   # L = B_LEN^2 (StaticArrays needs it)
-    inv_moment::Vector{SMatrix{B_LEN, B_LEN, T, L}}
-    ok::Vector{Bool}
+struct MLSWeights{B_LEN, IO, T, L, GM <: Growable{SMatrix{B_LEN, B_LEN, T, L}}, GB <: Growable{Bool}} <: AbstractMLSWeights{B_LEN, IO, T}   # L = B_LEN^2 (StaticArrays needs it)
+    inv_moment::GM
+    ok::GB
     version::Base.RefValue{Int}
     invL::Base.RefValue{T}
     scales::Base.RefValue{SVector{B_LEN, T}}
 end
-function MLSWeights{B_LEN, IO, T}() where {B_LEN, IO, T}
-    return MLSWeights{B_LEN, IO, T, B_LEN * B_LEN}(SMatrix{B_LEN, B_LEN, T, B_LEN * B_LEN}[], Bool[], Ref(-1),
-                                                   Ref(one(T)), Ref(zero(SVector{B_LEN, T})))
+function MLSWeights{B_LEN, IO, T}(::Type{AT} = Array) where {B_LEN, IO, T, AT <: AbstractArray}
+    inv_moment = Growable{SMatrix{B_LEN, B_LEN, T, B_LEN * B_LEN}}(AT)
+    ok         = Growable{Bool}(AT)
+    return MLSWeights{B_LEN, IO, T, B_LEN * B_LEN, typeof(inv_moment), typeof(ok)}(inv_moment, ok, Ref(-1),
+                                                                                   Ref(one(T)), Ref(zero(SVector{B_LEN, T})))
 end
 
 """

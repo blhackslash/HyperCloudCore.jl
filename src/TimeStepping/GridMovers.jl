@@ -127,7 +127,7 @@ Writes stage positions `X` into the grid and refreshes the geometry: distances/w
 """
 function set_positions!(pg::ParticleGrid, X::AbstractVector, full_search::Bool)
     N = pg.meta.N
-    pg.core.positions[1:N] .= view(X, 1:N)
+    copyto!(pg.core.positions, 1, parent(X), 1, N)
     full_search ? pg.neighbor(pg) : refresh_geometry!(pg)
     return nothing
 end

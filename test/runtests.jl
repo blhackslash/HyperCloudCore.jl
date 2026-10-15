@@ -20,6 +20,16 @@ include("time_integration.jl")
 
 PDEStudioCore.set_target_module!(@__MODULE__)
 
+# Device tests: HYPERCLOUD_BACKEND=amdgpu adds the AMDGPU passes (run in the test/gpu environment, which
+# has AMDGPU.jl; see test/gpu/Project.toml).
+const GPU_BACKEND = get(ENV, "HYPERCLOUD_BACKEND", "")
+if GPU_BACKEND == "amdgpu"
+    using AMDGPU
+    AMDGPU.allowscalar(false)
+elseif GPU_BACKEND != ""
+    error("HYPERCLOUD_BACKEND=$(GPU_BACKEND) is not supported (amdgpu)")
+end
+
 # -------------------------------------------------------------------------
 # Shared test helpers
 # -------------------------------------------------------------------------
@@ -51,4 +61,5 @@ interior_indices(pg) = findall(i -> !pg.core.is_boundary[i], 1:pg.meta.N)
 
     include("unit_tests.jl")
     include("pipeline_tests.jl")
+    GPU_BACKEND == "amdgpu" && include("gpu_tests.jl")
 end

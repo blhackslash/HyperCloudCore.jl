@@ -290,6 +290,31 @@ end
         bt = HyperCloudCore.Adapt.adapt(Array, RK3_SSP_Tableau(Float64))
         @test bt.a_t isa SMatrix && bt.b_t isa SVector && isbits(bt)
     end
+
+    @testset "Growable buffers" begin
+        g = Growable{Float64}(Array)
+        @test g isa AbstractVector{Float64} && length(g) == 0 && parent(g) isa Vector{Float64}
+        HyperCloudCore.ensure_capacity!(g, 8); fill!(g, 2.0)
+        n = length(g)
+        HyperCloudCore.ensure_capacity!(g, 40)
+        @test length(g) >= 40 && all(==(2.0), view(g, 1:n))                # contents survive growth
+        g[1] = 3.0
+        @test g[1] == 3.0 && parent(g)[1] == 3.0
+        @test HyperCloudCore.kernel_view(g) === parent(g)                   # kernels receive the raw array
+        @test HyperCloudCore.kernel_view((g, 1)) === (parent(g), 1)
+
+        eq = make_advection_1d()
+        interp = MUSCL(Float64, 1, 1, 3, NoLimiter(), RusanovFlux())
+        ts = GeneralRKTimeStepper(eq, interp, MOOD(), RK3_SSP_Tableau(Float64))
+        @test ts.rho_n isa Growable && parent(ts.rho_n) isa Vector{State{1, Float64}}
+        @test interp.gradients isa Growable && interp.grad_weights.inv_moment isa Growable
+        @test HyperCloudCore.kernel_view(ts.int_buffer).f isa Vector{State{1, Float64}}
+        @test HyperCloudCore.kernel_view(interp).gradients isa Vector
+        pg = set_ic!(make_pg_1d(20), x -> exp(-x^2 / 0.02))
+        ts(eq, pg, 0.0, 0.01)
+        @test length(ts.rho_n) >= pg.meta.N && mood_flags(ts) isa Vector{Bool}
+        HyperCloudCore.check_resident(HyperCloudCore.KA.CPU(), HyperCloudCore.kernel_view((pg, ts.int_buffer, interp, 1.0, Val(2))))
+    end
 end
 
 @testset "Butcher tableaus" begin

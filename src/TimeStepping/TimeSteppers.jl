@@ -1,21 +1,23 @@
 export GeneralRKTimeStepper, GeneralIMEXTimeStepper, mood_flags
 
 """
-    MOODWork
+    MOODWork(storage = Array)
 
 Scratch owned by the time stepper: `triggered` (this pass), `changed` (orders that moved, i.e. C),
 `dirty` (fluxes to recompute, C ⊕ reach), `scratch`, an `Int` order snapshot for forcing, and
 `triggered_step`, a per-step diagnostic of every particle that dropped an order (see `mood_flags`).
+The masks are `Growable` buffers with arrays of type `storage`.
 """
-struct MOODWork
-    triggered::Vector{Bool}
-    changed::Vector{Bool}
-    dirty::Vector{Bool}
-    scratch::Vector{Bool}
-    snapshot::Vector{Int}
-    triggered_step::Vector{Bool}
-    MOODWork() = new(Bool[], Bool[], Bool[], Bool[], Int[], Bool[])
+struct MOODWork{GB <: Growable{Bool}, GI <: Growable{Int}}
+    triggered::GB
+    changed::GB
+    dirty::GB
+    scratch::GB
+    snapshot::GI
+    triggered_step::GB
 end
+MOODWork(::Type{AT} = Array) where {AT <: AbstractArray} =
+    MOODWork(Growable{Bool}(AT), Growable{Bool}(AT), Growable{Bool}(AT), Growable{Bool}(AT), Growable{Int}(AT), Growable{Bool}(AT))
 
 function update_size!(w::MOODWork, N::Int)
     ensure_capacity!(w.triggered, N); ensure_capacity!(w.changed, N)
@@ -25,10 +27,11 @@ function update_size!(w::MOODWork, N::Int)
 end
 
 """
-    InteractionBuffer{D, M, T}
+    InteractionBuffer{D, M, T}(storage = Array)
 
 Pre-allocated neighbour workspace, indexed by global neighbour slot (so per-particle slices are
-disjoint and the passes are thread-safe).
+disjoint and the passes are thread-safe). The host object holds `Growable` buffers with arrays of
+type `storage`; kernels receive it with the raw arrays (see `DeviceAdapt.jl`).
 
 # Fields
 - `f`, `df`: neighbour states and differences to the centre particle.
@@ -45,8 +48,9 @@ struct InteractionBuffer{D, M, T, VS <: AbstractVector{State{M, T}}, VF <: Abstr
 end
 InteractionBuffer{D, M, T}(f::VS, df::VS, df_flux::VF, df_scratch::VS, mask::VB) where {D, M, T, VS, VF, VB} =
     InteractionBuffer{D, M, T, VS, VF, VB}(f, df, df_flux, df_scratch, mask)
-InteractionBuffer{D, M, T}() where {D, M, T} =
-    InteractionBuffer{D, M, T}(State{M, T}[], State{M, T}[], Flux{D, M, T}[], State{M, T}[], Bool[])
+InteractionBuffer{D, M, T}(::Type{AT} = Array) where {D, M, T, AT <: AbstractArray} =
+    InteractionBuffer{D, M, T}(Growable{State{M, T}}(AT), Growable{State{M, T}}(AT), Growable{Flux{D, M, T}}(AT),
+                               Growable{State{M, T}}(AT), Growable{Bool}(AT))
 
 function update_size!(ib::InteractionBuffer, num_interactions::Int)
     ensure_capacity!(ib.f, num_interactions)
@@ -136,16 +140,21 @@ exact for SSP tableaus.
   (default: freeze topology, refresh distances/weights only).
 - `volume_estimator = ShepardVolumes()`: how `pg.core.volumes` is recomputed after each step of a
   moving grid (`nothing` leaves the volumes untouched).
+- `storage = Array`: array type of the stage buffers, e.g. `ROCArray` for a stepper that advances a
+  grid built with `device_grid` (the interpolator needs the same `storage`).
 
 # Fields
 - `rho_n`, `rho_cand`, `Y_stages`, `K_E_stages`, `K_I_stages`: states and RHS (`K_E = -div(F − w_i ρ) + S_expl`).
 - `x_n`, `x_cand`, `X_stages`, `K_X_stages`: positions and grid velocities (sized only when moving).
 - `int_buffer`, `work`: neighbour gather buffer and MOOD scratch.
+All of them are `Growable` buffers, sized by `update_size!` at the start of every step.
 """
 struct GeneralRKTimeStepper{D, M, T, PDE <: HyperbolicPDE, G <: DivergenceInterpolator, MO <: MOOD,
                             EST <: Tuple{Vararg{AbstractExplicitSourceTerm}},
                             IST <: Tuple{Vararg{AbstractImplicitSourceTerm}},
-                            VE <: Union{Nothing, VolumeEstimator}, S} <: TimeStepper
+                            VE <: Union{Nothing, VolumeEstimator}, S,
+                            GS <: Growable{State{M, T}}, GP <: Growable{Space{D, T}},
+                            IB <: InteractionBuffer{D, M, T}, WORK <: MOODWork} <: TimeStepper
     pde::PDE
     divergence_interpolator::G
     mood::MO
@@ -156,37 +165,42 @@ struct GeneralRKTimeStepper{D, M, T, PDE <: HyperbolicPDE, G <: DivergenceInterp
     full_search_per_stage::Bool
     volume_estimator::VE
 
-    rho_n::Vector{State{M, T}}
-    rho_cand::Vector{State{M, T}}
+    rho_n::GS
+    rho_cand::GS
     # Stage arrays as tuples (one entry per stage): indexable inside kernels, unlike a Vector of Vectors.
-    Y_stages::NTuple{S, Vector{State{M, T}}}
-    K_E_stages::NTuple{S, Vector{State{M, T}}}
-    K_I_stages::NTuple{S, Vector{State{M, T}}}
+    Y_stages::NTuple{S, GS}
+    K_E_stages::NTuple{S, GS}
+    K_I_stages::NTuple{S, GS}
 
-    x_n::Vector{Space{D, T}}
-    x_cand::Vector{Space{D, T}}
-    X_stages::NTuple{S, Vector{Space{D, T}}}
-    K_X_stages::NTuple{S, Vector{Space{D, T}}}
+    x_n::GP
+    x_cand::GP
+    X_stages::NTuple{S, GP}
+    K_X_stages::NTuple{S, GP}
 
-    int_buffer::InteractionBuffer{D, M, T}
-    work::MOODWork
+    int_buffer::IB
+    work::WORK
     num_stages::Int
 
     function GeneralRKTimeStepper(
         pde::HyperbolicPDE{D, M, T}, div_interp::G, mood::MO,
         explicit_sources::EST, implicit_sources::IST, tableau::IMEXButcherTableau{T};
         reset_orders_per_stage::Bool = false, full_search_per_stage::Bool = false,
-        volume_estimator::VE = ShepardVolumes()
-    ) where {D, M, T, G, MO <: MOOD, EST <: Tuple{Vararg{AbstractExplicitSourceTerm}}, IST <: Tuple{Vararg{AbstractImplicitSourceTerm}}, VE <: Union{Nothing, VolumeEstimator}}
+        volume_estimator::VE = ShepardVolumes(), storage::Type{AT} = Array
+    ) where {D, M, T, G, MO <: MOOD, EST <: Tuple{Vararg{AbstractExplicitSourceTerm}}, IST <: Tuple{Vararg{AbstractImplicitSourceTerm}},
+             VE <: Union{Nothing, VolumeEstimator}, AT <: AbstractArray}
         s = num_stages(tableau)
-        new{D, M, T, typeof(pde), G, MO, EST, IST, VE, s}(
+        states    = () -> Growable{State{M, T}}(AT)
+        positions = () -> Growable{Space{D, T}}(AT)
+        ib   = InteractionBuffer{D, M, T}(AT)
+        work = MOODWork(AT)
+        new{D, M, T, typeof(pde), G, MO, EST, IST, VE, s, typeof(states()), typeof(positions()), typeof(ib), typeof(work)}(
             pde, div_interp, mood, explicit_sources, implicit_sources, tableau,
             reset_orders_per_stage, full_search_per_stage, volume_estimator,
-            State{M, T}[], State{M, T}[],
-            ntuple(_ -> State{M, T}[], s), ntuple(_ -> State{M, T}[], s), ntuple(_ -> State{M, T}[], s),
-            Space{D, T}[], Space{D, T}[],
-            ntuple(_ -> Space{D, T}[], s), ntuple(_ -> Space{D, T}[], s),
-            InteractionBuffer{D, M, T}(), MOODWork(), s
+            states(), states(),
+            ntuple(_ -> states(), s), ntuple(_ -> states(), s), ntuple(_ -> states(), s),
+            positions(), positions(),
+            ntuple(_ -> positions(), s), ntuple(_ -> positions(), s),
+            ib, work, s
         )
     end
 end
@@ -210,7 +224,7 @@ GeneralRKTimeStepper(pde::HyperbolicPDE{D, M, T}, div_interp, mood::MOOD, tablea
     GeneralRKTimeStepper(pde, div_interp, mood, (), (), tableau; kwargs...)
 
 "Per-step diagnostic: `true` for every particle that dropped an order during the last step."
-mood_flags(ts::GeneralRKTimeStepper) = ts.work.triggered_step
+mood_flags(ts::GeneralRKTimeStepper) = parent(ts.work.triggered_step)
 
 @inline _is_moving(pg::ParticleGrid) = !(pg.mover isa NoGridMover)
 
@@ -320,7 +334,7 @@ function form_candidate!(ts::GeneralRKTimeStepper{D, M, T}, eq, pg, i::Int, dt::
          pg.core.is_boundary, bt, i, n_prev, is_final, dt, moving, zero(T), zero(Space{D, T})))
 
     if !is_final
-        pre_solve_updates!(ts.implicit_sources, target, pg, t_i)
+        pre_solve_updates!(ts.implicit_sources, parent(target), pg, t_i)
         a_ii = bt.a[i, i]
         if abs(a_ii) > T(1e-14)
             foreach_particle(_stage_implicit_solve!, backend, N,
@@ -330,7 +344,7 @@ function form_candidate!(ts::GeneralRKTimeStepper{D, M, T}, eq, pg, i::Int, dt::
             (ts.K_I_stages[i], target, pg.core.is_boundary, ts.implicit_sources, pg, t_i, zero(State{M, T})))
     end
 
-    apply_boundary_conditions!(pg, target, ts, eq, t_i)
+    apply_boundary_conditions!(pg, parent(target), ts, eq, t_i)
     return target, t_i
 end
 
@@ -390,8 +404,8 @@ function mood_checkpoint!(ts::GeneralRKTimeStepper{D, M, T}, eq, pg, i::Int, dt:
         target, _ = form_candidate!(ts, eq, pg, i, dt, time)
         detect_and_drop!(ts.mood, work, interp, pg, ts.int_buffer, Y_prev, target, full) || return nothing
 
-        copyto!(work.dirty, 1, work.changed, 1, N)
-        expand_mask!(work.dirty, work.scratch, pg, reach)
+        copyto!(parent(work.dirty), 1, parent(work.changed), 1, N)
+        expand_mask!(parent(work.dirty), parent(work.scratch), pg, reach)
         compute_explicit_rhs!(ts, eq, pg, ts.K_E_stages[i - 1], ts.K_X_stages[i - 1], Y_prev, t_prev, false)
         full = false
     end
@@ -418,8 +432,8 @@ function (ts::GeneralRKTimeStepper{D, M, T})(eq::HyperbolicPDE, pg::ParticleGrid
     update_size!(ts, N, length(pg.neighbor.indices), moving)
     update_size!(interp, N)                       # once per step; gradients persist across checkpoints
 
-    ts.rho_n[1:N] .= view(pg.rhos, 1:N)
-    moving && (ts.x_n[1:N] .= view(pg.core.positions, 1:N))
+    copyto!(parent(ts.rho_n), 1, pg.rhos, 1, N)
+    moving && copyto!(parent(ts.x_n), 1, pg.core.positions, 1, N)
 
     max_order = _extract_order(interp)
     fill!(view(orders, 1:N), max_order)
@@ -438,10 +452,10 @@ function (ts::GeneralRKTimeStepper{D, M, T})(eq::HyperbolicPDE, pg::ParticleGrid
     end
 
     mood_checkpoint!(ts, eq, pg, s + 1, dt, time)          # uses geometry of stage s
-    pg.rhos[1:N] .= view(ts.rho_cand, 1:N)
+    copyto!(pg.rhos, 1, parent(ts.rho_cand), 1, N)
 
     if moving
-        pg.core.positions[1:N] .= view(ts.x_cand, 1:N)
+        copyto!(pg.core.positions, 1, parent(ts.x_cand), 1, N)
         pg.neighbor(pg)                                    # full search + periodic wrap for the next step
         ts.volume_estimator === nothing || update_volumes!(pg, ts.volume_estimator)
     end

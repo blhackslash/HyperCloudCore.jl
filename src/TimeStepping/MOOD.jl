@@ -192,7 +192,7 @@ end
 Marks every particle within `hops` topological hops of a marked one (boundary particles included;
 the compute passes skip them).
 """
-function expand_mask!(mask::Vector{Bool}, scratch::Vector{Bool}, pg::ParticleGrid, hops::Int)
+function expand_mask!(mask::AbstractVector{Bool}, scratch::AbstractVector{Bool}, pg::ParticleGrid, hops::Int)
     N = pg.meta.N
     nb_slices, nb_indices = pg.neighbor.ranges, pg.neighbor.indices
     for _ in 1:hops
@@ -225,7 +225,8 @@ function detect_and_drop!(
     nb_slices   = pg.neighbor.ranges
     is_boundary = pg.core.is_boundary
     orders      = pg.core.particle_orders
-    triggered, changed, dirty, snapshot = work.triggered, work.changed, work.dirty, work.snapshot
+    triggered, changed, dirty, snapshot = parent(work.triggered), parent(work.changed), parent(work.dirty), parent(work.snapshot)
+    triggered_step = parent(work.triggered_step)
 
     fill!(view(triggered, 1:N), false)
     fill!(view(changed, 1:N), false)
@@ -234,14 +235,14 @@ function detect_and_drop!(
     foreach_particle(_mood_flag!, get_backend(), N,
         (mood, interp, pg, int_buffer.f, rho_prev, rho_cand, nb_slices, is_boundary, dirty, triggered, full))
 
-    # 2. Decrement (serial). Particles already at order 1 are un-flagged so they don't force.
+    # 2. Decrement (serial, host). Particles already at order 1 are un-flagged so they don't force.
     any_dropped = false
     @inbounds for p in 1:N
         if triggered[p]
             if orders[p] > 1
                 orders[p] -= 1
                 changed[p] = true
-                work.triggered_step[p] = true         # diagnostic, accumulated per step
+                triggered_step[p] = true              # diagnostic, accumulated per step
                 any_dropped = true
             else
                 triggered[p] = false
