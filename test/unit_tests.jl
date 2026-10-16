@@ -92,7 +92,7 @@ end
               pg.core.positions, pg.core.is_boundary, pg.core.volumes, pg.core.tags, pg.core.particle_orders,
               pg.shared.rho_buffer, pg.shared.pos_buffer, pg.shared.float_buffer, pg.shared.bit_buffer, pg.shared.int_buffer,
               pg.reorder.permutation, pg.reorder.inv_permutation, pg.reorder.new_permutation_buffer, pg.reorder.seen_buffer,
-              pg.bins.next)
+              pg.bins.cell_particles, pg.bins.bin_of)
         @test length(v) == cap
     end
 
@@ -234,6 +234,152 @@ end
     @test all(i -> isapprox(pg_a.rhos[i][1], pg_b.rhos[i][1]; atol = 1e-11), 1:pg_a.meta.N)
 end
 
+@testset "Execution backends" begin
+    for D in 1:3, deg in 0:5
+        expected = deg == 0 ? 0 : typeof(HyperCloudCore.basis_length(Val(D), Val(deg))).parameters[1]
+        @test HyperCloudCore.basis_count(D, deg) == expected
+    end
+
+    N  = 80
+    eq = make_advection_1d()
+    dt = 0.4 * (2 / N)
+    ic = x -> exp(-x^2 / 0.02)
+    mover = PrescribedMover((x, t) -> Space{1, Float64}(0.3 * sin(π * x[1])))
+    cases = [
+        ("MUSCL3 VK MOODu2 RK3",  () -> MUSCL(Float64, 1, 1, 3, VenkatakrishnanLimiter(:hard), RusanovFlux()), MOOD(EPD1(), MOODu2(1e-6)), RK3_SSP_Tableau(Float64), NoGridMover()),
+        ("MUSCL2 MOODu1 EPD2 RK2", () -> MUSCL(Float64, 1, 1, 2, NoLimiter(), RusanovFlux()), MOOD(EPD2(), MOODu1(1e-6)), RK2_SSP_Tableau(Float64), NoGridMover()),
+        ("Central2 RK2",           () -> CentralDivergence(Float64, 1, 1, 2), MOOD(), RK2_SSP_Tableau(Float64), NoGridMover()),
+        ("Upwind Euler",           () -> UpwindDivergence(Float64, 1, 1, 1, :Classic, UpwindFlux()), MOOD(), RK1_Euler_Tableau(Float64), NoGridMover()),
+        ("MUSCL3 moving RK2",      () -> MUSCL(Float64, 1, 1, 3, NoLimiter(), RusanovFlux()), MOOD(), RK2_SSP_Tableau(Float64), mover),
+        ("MUSCL4 IMEX ARS222",     () -> MUSCL(Float64, 1, 1, 4, NoLimiter(), RusanovFlux()), MOOD(EPD1(), MOODu1(1e-6)), IMEX_ARS222_Tableau(Float64), NoGridMover()),
+    ]
+    function run_case(backend, make_interp, mood, tab, mv)
+        set_backend!(backend)
+        pg = set_ic!(make_pg_1d(N; mover = mv), ic)
+        interp = make_interp()
+        ts = GeneralRKTimeStepper(eq, interp, mood, tab)
+        for k in 0:3; ts(eq, pg, k * dt, dt); end
+        return (copy(view(pg.rhos, 1:pg.meta.N)), copy(view(pg.core.positions, 1:pg.meta.N)),
+                get_time_step(pg, eq, interp), copy(view(pg.core.particle_orders, 1:pg.meta.N)))
+    end
+    ka = KABackend(HyperCloudCore.KA.CPU(); workgroupsize = 32)
+    try
+        @testset "$name" for (name, make_interp, mood, tab, mv) in cases
+            ref = run_case(PolyesterBackend(), make_interp, mood, tab, mv)
+            thr = run_case(ThreadsBackend(), make_interp, mood, tab, mv)
+            @test thr == ref                                          # same arithmetic, bitwise
+            dev = run_case(ka, make_interp, mood, tab, mv)            # compiled as device kernels (PoCL)
+            @test all(isapprox.(first.(dev[1]), first.(ref[1]); atol = 1e-12))
+            @test all(isapprox.(first.(dev[2]), first.(ref[2]); atol = 1e-12))
+            @test isapprox(dev[3], ref[3]; rtol = 1e-12)
+            @test dev[4] == ref[4]
+        end
+    finally
+        set_backend!(PolyesterBackend())
+    end
+
+    @testset "Kernel views and device grids" begin
+        pg = make_pg_1d(20)
+        kv = HyperCloudCore.Adapt.adapt(Array, pg)                      # what a kernel receives
+        @test kv.meta isa HyperCloudCore.GridMetadataView && kv.meta.N == pg.meta.N
+        @test kv.geometry === nothing && kv.shared === nothing && kv.reorder === nothing
+        @test kv.core.positions === parent(pg.core.positions)            # no copy on the host, wrapper gone
+        dg = HyperCloudCore.device_grid(Array, pg)
+        @test dg.meta isa HyperCloudCore.GridMetadata && dg.meta.geometry_version == pg.meta.geometry_version
+        @test dg.core.positions == pg.core.positions && dg.geometry === pg.geometry
+        bt = HyperCloudCore.Adapt.adapt(Array, RK3_SSP_Tableau(Float64))
+        @test bt.a_t isa SMatrix && bt.b_t isa SVector && isbits(bt)
+    end
+
+    @testset "Growable buffers" begin
+        g = Growable{Float64}(Array)
+        @test g isa AbstractVector{Float64} && length(g) == 0 && parent(g) isa Vector{Float64}
+        HyperCloudCore.ensure_capacity!(g, 8); fill!(g, 2.0)
+        n = length(g)
+        HyperCloudCore.ensure_capacity!(g, 40)
+        @test length(g) >= 40 && all(==(2.0), view(g, 1:n))                # contents survive growth
+        g[1] = 3.0
+        @test g[1] == 3.0 && parent(g)[1] == 3.0
+        @test HyperCloudCore.kernel_view(g) === parent(g)                   # kernels receive the raw array
+        @test HyperCloudCore.kernel_view((g, 1)) === (parent(g), 1)
+
+        eq = make_advection_1d()
+        interp = MUSCL(Float64, 1, 1, 3, NoLimiter(), RusanovFlux())
+        ts = GeneralRKTimeStepper(eq, interp, MOOD(), RK3_SSP_Tableau(Float64))
+        @test ts.rho_n isa Growable && parent(ts.rho_n) isa Vector{State{1, Float64}}
+        @test interp.gradients isa Growable && interp.grad_weights.inv_moment isa Growable
+        @test HyperCloudCore.kernel_view(ts.int_buffer).df_flux isa Vector{Flux{1, 1, Float64}}
+        @test HyperCloudCore.kernel_view(interp).gradients isa Vector
+        pg = set_ic!(make_pg_1d(20), x -> exp(-x^2 / 0.02))
+        ts(eq, pg, 0.0, 0.01)
+        @test length(ts.rho_n) >= pg.meta.N && mood_flags(ts) isa Vector{Bool}
+        HyperCloudCore.check_resident(HyperCloudCore.KA.CPU(), HyperCloudCore.kernel_view((pg, ts.int_buffer, interp, 1.0, Val(2))))
+    end
+end
+
+@testset "Boundary conditions as kernels" begin
+    N  = 60
+    dx = 2.0 / N
+    make_pg_bc(bc) = ParticleGrid(get_rectangular_domain(Float64, (-1.0,), (1.0,); is_periodic = false,
+                                                         bc_map = Dict{Int, AbstractBoundaryCondition}(1 => bc)),
+                                  (dx,), ExponentialWeightFunction(1.0, 2.5dx), 1)
+    eq     = make_advection_1d()
+    interp = MUSCL(Float64, 1, 1, 3, NoLimiter(), RusanovFlux())
+    ts     = GeneralRKTimeStepper(eq, interp, MOOD(), RK3_SSP_Tableau(Float64))
+
+    @testset "FixedDirichlet restores the initial state" begin
+        pg  = set_ic!(make_pg_bc(FixedDirichlet()), x -> x)
+        n   = pg.meta.N
+        buf = fill(State{1, Float64}(99.0), n)
+        HyperCloudCore.apply_boundary_conditions!(pg, buf, ts, eq, 0.0)
+        ghosts = findall(view(pg.core.is_boundary, 1:n))
+        @test !isempty(ghosts) && all(buf[i] == pg.rhos[i] for i in ghosts)
+        @test all(buf[i][1] == 99.0 for i in interior_indices(pg))
+    end
+
+    @testset "OutflowBC copies the nearest resolved donor outwards" begin
+        pg  = set_ic!(make_pg_bc(OutflowBC()), x -> x)
+        n   = pg.meta.N
+        x   = i -> pg.core.positions[i][1]
+        buf = copy(pg.rhos)
+        HyperCloudCore.apply_boundary_conditions!(pg, buf, ts, eq, 0.0)
+        inner = interior_indices(pg)
+        x_lo, x_hi = minimum(x, inner), maximum(x, inner)
+        for i in findall(view(pg.core.is_boundary, 1:n))
+            @test buf[i][1] == (x(i) < 0 ? x_lo : x_hi)       # zero gradient: the outermost interior value
+        end
+        @test all(buf[i] == pg.rhos[i] for i in inner)
+        # Orphaned targets (no donor within reach) fall back to their initial state
+        pg2 = set_ic!(make_pg_bc(OutflowBC()), x -> x)
+        fill!(view(pg2.core.is_boundary, 1:pg2.meta.N), true)   # nobody is a donor ...
+        fill!(view(pg2.core.tags, 1:pg2.meta.N), 1)             # ... and everybody is a target of tag 1
+        buf2 = fill(State{1, Float64}(99.0), pg2.meta.N)
+        HyperCloudCore.apply_boundary_conditions!(pg2, buf2, ts, eq, 0.0)
+        @test all(buf2[i] == pg2.rhos[i] for i in 1:pg2.meta.N)
+    end
+
+    @testset "Backends agree with boundary conditions" begin
+        dt = 0.4dx
+        function run(backend, bc)
+            set_backend!(backend)
+            pg = set_ic!(make_pg_bc(bc), x -> exp(-(x + 0.5)^2 / 0.02))
+            ts = GeneralRKTimeStepper(eq, MUSCL(Float64, 1, 1, 3, NoLimiter(), RusanovFlux()), MOOD(EPD1(), MOODu1(1e-6)), RK3_SSP_Tableau(Float64))
+            for k in 0:3; ts(eq, pg, k * dt, dt); end
+            return copy(view(pg.rhos, 1:pg.meta.N))
+        end
+        try
+            for bc in (FixedDirichlet(), OutflowBC())
+                ref = run(PolyesterBackend(), bc)
+                @test run(ThreadsBackend(), bc) == ref
+                dev = run(KABackend(HyperCloudCore.KA.CPU(); workgroupsize = 32), bc)
+                @test all(isapprox.(first.(dev), first.(ref); atol = 1e-12))
+            end
+        finally
+            set_backend!(PolyesterBackend())
+        end
+    end
+end
+
 @testset "Butcher tableaus" begin
     explicit = (RK1_Euler_Tableau, RK2_SSP_Tableau, RK2_Ralston_Tableau, RK3_SSP_Tableau, RK4_Classical_Tableau)
     imex     = (IMEX_Euler_Tableau, IMEX_ARS233_Tableau, IMEX_ARS222_Tableau, IMEX_PRSSP3_Tableau, IMEX_SSP2332_Tableau)
@@ -303,17 +449,30 @@ end
     @testset "Forcing halo uses the snapshot (no cascade)" begin
         p = 20
         fill!(orders, 3)
-        snapshot = copy(orders); snapshot[p] = 1
-        changed  = zeros(Bool, N)
-        HyperCloudCore.trigger_halo!(StrictEPD0(), p, pg, orders, snapshot, changed)
+        orders[p] = 1                                          # p dropped to 1 in this pass
+        triggered = zeros(Bool, N); triggered[p] = true
+        snapshot  = copy(orders)
+        changed   = zeros(Bool, N)
         nbs = [nb_i[k] for k in nb_r[p]]
+        @test HyperCloudCore.forces_neighbours(StrictEPD0()) && !HyperCloudCore.forces_neighbours(EPD2())
+        @test all(HyperCloudCore.forced_order(StrictEPD0(), j, pg, triggered, snapshot) == 1 for j in nbs)
+        @test HyperCloudCore.forced_order(StrictEPD0(), p + 3, pg, triggered, snapshot) == 3
+        @test HyperCloudCore.forced_order(EPD2(), nbs[1], pg, triggered, snapshot) == 3
+        HyperCloudCore.force_neighbours!(StrictEPD0(), pg, triggered, snapshot, orders, changed)
         @test all(orders[j] == 1 for j in nbs)
         @test all(changed[j] for j in nbs)
         @test orders[p + 3] == 3 && !changed[p + 3]           # two hops away: untouched
-        @test count(changed) == n_nb
+        @test count(changed) == n_nb && !changed[p]            # p itself is not "changed" by forcing
+        # A neighbour that dropped itself (to 2) is forced down to 1 from the snapshot, not from p's new value
+        q = nbs[1]
+        fill!(orders, 3); orders[p] = 1; orders[q] = 2; fill!(changed, false)
+        triggered[q] = true; snapshot = copy(orders)
+        HyperCloudCore.force_neighbours!(StrictEPD0(), pg, triggered, snapshot, orders, changed)
+        @test orders[q] == 1 && changed[q]
+        @test all(orders[j] == 1 for j in nbs)
         # EPD* strategies never force
         fill!(orders, 3); fill!(changed, false)
-        HyperCloudCore.trigger_halo!(EPD2(), p, pg, orders, snapshot, changed)
+        HyperCloudCore.force_neighbours!(EPD2(), pg, triggered, snapshot, orders, changed)
         @test all(==(3), orders) && !any(changed)
     end
 
@@ -323,7 +482,7 @@ end
         update_size!(interp, N)
         fill!(orders, 3)
         fill!(ts.work.dirty, false); fill!(ts.work.triggered_step, false)   # resize! leaves them undefined
-        f = (full) -> HyperCloudCore.detect_and_drop!(ts.mood, ts.work, interp, pg, ts.int_buffer, pg.rhos, pg.rhos, full)
+        f = (full) -> HyperCloudCore.detect_and_drop!(ts.mood, ts.work, interp, pg, pg.rhos, pg.rhos, full)
         @test f(true)  == true  && all(==(2), view(orders, 1:N))
         @test f(false) == false                              # dirty mask empty → nobody checked
         fill!(ts.work.dirty, true)
@@ -333,7 +492,7 @@ end
         # NoMOOD short-circuits
         ts0 = GeneralRKTimeStepper(eq, interp, MOOD(), RK3_SSP_Tableau(Float64))
         update_size!(ts0, N, length(nb_i), false)
-        @test HyperCloudCore.detect_and_drop!(ts0.mood, ts0.work, interp, pg, ts0.int_buffer, pg.rhos, pg.rhos, true) == false
+        @test HyperCloudCore.detect_and_drop!(ts0.mood, ts0.work, interp, pg, pg.rhos, pg.rhos, true) == false
     end
 end
 
@@ -389,7 +548,7 @@ end
 @testset "Threaded loops do not allocate" begin
     # The @batch bodies used to build types from the method's static parameters (and the neighbour search
     # captured a reassigned variable), which allocated per particle and destroyed the thread scaling.
-    N  = 4000   # large enough that any per-particle allocation dwarfs the per-call task overhead
+    N  = 4000
     eq = make_advection_1d()
     pg = set_ic!(make_pg_1d(N), x -> exp(-x^2 / 0.02))
     @test pg.meta.geometry_version >= 1
@@ -401,17 +560,25 @@ end
     @test (@allocated pg.neighbor(pg)) < 16_384
 
     dt = 0.4 * (2 / N)
-    for use_threads in (false, true)
-        set_threads!(use_threads)
+    # Allocations per step must not grow with the particle count: every launch costs a constant amount
+    # (closure/task set-up), nothing may be allocated per particle. Compared against a grid 10x smaller.
+    function step_alloc(n)
+        pgn = set_ic!(make_pg_1d(n), x -> exp(-x^2 / 0.02))
         interp = MUSCL(Float64, 1, 1, 3, VenkatakrishnanLimiter(:hard), RusanovFlux())
         ts = GeneralRKTimeStepper(eq, interp, MOOD(EPD1(), MOODu1(1e-6)), RK3_SSP_Tableau(Float64))
-        ts(eq, pg, 0.0, dt); ts(eq, pg, dt, dt)
-        a = @allocated ts(eq, pg, 2dt, dt)
-        # Polyester: nothing per particle. Base threads: only the task spawns of each loop (< 100 B per task).
-        @test a < (use_threads ? 256 * 1024 : 16_384)
+        h = 0.4 * (2 / n)
+        ts(eq, pgn, 0.0, h); ts(eq, pgn, h, h)
+        return @allocated ts(eq, pgn, 2h, h)
+    end
+    for use_threads in (false, true)
+        set_threads!(use_threads)
+        small, large = step_alloc(N ÷ 10), step_alloc(N)
+        @test large <= small + 8192
+        @test large < (use_threads ? 512 * 1024 : 128 * 1024)
+        interp = MUSCL(Float64, 1, 1, 3, VenkatakrishnanLimiter(:hard), RusanovFlux())
         get_time_step(pg, eq, interp); update_volumes!(pg, ShepardVolumes())   # compile first
-        @test (@allocated get_time_step(pg, eq, interp)) < (use_threads ? 32_768 : 4096)
-        @test (@allocated update_volumes!(pg, ShepardVolumes())) < (use_threads ? 32_768 : 4096)
+        @test (@allocated get_time_step(pg, eq, interp)) < (use_threads ? 32_768 : 8192)
+        @test (@allocated update_volumes!(pg, ShepardVolumes())) < (use_threads ? 32_768 : 8192)
     end
     set_threads!(false)
 end

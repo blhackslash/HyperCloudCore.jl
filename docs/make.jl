@@ -14,6 +14,7 @@ makedocs(
     ),
     pages = [
         "Home" => "index.md",
+        "Backends & GPU roadmap" => "gpu_roadmap.md",
         "Particle Grid" => [
             "Overview"            => "particle_grids/overview.md",
             "Domains"             => "particle_grids/domains.md",

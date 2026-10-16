@@ -3,7 +3,8 @@
 
 Requires `real_type(context)`, `[:D]`, `[:M]`, `[:Domain]`, `[:WeightConf]`. Stores `:max_dx` in the
 context, builds the weight function, the grid mover and the volume estimator from the same
-`Grid` namespace, and sets `context[:Grid]`.
+`Grid` namespace, and sets `context[:Grid]`. The grid is built on the host and moved to
+`storage_type(context)` with `device_grid` if that is not `Array`.
 """
 function build_particle_grid(grid_conf::Dict, context::Dict)
     T = real_type(context)
@@ -24,6 +25,8 @@ function build_particle_grid(grid_conf::Dict, context::Dict)
 
     pg = ParticleGrid(geom, dxs, weight_func, M;
                       randomness = randomness, rng = rng, mover = mover, volume_estimator = vol)
+    storage = storage_type(context)
+    storage === Array || (pg = device_grid(storage, pg))
     context[:Grid] = pg
     return pg
 end

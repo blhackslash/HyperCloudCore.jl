@@ -39,6 +39,9 @@ Static vector alias representing flux Jacobians across all `D` spatial dimension
 """
 const Velocity{D, M, T, L} = SVector{D, SMatrix{M, M, T, L}}
 
+include("Backend.jl")
+include("Growable.jl")
+include("NeighbourViews.jl")
 include("Utils.jl")
 include("Types.jl")
 include("API.jl")
@@ -51,6 +54,7 @@ include("./TimeStepping/TimeSteppers.jl")
 include("./Interpolation/Interpolators.jl")
 
 include("./Builders/Builders.jl")
+include("DeviceAdapt.jl")
 
 
 

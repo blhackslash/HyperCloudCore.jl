@@ -27,23 +27,39 @@ struct EPD2       <: Halo{0} end
 "Edge degrees `(k_i, k_j)`; when a particle drops, its neighbours are lowered to its order (one hop, no cascade)."
 struct StrictEPD0 <: Halo{1} end
 
-# --- Forcing: NoStrategy and Halo{0} land on the no-op ---
-@inline trigger_halo!(::MOODStrategy, p_idx, pg, orders, snapshot, changed) = nothing
+# --- Forcing (pull formulation) ---
+# Each particle computes the order its triggered neighbours force on it from the post-decrement
+# `snapshot`, so a forced particle never cascades further, no two particles write the same entry
+# (no atomics) and the result does not depend on the order of the loop. This relies on the neighbour
+# relation being symmetric, which the search guarantees (one radius for all particles, wrapped distances).
 
-# Reads the post-decrement snapshot so a forced particle never cascades further.
-@inline function trigger_halo!(::Halo{1}, p_idx, pg, orders, snapshot, changed)
-    nb_slices   = pg.neighbor.ranges
-    nb_indices  = pg.neighbor.indices
-    is_boundary = pg.core.is_boundary
-    o_p = snapshot[p_idx]
-    @inbounds for k in nb_slices[p_idx]
-        j = nb_indices[k]
-        if !is_boundary[j] && orders[j] > o_p
-            orders[j]  = o_p
-            changed[j] = true
-        end
+"""
+    forces_neighbours(strategy) -> Bool
+
+`true` if the strategy lowers the orders of neighbours of a dropped particle (the forcing pass is
+skipped otherwise). `NoStrategy` and `Halo{0}` do not force.
+"""
+@inline forces_neighbours(::MOODStrategy) = false
+@inline forces_neighbours(::Halo{1}) = true
+
+"""
+    forced_order(strategy, j, pg, triggered, snapshot) -> Int
+
+The order particle `j` ends up with after forcing, given the particles that dropped in this pass
+(`triggered`) and the `snapshot` of all orders taken after the decrement. Called for interior
+particles only. Defaults to `snapshot[j]` (no forcing).
+"""
+@inline forced_order(::MOODStrategy, j, pg, triggered, snapshot) = @inbounds snapshot[j]
+
+@inline function forced_order(::Halo{1}, j, pg, triggered, snapshot)
+    nb_slices  = pg.neighbor.ranges
+    nb_indices = pg.neighbor.indices
+    o = @inbounds snapshot[j]
+    @inbounds for k in nb_slices[j]
+        p = nb_indices[k]
+        triggered[p] && (o = min(o, snapshot[p]))
     end
-    return nothing
+    return o
 end
 
 # --- Interface degree resolution (used by MUSCL) ---
@@ -102,7 +118,7 @@ struct OnlyMOOD <: MOODCriterion end
 
 MOOD(criterion::MOODCriterion) = MOOD(EPD1(), criterion)
 
-@inline function findLocalExtrema(rho_i::State{M, T}, nb_slice::UnitRange{Int}, neighbor_fs::AbstractVector{State{M, T}}) where {M, T}
+@inline function findLocalExtrema(rho_i::State{M, T}, nb_slice::OrdinalRange{Int, Int}, neighbor_fs::AbstractVector{State{M, T}}) where {M, T}
     minU = rho_i; maxU = rho_i
     @inbounds for k in nb_slice
         rho_j = neighbor_fs[k]
@@ -112,7 +128,7 @@ MOOD(criterion::MOODCriterion) = MOOD(EPD1(), criterion)
     return minU, maxU
 end
 
-@inline function findLocalExtremaAbs(c_i::State{M, T}, curve_idx::Int, nb_slice::UnitRange{Int},
+@inline function findLocalExtremaAbs(c_i::State{M, T}, curve_idx::Int, nb_slice::OrdinalRange{Int, Int},
                                      neighbor_indices::AbstractVector{Int}, grad_vec::AbstractVector) where {M, T}
     mini = c_i; maxi = c_i
     minAbs = abs.(c_i); maxAbs = minAbs
@@ -125,8 +141,9 @@ end
     return mini, maxi, minAbs, maxAbs
 end
 
-@inline function _dmp_fails(δ::T, rho_i::State{M, T}, nb_slice, newRho::State{M, T}, int_buffer_f) where {M, T}
-    minU, maxU = findLocalExtrema(rho_i, nb_slice, int_buffer_f)
+# `neighbour_fs` is slot-indexed: the neighbour states of the previous stage (`neighbour_states(U_prev, pg)`).
+@inline function _dmp_fails(δ::T, rho_i::State{M, T}, nb_slice, newRho::State{M, T}, neighbour_fs) where {M, T}
+    minU, maxU = findLocalExtrema(rho_i, nb_slice, neighbour_fs)
     for m in 1:M
         if abs(maxU[m] - minU[m]) >= δ^3 && (newRho[m] < minU[m] - δ || newRho[m] > maxU[m] + δ)
             return true
@@ -139,18 +156,18 @@ end
 (m::MOOD{<:MOODStrategy, OnlyMOOD})(args...) = true
 
 function (m::MOOD{<:MOODStrategy, MOODu1{T}})(
-    g::DivergenceInterpolator, p_idx::Int, rho_i::State{M, T}, nb_slice::UnitRange{Int},
-    newRho::State{M, T}, pg::ParticleGrid{D, M, T}, int_buffer_f::AbstractVector{State{M, T}}
+    g::DivergenceInterpolator, p_idx::Int, rho_i::State{M, T}, nb_slice::OrdinalRange{Int, Int},
+    newRho::State{M, T}, pg::ParticleGrid{D, M, T}, U_prev::AbstractVector{State{M, T}}
 ) where {D, M, T}
-    return _dmp_fails(m.criterion.d, rho_i, nb_slice, newRho, int_buffer_f)
+    return _dmp_fails(m.criterion.d, rho_i, nb_slice, newRho, neighbour_states(U_prev, pg))
 end
 
 function (m::MOOD{<:MOODStrategy, MOODu2{T}})(
-    g::DivergenceInterpolator, p_idx::Int, rho_i::State{M, T}, nb_slice::UnitRange{Int},
-    newRho::State{M, T}, pg::ParticleGrid{D, M, T}, int_buffer_f::AbstractVector{State{M, T}}
+    g::DivergenceInterpolator, p_idx::Int, rho_i::State{M, T}, nb_slice::OrdinalRange{Int, Int},
+    newRho::State{M, T}, pg::ParticleGrid{D, M, T}, U_prev::AbstractVector{State{M, T}}
 ) where {D, M, T}
     δ = m.criterion.d
-    _dmp_fails(δ, rho_i, nb_slice, newRho, int_buffer_f) || return false
+    _dmp_fails(δ, rho_i, nb_slice, newRho, neighbour_states(U_prev, pg)) || return false
 
     # The curvature override needs cached gradients with a degree-2 reconstruction, i.e. a scheme
     # that caches them (trait) at consistency order ≥ 3. Otherwise behave like MOODu1.
@@ -179,38 +196,93 @@ end
 # =========================================================================
 
 
+# Kernel body of the candidate check (see Backend.jl).
+@inline function _mood_flag!(p, mood, interp, pg, rho_prev, rho_cand, nb_slices, is_boundary, dirty, triggered, full)
+    (is_boundary[p] || !(full || dirty[p])) && return nothing
+    mood(interp, p, rho_prev[p], nb_slices[p], rho_cand[p], pg, rho_prev) && (triggered[p] = true)
+    return nothing
+end
+
+# Kernel body of the decrement: a flagged particle drops one order; one already at order 1 is un-flagged
+# so it does not force its neighbours.
+@inline function _mood_drop!(p, orders, triggered, changed, triggered_step)
+    triggered[p] || return nothing
+    if orders[p] > 1
+        orders[p] -= 1
+        changed[p] = true
+        triggered_step[p] = true              # diagnostic, accumulated per step
+    else
+        triggered[p] = false
+    end
+    return nothing
+end
+
+# Kernel body of the forcing pass: interior particles pull the order their triggered neighbours force.
+@inline function _mood_force!(j, strategy, pg, is_boundary, triggered, snapshot, orders, changed)
+    is_boundary[j] && return nothing
+    o = forced_order(strategy, j, pg, triggered, snapshot)
+    if o < snapshot[j]
+        orders[j]  = o
+        changed[j] = true
+    end
+    return nothing
+end
+
+# Kernel body of one hop of `expand_mask!`: a particle is marked if it or any neighbour was.
+@inline function _expand_body!(j, scratch, mask, nb_slices, nb_indices)
+    m = mask[j]
+    if !m
+        @inbounds for k in nb_slices[j]
+            if mask[nb_indices[k]]
+                m = true
+                break
+            end
+        end
+    end
+    scratch[j] = m
+    return nothing
+end
+
 """
     expand_mask!(mask, scratch, pg, hops)
 
 Marks every particle within `hops` topological hops of a marked one (boundary particles included;
-the compute passes skip them).
+the compute passes skip them). One kernel pass per hop.
 """
-function expand_mask!(mask::Vector{Bool}, scratch::Vector{Bool}, pg::ParticleGrid, hops::Int)
-    N = pg.meta.N
-    nb_slices, nb_indices = pg.neighbor.ranges, pg.neighbor.indices
+function expand_mask!(mask::AbstractVector{Bool}, scratch::AbstractVector{Bool}, pg::ParticleGrid, hops::Int)
+    N  = pg.meta.N
+    nb = pg.neighbor
     for _ in 1:hops
-        copyto!(scratch, 1, mask, 1, N)
-        @inbounds for p in 1:N
-            if mask[p]
-                for k in nb_slices[p]; scratch[nb_indices[k]] = true; end
-            end
-        end
+        foreach_particle(_expand_body!, get_backend(), N, (scratch, mask, nb.ranges, nb.indices))
         copyto!(mask, 1, scratch, 1, N)
     end
     return nothing
 end
 
 """
-    detect_and_drop!(mood, work, interp, pg, int_buffer, rho_prev, rho_cand, full) -> Bool
+    force_neighbours!(strategy, pg, triggered, snapshot, orders, changed)
 
-Checks `rho_cand` against the neighbourhood of `rho_prev` (neighbour states in `int_buffer.f`,
+Forcing pass of `detect_and_drop!`: lowers interior particles to `forced_order` from the `snapshot`
+and marks them in `changed`.
+"""
+function force_neighbours!(strategy::MOODStrategy, pg::ParticleGrid, triggered, snapshot, orders, changed)
+    foreach_particle(_mood_force!, get_backend(), pg.meta.N,
+        (strategy, pg, pg.core.is_boundary, triggered, snapshot, orders, changed))
+    return nothing
+end
+
+"""
+    detect_and_drop!(mood, work, interp, pg, rho_prev, rho_cand, full) -> Bool
+
+Checks `rho_cand` against the neighbourhood of `rho_prev` (neighbour states read from `rho_prev`,
 gradients cached in `interp`) for all interior particles (`full`) or only those in `work.dirty`.
 Drops one order on every flagged particle, applies forcing halos from a snapshot, and records the
-set of changed orders in `work.changed`. Returns `true` if any order changed.
+set of changed orders in `work.changed`. Returns `true` if any order changed. Three kernel passes
+(check, decrement, forcing) and one reduction; nothing runs on the host.
 """
 function detect_and_drop!(
     mood::MOOD, work::MOODWork, interp::DivergenceInterpolator, pg::ParticleGrid{D, M, T},
-    int_buffer::InteractionBuffer{D, M, T}, rho_prev::AbstractVector, rho_cand::AbstractVector, full::Bool
+    rho_prev::AbstractVector, rho_cand::AbstractVector, full::Bool
 ) where {D, M, T}
     mood.criterion isa NoMOOD && return false
 
@@ -218,40 +290,23 @@ function detect_and_drop!(
     nb_slices   = pg.neighbor.ranges
     is_boundary = pg.core.is_boundary
     orders      = pg.core.particle_orders
-    triggered, changed, dirty, snapshot = work.triggered, work.changed, work.dirty, work.snapshot
-    use_threads = get_use_threads()
+    triggered, changed, dirty, snapshot = parent(work.triggered), parent(work.changed), parent(work.dirty), parent(work.snapshot)
+    triggered_step = parent(work.triggered_step)
 
     fill!(view(triggered, 1:N), false)
     fill!(view(changed, 1:N), false)
 
-    # 1. Candidate check (parallel; per-particle writes only)
-    @smart_parallel use_threads for p in 1:N
-        if is_boundary[p] || !(full || dirty[p]); continue; end
-        if mood(interp, p, rho_prev[p], nb_slices[p], rho_cand[p], pg, int_buffer.f)
-            triggered[p] = true
-        end
-    end
+    # 1. Candidate check (per-particle writes only)
+    foreach_particle(_mood_flag!, get_backend(), N,
+        (mood, interp, pg, rho_prev, rho_cand, nb_slices, is_boundary, dirty, triggered, full))
 
-    # 2. Decrement (serial). Particles already at order 1 are un-flagged so they don't force.
-    any_dropped = false
-    @inbounds for p in 1:N
-        if triggered[p]
-            if orders[p] > 1
-                orders[p] -= 1
-                changed[p] = true
-                work.triggered_step[p] = true         # diagnostic, accumulated per step
-                any_dropped = true
-            else
-                triggered[p] = false
-            end
-        end
-    end
-    any_dropped || return false
+    # 2. Decrement. Particles already at order 1 are un-flagged so they don't force.
+    foreach_particle(_mood_drop!, get_backend(), N, (orders, triggered, changed, triggered_step))
+    any(view(changed, 1:N)) || return false
 
-    # 3. Forcing from a snapshot (serial, no cascade)
+    # 3. Forcing from a snapshot (no cascade)
+    forces_neighbours(mood.strategy) || return true
     copyto!(snapshot, 1, orders, 1, N)
-    @inbounds for p in 1:N
-        triggered[p] && trigger_halo!(mood.strategy, p, pg, orders, snapshot, changed)
-    end
+    force_neighbours!(mood.strategy, pg, triggered, snapshot, orders, changed)
     return true
 end

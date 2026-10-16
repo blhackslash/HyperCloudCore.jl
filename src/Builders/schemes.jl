@@ -17,7 +17,7 @@ function build_scheme(::Val{:MUSCL}, conf::Dict, context::Dict)
     order = conf[:order]::Int
     div_order = get(conf,:MLS_order,0)::Int 
     
-    return MUSCL(T, D, M, order, limiter, flux; div_order=div_order)
+    return MUSCL(T, D, M, order, limiter, flux; div_order = div_order, storage = storage_type(context))
 end
 
 function build_scheme(::Val{:Upwind}, conf::Dict, context::Dict)
