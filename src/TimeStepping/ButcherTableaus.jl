@@ -51,6 +51,16 @@ Number of stages `s` of the tableau.
 @inline num_stages(bt::IMEXButcherTableau) = length(bt.b)
 
 """
+    static_tableau(bt::IMEXButcherTableau, ::Val{S}) -> IMEXButcherTableau
+
+`bt` with `SMatrix` / `SVector` components, `S = num_stages(bt)`: a bits object with a concrete type
+that kernel bodies can take as an argument. `GeneralRKTimeStepper` stores its tableau in this form.
+"""
+static_tableau(bt::IMEXButcherTableau{T}, ::Val{S}) where {T, S} = IMEXButcherTableau(
+    SMatrix{S, S, T}(bt.a), SMatrix{S, S, T}(bt.a_t), SVector{S, T}(bt.c), SVector{S, T}(bt.c_t),
+    SVector{S, T}(bt.b), SVector{S, T}(bt.b_t))
+
+"""
     RKButcherTableau(a, b, c) -> IMEXButcherTableau
 
 Wraps an explicit tableau `(a, b, c)` into an `IMEXButcherTableau` with a zero implicit part.

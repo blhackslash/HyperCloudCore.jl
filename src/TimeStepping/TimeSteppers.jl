@@ -138,13 +138,14 @@ struct GeneralRKTimeStepper{D, M, T, PDE <: HyperbolicPDE, G <: DivergenceInterp
                             IST <: Tuple{Vararg{AbstractImplicitSourceTerm}},
                             VE <: Union{Nothing, VolumeEstimator}, S,
                             GS <: Growable{State{M, T}}, GP <: Growable{Space{D, T}},
-                            IB <: InteractionBuffer{D, M, T}, WORK <: MOODWork} <: TimeStepper
+                            IB <: InteractionBuffer{D, M, T}, WORK <: MOODWork,
+                            BT <: IMEXButcherTableau{T}} <: TimeStepper
     pde::PDE
     divergence_interpolator::G
     mood::MO
     explicit_sources::EST
     implicit_sources::IST
-    tableau::IMEXButcherTableau{T}
+    tableau::BT          # static form (`static_tableau`): a bits kernel argument of concrete type
     reset_orders_per_stage::Bool
     full_search_per_stage::Bool
     volume_estimator::VE
@@ -172,13 +173,14 @@ struct GeneralRKTimeStepper{D, M, T, PDE <: HyperbolicPDE, G <: DivergenceInterp
         volume_estimator::VE = ShepardVolumes(), storage::Type{AT} = Array
     ) where {D, M, T, G, MO <: MOOD, EST <: Tuple{Vararg{AbstractExplicitSourceTerm}}, IST <: Tuple{Vararg{AbstractImplicitSourceTerm}},
              VE <: Union{Nothing, VolumeEstimator}, AT <: AbstractArray}
-        s = num_stages(tableau)
+        s  = num_stages(tableau)
+        bt = static_tableau(tableau, Val(s))
         states    = () -> Growable{State{M, T}}(AT)
         positions = () -> Growable{Space{D, T}}(AT)
         ib   = InteractionBuffer{D, M, T}(AT)
         work = MOODWork(AT)
-        new{D, M, T, typeof(pde), G, MO, EST, IST, VE, s, typeof(states()), typeof(positions()), typeof(ib), typeof(work)}(
-            pde, div_interp, mood, explicit_sources, implicit_sources, tableau,
+        new{D, M, T, typeof(pde), G, MO, EST, IST, VE, s, typeof(states()), typeof(positions()), typeof(ib), typeof(work), typeof(bt)}(
+            pde, div_interp, mood, explicit_sources, implicit_sources, bt,
             reset_orders_per_stage, full_search_per_stage, volume_estimator,
             states(), states(),
             ntuple(_ -> states(), s), ntuple(_ -> states(), s), ntuple(_ -> states(), s),

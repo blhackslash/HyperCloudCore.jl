@@ -49,11 +49,10 @@ Adapt.adapt_structure(to, m::MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER}) where 
     MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER}(m.interpolators, m.limiter, m.flux, adapt(to, m.gradients),
                                                 adapt(to, m.grad_weights), adapt(to, m.div_weights))
 
-function Adapt.adapt_structure(to, bt::IMEXButcherTableau{T}) where {T}
-    s = num_stages(bt)
-    return IMEXButcherTableau(SMatrix{s, s, T}(bt.a), SMatrix{s, s, T}(bt.a_t), SVector{s, T}(bt.c),
-                              SVector{s, T}(bt.c_t), SVector{s, T}(bt.b), SVector{s, T}(bt.b_t))
-end
+# The time stepper holds a static tableau (bits, concrete type): passed through unchanged. A host tableau is
+# converted with its runtime stage count, which inference cannot see; keep such tableaus out of hot launches.
+Adapt.adapt_structure(to, bt::IMEXButcherTableau{T, <:SMatrix, <:SVector}) where {T} = bt
+Adapt.adapt_structure(to, bt::IMEXButcherTableau) = static_tableau(bt, Val(num_stages(bt)))
 
 """
     device_grid(ArrayType, pg::ParticleGrid) -> ParticleGrid

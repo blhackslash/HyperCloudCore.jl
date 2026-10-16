@@ -79,7 +79,14 @@ Runs `body(i, args...)` for `i in 1:N` on `backend`. `body` must be a kernel bod
 through `kernel_view` first; on a `KABackend` every array among them must live on that backend.
 """
 function foreach_particle(body::F, ::PolyesterBackend, N::Int, args::Tuple) where {F}
-    kargs = kernel_view(args)
+    return _polyester_loop(body, N, kernel_view(args))
+end
+
+# Function barrier: with a single Julia thread `@batch` runs the loop inline instead of through its closure,
+# so an argument tuple whose type is not inferred here would make every `body` call a dynamic dispatch
+# that boxes its arguments (per particle). The barrier specialises the loop on the runtime types, as the
+# closures of the threaded paths do.
+function _polyester_loop(body::F, N::Int, kargs::A) where {F, A}
     @batch per=core for i in 1:N
         body(i, kargs...)
     end
