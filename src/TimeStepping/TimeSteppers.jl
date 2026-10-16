@@ -15,14 +15,16 @@ struct MOODWork{GB <: Growable{Bool}, GI <: Growable{Int}}
     scratch::GB
     snapshot::GI
     triggered_step::GB
+    N::Base.RefValue{Int}           # particles of the last `update_size!`: the active part of the masks
 end
 MOODWork(::Type{AT} = Array) where {AT <: AbstractArray} =
-    MOODWork(Growable{Bool}(AT), Growable{Bool}(AT), Growable{Bool}(AT), Growable{Bool}(AT), Growable{Int}(AT), Growable{Bool}(AT))
+    MOODWork(Growable{Bool}(AT), Growable{Bool}(AT), Growable{Bool}(AT), Growable{Bool}(AT), Growable{Int}(AT), Growable{Bool}(AT), Ref(0))
 
 function update_size!(w::MOODWork, N::Int)
     ensure_capacity!(w.triggered, N); ensure_capacity!(w.changed, N)
     ensure_capacity!(w.dirty, N);     ensure_capacity!(w.scratch, N)
     ensure_capacity!(w.snapshot, N);  ensure_capacity!(w.triggered_step, N)
+    w.N[] = N
     return nothing
 end
 
@@ -209,8 +211,13 @@ end
 GeneralRKTimeStepper(pde::HyperbolicPDE{D, M, T}, div_interp, mood::MOOD, tableau::IMEXButcherTableau{T}; kwargs...) where {D, M, T} =
     GeneralRKTimeStepper(pde, div_interp, mood, (), (), tableau; kwargs...)
 
-"Per-step diagnostic: `true` for every particle that dropped an order during the last step."
-mood_flags(ts::GeneralRKTimeStepper) = parent(ts.work.triggered_step)
+"""
+    mood_flags(ts::GeneralRKTimeStepper) -> AbstractVector{Bool}
+
+Per-step diagnostic: `true` for every particle that dropped an order during the last step. A view of the
+stepper's mask over the particles of that step (the buffer behind it is over-allocated).
+"""
+mood_flags(ts::GeneralRKTimeStepper) = view(parent(ts.work.triggered_step), 1:ts.work.N[])
 
 @inline _is_moving(pg::ParticleGrid) = !(pg.mover isa NoGridMover)
 

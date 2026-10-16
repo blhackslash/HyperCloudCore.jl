@@ -312,7 +312,7 @@ end
         @test HyperCloudCore.kernel_view(interp).gradients isa Vector
         pg = set_ic!(make_pg_1d(20), x -> exp(-x^2 / 0.02))
         ts(eq, pg, 0.0, 0.01)
-        @test length(ts.rho_n) >= pg.meta.N && mood_flags(ts) isa Vector{Bool}
+        @test length(ts.rho_n) >= pg.meta.N && mood_flags(ts) isa AbstractVector{Bool} && length(mood_flags(ts)) == pg.meta.N
         HyperCloudCore.check_resident(HyperCloudCore.KA.CPU(), HyperCloudCore.kernel_view((pg, ts.int_buffer, interp, 1.0, Val(2))))
     end
 end
@@ -514,7 +514,7 @@ end
             for k in 0:4; ts(eq, pg, k * dt, dt); end
             @test all(r -> isfinite(r[1]), pg.rhos)
             @test isapprox(sum(r[1] for r in pg.rhos), mass0; rtol = 1e-2)   # collocation: not exactly conservative
-            @test length(mood_flags(ts)) >= pg.meta.N
+            @test length(mood_flags(ts)) == pg.meta.N
             @test all(o -> 1 <= o <= 3, view(pg.core.particle_orders, 1:pg.meta.N))
         end
     end
@@ -562,25 +562,33 @@ end
     dt = 0.4 * (2 / N)
     # Allocations per step must not grow with the particle count: every launch costs a constant amount
     # (closure/task set-up), nothing may be allocated per particle. Compared against a grid 10x smaller.
+    # The warm-up steps until MOOD has triggered once, so the trigger path (first reached at the third
+    # step of this profile) is compiled before the measurement; the minimum over a few steps leaves out
+    # the extra launches of a step with a trigger.
     function step_alloc(n)
         pgn = set_ic!(make_pg_1d(n), x -> exp(-x^2 / 0.02))
         interp = MUSCL(Float64, 1, 1, 3, VenkatakrishnanLimiter(:hard), RusanovFlux())
         ts = GeneralRKTimeStepper(eq, interp, MOOD(EPD1(), MOODu1(1e-6)), RK3_SSP_Tableau(Float64))
         h = 0.4 * (2 / n)
-        ts(eq, pgn, 0.0, h); ts(eq, pgn, h, h)
-        return @allocated ts(eq, pgn, 2h, h)
+        k = 0
+        while !any(mood_flags(ts)) && k < 10
+            ts(eq, pgn, k * h, h); k += 1
+        end
+        @test any(mood_flags(ts))
+        return minimum(@allocated(ts(eq, pgn, (k + j) * h, h)) for j in 0:2)
     end
-    for use_threads in (false, true)
-        set_threads!(use_threads)
+    for backend in (PolyesterBackend(), ThreadsBackend())
+        set_backend!(backend)
+        tasks = backend isa ThreadsBackend                 # `Threads.@threads` spawns a task per thread and launch
         small, large = step_alloc(N ÷ 10), step_alloc(N)
         @test large <= small + 8192
-        @test large < (use_threads ? 512 * 1024 : 128 * 1024)
+        @test large < (tasks ? 256 * 1024 : 16 * 1024)
         interp = MUSCL(Float64, 1, 1, 3, VenkatakrishnanLimiter(:hard), RusanovFlux())
         get_time_step(pg, eq, interp); update_volumes!(pg, ShepardVolumes())   # compile first
-        @test (@allocated get_time_step(pg, eq, interp)) < (use_threads ? 32_768 : 8192)
-        @test (@allocated update_volumes!(pg, ShepardVolumes())) < (use_threads ? 32_768 : 8192)
+        @test (@allocated get_time_step(pg, eq, interp)) < (tasks ? 32_768 : 8192)
+        @test (@allocated update_volumes!(pg, ShepardVolumes())) < (tasks ? 32_768 : 8192)
     end
-    set_threads!(false)
+    set_backend!(PolyesterBackend())
 end
 
 @testset "Moving grids" begin
