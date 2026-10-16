@@ -24,6 +24,7 @@
 # | `:Flux`, `:Limiter`, `:MOOD`, `:Scheme`, `:Tableau` | the respective builders | `build_scheme`, `build_timestepper` |
 # | `:ExplicitSources`, `:ImplicitSources` | caller | `build_timestepper` |
 # | `:Storage` (array type, default `Array`) | caller | `build_particle_grid` (`device_grid`), `build_scheme`, `build_timestepper` |
+# | `:MemoryLimit` (bytes), `:MemoryTolerance`, `:SlotsPerParticle` | caller | `build_timestepper` (`reserve!`; stores the reservation in `:Memory`) |
 #
 # Namespaces
 #

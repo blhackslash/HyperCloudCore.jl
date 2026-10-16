@@ -15,14 +15,16 @@ struct MOODWork{GB <: Growable{Bool}, GI <: Growable{Int}}
     scratch::GB
     snapshot::GI
     triggered_step::GB
+    N::Base.RefValue{Int}           # particles of the last `update_size!`: the active part of the masks
 end
 MOODWork(::Type{AT} = Array) where {AT <: AbstractArray} =
-    MOODWork(Growable{Bool}(AT), Growable{Bool}(AT), Growable{Bool}(AT), Growable{Bool}(AT), Growable{Int}(AT), Growable{Bool}(AT))
+    MOODWork(Growable{Bool}(AT), Growable{Bool}(AT), Growable{Bool}(AT), Growable{Bool}(AT), Growable{Int}(AT), Growable{Bool}(AT), Ref(0))
 
 function update_size!(w::MOODWork, N::Int)
     ensure_capacity!(w.triggered, N); ensure_capacity!(w.changed, N)
     ensure_capacity!(w.dirty, N);     ensure_capacity!(w.scratch, N)
     ensure_capacity!(w.snapshot, N);  ensure_capacity!(w.triggered_step, N)
+    w.N[] = N
     return nothing
 end
 
@@ -138,13 +140,14 @@ struct GeneralRKTimeStepper{D, M, T, PDE <: HyperbolicPDE, G <: DivergenceInterp
                             IST <: Tuple{Vararg{AbstractImplicitSourceTerm}},
                             VE <: Union{Nothing, VolumeEstimator}, S,
                             GS <: Growable{State{M, T}}, GP <: Growable{Space{D, T}},
-                            IB <: InteractionBuffer{D, M, T}, WORK <: MOODWork} <: TimeStepper
+                            IB <: InteractionBuffer{D, M, T}, WORK <: MOODWork,
+                            BT <: IMEXButcherTableau{T}} <: TimeStepper
     pde::PDE
     divergence_interpolator::G
     mood::MO
     explicit_sources::EST
     implicit_sources::IST
-    tableau::IMEXButcherTableau{T}
+    tableau::BT          # static form (`static_tableau`): a bits kernel argument of concrete type
     reset_orders_per_stage::Bool
     full_search_per_stage::Bool
     volume_estimator::VE
@@ -172,13 +175,14 @@ struct GeneralRKTimeStepper{D, M, T, PDE <: HyperbolicPDE, G <: DivergenceInterp
         volume_estimator::VE = ShepardVolumes(), storage::Type{AT} = Array
     ) where {D, M, T, G, MO <: MOOD, EST <: Tuple{Vararg{AbstractExplicitSourceTerm}}, IST <: Tuple{Vararg{AbstractImplicitSourceTerm}},
              VE <: Union{Nothing, VolumeEstimator}, AT <: AbstractArray}
-        s = num_stages(tableau)
+        s  = num_stages(tableau)
+        bt = static_tableau(tableau, Val(s))
         states    = () -> Growable{State{M, T}}(AT)
         positions = () -> Growable{Space{D, T}}(AT)
         ib   = InteractionBuffer{D, M, T}(AT)
         work = MOODWork(AT)
-        new{D, M, T, typeof(pde), G, MO, EST, IST, VE, s, typeof(states()), typeof(positions()), typeof(ib), typeof(work)}(
-            pde, div_interp, mood, explicit_sources, implicit_sources, tableau,
+        new{D, M, T, typeof(pde), G, MO, EST, IST, VE, s, typeof(states()), typeof(positions()), typeof(ib), typeof(work), typeof(bt)}(
+            pde, div_interp, mood, explicit_sources, implicit_sources, bt,
             reset_orders_per_stage, full_search_per_stage, volume_estimator,
             states(), states(),
             ntuple(_ -> states(), s), ntuple(_ -> states(), s), ntuple(_ -> states(), s),
@@ -207,8 +211,13 @@ end
 GeneralRKTimeStepper(pde::HyperbolicPDE{D, M, T}, div_interp, mood::MOOD, tableau::IMEXButcherTableau{T}; kwargs...) where {D, M, T} =
     GeneralRKTimeStepper(pde, div_interp, mood, (), (), tableau; kwargs...)
 
-"Per-step diagnostic: `true` for every particle that dropped an order during the last step."
-mood_flags(ts::GeneralRKTimeStepper) = parent(ts.work.triggered_step)
+"""
+    mood_flags(ts::GeneralRKTimeStepper) -> AbstractVector{Bool}
+
+Per-step diagnostic: `true` for every particle that dropped an order during the last step. A view of the
+stepper's mask over the particles of that step (the buffer behind it is over-allocated).
+"""
+mood_flags(ts::GeneralRKTimeStepper) = view(parent(ts.work.triggered_step), 1:ts.work.N[])
 
 @inline _is_moving(pg::ParticleGrid) = !(pg.mover isa NoGridMover)
 

@@ -10,8 +10,6 @@ set_backend!(KernelAbstractions.CPU())      # KernelAbstractions kernels, compil
 set_backend!(CUDABackend())                 # from CUDA.jl (likewise ROCBackend(), MetalBackend(), oneAPIBackend())
 ```
 
-`set_threads!(true/false)` still selects the Threads / Polyester backend.
-
 ## What runs as a kernel today
 
 | pass | kernel body | file |
@@ -58,6 +56,47 @@ interp = MUSCL(Float64, D, M, 3, NoLimiter(), RusanovFlux(); storage = ROCArray)
 ts     = GeneralRKTimeStepper(eq, interp, MOOD(), RK3_SSP_Tableau(Float64); storage = ROCArray)
 set_backend!(ROCBackend())
 ts(eq, dg, t, dt)
+```
+
+## Memory budget
+
+A `Growable` that runs out of capacity is reallocated, and for a moment the old and the new array exist at
+the same time: on a device that is short of memory this is where a run dies, typically in the neighbour
+search, whose slot arrays are by far the largest buffers. `reserve!` removes the surprise. Every growable
+buffer of a run is either per particle or per neighbour slot (the cell list of the bins is the only fixed
+cost), so `memory_estimate` prices a run from the element types of the buffers alone, and `reserve!` sizes
+them once, to the largest particle capacity that fits a byte limit, and freezes them:
+
+```julia
+dg     = device_grid(ROCArray, pg)
+interp = MUSCL(Float64, D, M, 3, NoLimiter(), RusanovFlux(); storage = ROCArray)
+ts     = GeneralRKTimeStepper(eq, interp, MOOD(), RK3_SSP_Tableau(Float64); storage = ROCArray)
+memory_estimate(dg, ts, interp)                   # bytes for the current particles and neighbour lists
+r = reserve!(dg, ts, interp; limit = 12 * 2^30)   # (; particles, slots, bytes, limit)
+```
+
+The neighbour slots per particle default to what the current lists occupy (the host grid's search, which
+every run starts with, is the CPU pretest of the run; on a device grid that is the maximum neighbour count,
+its slot-major layout holds `max_nb` slots per particle). Raise `slots_per_particle` for moving or adaptive
+grids whose neighbourhoods grow, and keep `tolerance` (5 % of the limit by default) for what the vendor
+runtime and the reductions allocate. From then on a step that needs more than the reserved capacity, more
+particles from adaptivity or more neighbours per particle, throws a `CapacityError` instead of reallocating.
+The builders do the same with `context[:MemoryLimit]` (see `build_timestepper`).
+
+```@docs
+ExecutionBackend
+set_backend!
+get_backend
+PolyesterBackend
+ThreadsBackend
+KABackend
+foreach_particle
+HyperCloudCore.device_grid
+Growable
+memory_estimate
+reserve!
+slots_per_particle
+CapacityError
 ```
 
 With the config-driven builders, `context[:Storage] = ROCArray` does the same: `build_particle_grid`

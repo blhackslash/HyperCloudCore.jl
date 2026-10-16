@@ -312,7 +312,7 @@ end
         @test HyperCloudCore.kernel_view(interp).gradients isa Vector
         pg = set_ic!(make_pg_1d(20), x -> exp(-x^2 / 0.02))
         ts(eq, pg, 0.0, 0.01)
-        @test length(ts.rho_n) >= pg.meta.N && mood_flags(ts) isa Vector{Bool}
+        @test length(ts.rho_n) >= pg.meta.N && mood_flags(ts) isa AbstractVector{Bool} && length(mood_flags(ts)) == pg.meta.N
         HyperCloudCore.check_resident(HyperCloudCore.KA.CPU(), HyperCloudCore.kernel_view((pg, ts.int_buffer, interp, 1.0, Val(2))))
     end
 end
@@ -514,7 +514,7 @@ end
             for k in 0:4; ts(eq, pg, k * dt, dt); end
             @test all(r -> isfinite(r[1]), pg.rhos)
             @test isapprox(sum(r[1] for r in pg.rhos), mass0; rtol = 1e-2)   # collocation: not exactly conservative
-            @test length(mood_flags(ts)) >= pg.meta.N
+            @test length(mood_flags(ts)) == pg.meta.N
             @test all(o -> 1 <= o <= 3, view(pg.core.particle_orders, 1:pg.meta.N))
         end
     end
@@ -562,25 +562,105 @@ end
     dt = 0.4 * (2 / N)
     # Allocations per step must not grow with the particle count: every launch costs a constant amount
     # (closure/task set-up), nothing may be allocated per particle. Compared against a grid 10x smaller.
+    # The warm-up steps until MOOD has triggered once, so the trigger path (first reached at the third
+    # step of this profile) is compiled before the measurement; the minimum over a few steps leaves out
+    # the extra launches of a step with a trigger.
     function step_alloc(n)
         pgn = set_ic!(make_pg_1d(n), x -> exp(-x^2 / 0.02))
         interp = MUSCL(Float64, 1, 1, 3, VenkatakrishnanLimiter(:hard), RusanovFlux())
         ts = GeneralRKTimeStepper(eq, interp, MOOD(EPD1(), MOODu1(1e-6)), RK3_SSP_Tableau(Float64))
         h = 0.4 * (2 / n)
-        ts(eq, pgn, 0.0, h); ts(eq, pgn, h, h)
-        return @allocated ts(eq, pgn, 2h, h)
+        k = 0
+        while !any(mood_flags(ts)) && k < 10
+            ts(eq, pgn, k * h, h); k += 1
+        end
+        @test any(mood_flags(ts))
+        return minimum(@allocated(ts(eq, pgn, (k + j) * h, h)) for j in 0:2)
     end
-    for use_threads in (false, true)
-        set_threads!(use_threads)
+    for backend in (PolyesterBackend(), ThreadsBackend())
+        set_backend!(backend)
+        tasks = backend isa ThreadsBackend                 # `Threads.@threads` spawns a task per thread and launch
         small, large = step_alloc(N ÷ 10), step_alloc(N)
         @test large <= small + 8192
-        @test large < (use_threads ? 512 * 1024 : 128 * 1024)
+        @test large < (tasks ? 256 * 1024 : 16 * 1024)
         interp = MUSCL(Float64, 1, 1, 3, VenkatakrishnanLimiter(:hard), RusanovFlux())
         get_time_step(pg, eq, interp); update_volumes!(pg, ShepardVolumes())   # compile first
-        @test (@allocated get_time_step(pg, eq, interp)) < (use_threads ? 32_768 : 8192)
-        @test (@allocated update_volumes!(pg, ShepardVolumes())) < (use_threads ? 32_768 : 8192)
+        @test (@allocated get_time_step(pg, eq, interp)) < (tasks ? 32_768 : 8192)
+        @test (@allocated update_volumes!(pg, ShepardVolumes())) < (tasks ? 32_768 : 8192)
     end
-    set_threads!(false)
+    set_backend!(PolyesterBackend())
+end
+
+@testset "Memory budget" begin
+    N  = 400
+    eq = make_advection_1d()
+    pg = set_ic!(make_pg_1d(N), x -> exp(-x^2 / 0.02))
+    interp = MUSCL(Float64, 1, 1, 3, VenkatakrishnanLimiter(:hard), RusanovFlux())
+    ts = GeneralRKTimeStepper(eq, interp, MOOD(EPD1(), MOODu1(1e-6)), RK3_SSP_Tableau(Float64))
+    h  = 0.4 * (2 / N)
+    ts(eq, pg, 0.0, h)                                       # sizes the stepper and interpolator buffers
+    S, F = sizeof(State{1, Float64}), sizeof(Flux{1, 1, Float64})
+
+    @testset "estimate" begin
+        est = memory_estimate(pg, ts, interp)
+        @test est.particles == N && est.slots == sum(view(pg.neighbor.counts, 1:N))   # row-major: the neighbour total
+        @test slots_per_particle(pg) == est.slots / N
+        @test est.bytes == N * est.per_particle + est.slots * est.per_slot + est.fixed
+        @test est.fixed == sizeof(Int) * (length(pg.bins.cell_start) + length(pg.bins.cell_count)) +
+                           sizeof(eltype(pg.bins.bin_neighbors)) * length(pg.bins.bin_neighbors) + sizeof(UnitRange{Int})
+        g = memory_estimate(pg)
+        # Stepper: rho_n, rho_cand, 3 stages × (Y, K_E, K_I) = 11 states, 5 Bool masks, 1 Int snapshot; per slot
+        # df_flux, df_scratch, mask. No position buffers on a static grid.
+        @test memory_estimate(pg, ts).per_particle - g.per_particle == 11S + 5 + sizeof(Int)
+        @test memory_estimate(pg, ts).per_slot - g.per_slot == F + S + 1
+        # MUSCL: gradients SVector{2, State} + one shared weight cache (SMatrix{2,2} + Bool)
+        @test memory_estimate(pg, interp).per_particle - g.per_particle == 2S + sizeof(SMatrix{2, 2, Float64, 4}) + 1
+        @test memory_estimate(pg, interp).per_slot == g.per_slot
+        # A moving grid adds x_n, x_cand and 3 stages × (X, K_X): 8 position buffers
+        pgm = make_pg_1d(N; mover = LagrangianMover())
+        tsm = GeneralRKTimeStepper(eq, interp, MOOD(), RK3_SSP_Tableau(Float64))
+        @test memory_estimate(pgm, tsm).per_particle - memory_estimate(pgm).per_particle == 11S + 5 + sizeof(Int) + 8 * sizeof(Space{1, Float64})
+        @test memory_estimate(pg, ts, interp; particles = 2N, slots = 3).bytes == 2N * est.per_particle + 3 * est.per_slot + est.fixed
+    end
+
+    @testset "reserve!" begin
+        est = memory_estimate(pg, ts, interp)
+        spp = slots_per_particle(pg)
+        r = reserve!(pg, ts, interp; limit = 2 * est.bytes, tolerance = 0.1)
+        @test r.limit == 2 * est.bytes
+        @test r.particles == floor(Int, (floor(Int, 0.9 * r.limit) - est.fixed) / (est.per_particle + spp * est.per_slot))
+        @test r.slots == ceil(Int, r.particles * spp)
+        @test r.bytes == memory_estimate(pg, ts, interp; particles = r.particles, slots = r.slots).bytes <= 0.9 * r.limit
+        @test length(ts.rho_n) == r.particles && length(interp.gradients) == r.particles
+        @test length(pg.neighbor.indices) == r.slots && length(ts.int_buffer.df_flux) == r.slots
+        @test length(pg.neighbor.ranges) == r.particles + 1 && all(isempty, view(pg.neighbor.ranges, (N + 2):(r.particles + 1)))
+        @test ts.rho_n.fixed && pg.neighbor.indices.fixed && pg.rhos.fixed && !Growable(zeros(2)).fixed
+        ts(eq, pg, h, h); ts(eq, pg, 2h, h)                  # steps run inside the reservation
+        @test length(ts.rho_n) == r.particles && length(pg.neighbor.indices) == r.slots
+        @test_throws CapacityError HyperCloudCore.ensure_capacity!(pg, r.particles + 1)
+        @test_throws CapacityError HyperCloudCore.ensure_capacity!(pg.neighbor, r.slots + 1)
+        @test_throws CapacityError HyperCloudCore.ensure_capacity!(ts.rho_n, r.particles + 1)
+        HyperCloudCore.ensure_capacity!(ts.rho_n, r.particles)                    # within the reservation: no-op
+        @test_throws ArgumentError reserve!(pg, ts, interp; limit = est.bytes ÷ 2)
+        @test_throws ArgumentError reserve!(pg, ts, interp; limit = 2 * est.bytes, slots_per_particle = 0)   # lists do not fit
+        @test_throws ArgumentError reserve!(pg, ts, interp; limit = 2 * est.bytes, tolerance = 1.0)
+        @test_throws ArgumentError reserve!(pg, ts, interp; limit = est.fixed)
+        gr = Growable(zeros(2))
+        HyperCloudCore.ensure_capacity!(gr, 3)                                    # an unreserved buffer grows
+        @test length(gr) == ceil(Int, 3 * 1.25)
+    end
+
+    @testset "exact fit and outgrowing the budget" begin
+        pg2 = set_ic!(make_pg_1d(N), x -> 0.0)
+        est = memory_estimate(pg2)
+        r = reserve!(pg2; limit = est.bytes + 1, tolerance = 0)
+        @test r.particles == N && r.bytes == est.bytes
+        pg2.neighbor(pg2)                                    # a search with the same lists fits
+        @test length(pg2.neighbor.indices) == r.slots
+        pos = pg2.core.positions
+        for i in 1:N; pos[i] = pos[i] / 2; end               # twice as dense: more neighbours than reserved
+        @test_throws CapacityError pg2.neighbor(pg2)
+    end
 end
 
 @testset "Moving grids" begin
