@@ -10,8 +10,6 @@ set_backend!(KernelAbstractions.CPU())      # KernelAbstractions kernels, compil
 set_backend!(CUDABackend())                 # from CUDA.jl (likewise ROCBackend(), MetalBackend(), oneAPIBackend())
 ```
 
-`set_threads!(true/false)` still selects the Threads / Polyester backend.
-
 ## What runs as a kernel today
 
 | pass | kernel body | file |

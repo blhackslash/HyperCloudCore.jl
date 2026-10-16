@@ -5,15 +5,20 @@
 # `body(i, args...)` that only touches the arrays and structs it is given, and is launched with
 # `foreach_particle(body, backend, N, args)`. The backend decides how the loop runs:
 #
-#   PolyesterBackend()   Polyester `@batch per=core`        (default; fastest on the CPU)
+#   PolyesterBackend()   Polyester `@batch per=core`        (default; fastest on the CPU; one worker per
+#                        physical core: spin-waiting workers collapse when they oversubscribe SMT siblings)
 #   ThreadsBackend()     Base.Threads `@threads :dynamic`    (no spin-waiting workers)
 #   KABackend(b)         a KernelAbstractions.jl kernel on `b` (`CPU()`, or a GPU backend such as
 #                        `CUDABackend()` / `ROCBackend()` from the vendor package)
 #
 # Bodies therefore have to obey the GPU kernel rules: no allocation, no dynamic dispatch, no
-# `Dict` access, nothing captured from the enclosing method's static parameters (see also the
-# Polyester rules at `@smart_parallel`). Serial parts (prefix sums, the MOOD decrement, sorting,
-# boundary donor searches) stay on the host for now; see docs/src/gpu_roadmap.md.
+# `Dict` access, nothing captured from the enclosing method's static parameters. Two Polyester rules
+# apply to every `@batch` loop of the package: the body must not use the static parameters of the
+# enclosing method (`T`, `D`, `Val(D)`, `zero(T)`), Polyester passes them into the loop closure as
+# runtime objects and evaluates such expressions dynamically per iteration; and every captured
+# variable must be assigned exactly once in the enclosing function, a reassigned captured variable is
+# boxed and every access allocates. Serial parts (prefix sums, the MOOD decrement, sorting, boundary
+# donor searches) stay on the host for now; see docs/src/gpu_roadmap.md.
 # =========================================================================
 using KernelAbstractions
 using Adapt
