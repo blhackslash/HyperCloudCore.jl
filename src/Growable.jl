@@ -10,7 +10,7 @@
 # =========================================================================
 using Adapt
 
-export Growable
+export Growable, CapacityError
 
 """
     Growable{T, V <: AbstractVector{T}} <: AbstractVector{T}
@@ -20,12 +20,29 @@ export Growable
 A per-particle buffer that can be reallocated to a larger capacity on any backend. `parent(g)` is the
 array currently held (`V`, e.g. a `Vector` or a `ROCArray`); `Growable{T}(ArrayType)` starts empty
 with storage of type `ArrayType{T}`. The wrapper indexes like its parent on the host and disappears
-under `Adapt.adapt`, so kernel bodies receive the raw array.
+under `Adapt.adapt`, so kernel bodies receive the raw array. `reserve!` fixes the capacity: a fixed
+buffer throws a `CapacityError` instead of growing.
 """
 mutable struct Growable{T, V <: AbstractVector{T}} <: AbstractVector{T}
     data::V
+    fixed::Bool
 end
+Growable(v::V) where {T, V <: AbstractVector{T}} = Growable{T, V}(v, false)
 Growable{T}(::Type{AT}) where {T, AT <: AbstractArray} = Growable(AT{T}(undef, 0))
+
+"""
+    CapacityError <: Exception
+
+Thrown by `ensure_capacity!` when a buffer whose capacity was fixed by `reserve!` would have to grow:
+the run has outgrown its memory budget (more particles, or more neighbours per particle, than reserved).
+"""
+struct CapacityError <: Exception
+    eltype::DataType
+    capacity::Int
+    requested::Int
+end
+Base.showerror(io::IO, e::CapacityError) = print(io, "CapacityError: a reserved buffer of ", e.capacity, " × ",
+    e.eltype, " would have to grow to ", e.requested, " elements; the run has outgrown its memory budget (see `reserve!`)")
 
 Base.parent(g::Growable) = g.data
 Base.size(g::Growable) = size(g.data)
@@ -58,10 +75,12 @@ KA.get_backend(g::Growable) = KA.get_backend(g.data)
 
 Makes room for `n` elements (growing by 25 % headroom like the `Vector` buffers). A `Vector` is resized in
 place; any other array is reallocated with `similar` and its current contents copied over. The elements
-beyond the old length are undefined, as after `resize!`.
+beyond the old length are undefined, as after `resize!`. A buffer whose capacity was fixed by `reserve!`
+throws a `CapacityError` instead of growing.
 """
 @inline function ensure_capacity!(g::Growable, req_capacity::Int)
     if length(g.data) < req_capacity
+        g.fixed && throw(CapacityError(eltype(g.data), length(g.data), req_capacity))
         g.data = _grown(g.data, ceil(Int, req_capacity * 1.25))
     end
     return nothing

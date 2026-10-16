@@ -111,13 +111,20 @@ const device_backend = ROCBackend()
             ctx[:MOOD]    = build_mood(Dict{Symbol, Any}(:criterion => :U1, :strategy => :EPD1, :delta_relax => 1e-6), ctx)
             ctx[:Scheme]  = build_scheme(Dict{Symbol, Any}(:name => :MUSCL, :order => 3), ctx)
             ctx[:Tableau] = build_tableau(Dict{Symbol, Any}(:stepper => :RK3), ctx)
+            ctx[:MemoryLimit] = 2 * memory_estimate(pg, ctx[:Scheme]).bytes      # reserved by build_timestepper
             ts = build_timestepper(ctx)
             @test parent(ctx[:Scheme].gradients) isa DeviceArray && parent(ts.rho_n) isa DeviceArray
             n  = pg.meta.N
+            r  = ctx[:Memory]
+            @test r.particles >= n && length(ts.rho_n) == r.particles && length(pg.neighbor.indices) == r.slots
+            @test r.slots == r.particles * pg.meta.max_nb                   # slot-major: max_nb slots per particle
+            @test r.bytes == memory_estimate(pg, ts, ctx[:Scheme]; particles = r.particles, slots = r.slots).bytes <= 0.95 * r.limit
             copyto!(pg.rhos, 1, DeviceArray([State{1, Float64}(gauss(x[1])) for x in Array(pg.core.positions)[1:n]]), 1, n)
             set_backend!(device_backend)
             for k in 0:3; ts(eq, pg, k * dt, dt); end
             @test all(isfinite, first.(Array(pg.rhos)[1:n]))
+            @test length(ts.rho_n) == r.particles && length(pg.neighbor.indices) == r.slots   # nothing grew
+            @test_throws CapacityError HyperCloudCore.ensure_capacity!(pg, r.particles + 1)
         end
 
         @testset "adaptivity: host remap, device grid updated in place" begin
