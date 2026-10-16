@@ -167,11 +167,11 @@ function (upwind::UpwindDivergence{D, 1, T, MAX_ORDER, DIV_ORDER, B_LEN, INTERPS
         end
         
         div_idx_d = DIV_ORDER == 0 ? p_order_d : min(DIV_ORDER, p_order_d)
-        B_LEN_D_VAL = typeof(basis_length(Val(D), Val(div_idx_d))).parameters[1]
-        
+        # Static basis length of MAX_ORDER (the dispatcher pads): a `Val` of the runtime order would be a
+        # dynamic dispatch, which kernels cannot do.
         raw_grad = dispatch_interpolator(
-            upwind.interpolators, div_idx_d, 
-            nb_slice, dist_all, w_all, df, ib.mask, scale[d], Val(B_LEN_D_VAL), State{1, T}
+            upwind.interpolators, div_idx_d,
+            nb_slice, dist_all, w_all, df, ib.mask, scale[d], Val(B_LEN), State{1, T}
         )
         
         dF_dx = raw_grad[d]

@@ -17,14 +17,28 @@ function build_mover(::Val{:scaled_lagrangian}, conf::Dict, context::Dict)
     return ScaledLagrangianMover(T(conf[:mover_alpha]))
 end
 
+"""
+    SinusoidalVelocity{D, T}(A, mins, Ls)
+
+`w_d(x) = A sin(2π (x_d - mins_d) / Ls_d)`: the velocity field of the `:sinusoidal` mover. A bits-type callable
+(a closure capturing `T` or `D` as values would not be isbits and could not enter a GPU kernel).
+"""
+struct SinusoidalVelocity{D, T}
+    A::T
+    mins::Space{D, T}
+    Ls::Space{D, T}
+end
+@inline function (v::SinusoidalVelocity{D, T})(x, t) where {D, T}
+    two_pi = T(2π)
+    return Space{D, T}(ntuple(d -> v.A * sin(two_pi * (x[d] - v.mins[d]) / v.Ls[d]), Val(D)))
+end
+
 function build_mover(::Val{:sinusoidal}, conf::Dict, context::Dict)
     T    = real_type(context)
     D    = context[:D]::Int
     geom = context[:Domain]
     A    = T(conf[:mover_amplitude])
-    mins = geom.mins
-    Ls   = geom.maxs .- geom.mins
-    two_pi = T(2π)
-    f = (x, t) -> Space{D, T}(ntuple(d -> A * sin(two_pi * (x[d] - mins[d]) / Ls[d]), Val(D)))
-    return PrescribedMover(f)
+    mins = Space{D, T}(Tuple(geom.mins))
+    Ls   = Space{D, T}(Tuple(geom.maxs .- geom.mins))
+    return PrescribedMover(SinusoidalVelocity{D, T}(A, mins, Ls))
 end

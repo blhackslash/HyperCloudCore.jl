@@ -245,6 +245,11 @@ end
     dt = 0.4 * (2 / N)
     ic = x -> exp(-x^2 / 0.02)
     mover = PrescribedMover((x, t) -> Space{1, Float64}(0.3 * sin(π * x[1])))
+    # The config-built sinusoidal mover must be a bits type (a closure over `T` could not enter a GPU kernel).
+    sinus = HyperCloudCore.build_mover(Dict{Symbol, Any}(:mover => :sinusoidal, :mover_amplitude => 0.3),
+                                       Dict{Symbol, Any}(:T => Float64, :D => 1, :Domain => get_rectangular_domain(Float64, (-1.0,), (1.0,); is_periodic = true)))
+    @test sinus isa PrescribedMover{<:HyperCloudCore.SinusoidalVelocity{1, Float64}} && isbits(sinus)
+    @test sinus.velocity(Space{1, Float64}(-0.5), 0.0) ≈ Space{1, Float64}(0.3 * sin(2π * 0.25))
     cases = [
         ("MUSCL3 VK MOODu2 RK3",  () -> MUSCL(Float64, 1, 1, 3, VenkatakrishnanLimiter(:hard), RusanovFlux()), MOOD(EPD1(), MOODu2(1e-6)), RK3_SSP_Tableau(Float64), NoGridMover()),
         ("MUSCL2 MOODu1 EPD2 RK2", () -> MUSCL(Float64, 1, 1, 2, NoLimiter(), RusanovFlux()), MOOD(EPD2(), MOODu1(1e-6)), RK2_SSP_Tableau(Float64), NoGridMover()),
@@ -252,6 +257,9 @@ end
         ("Upwind Euler",           () -> UpwindDivergence(Float64, 1, 1, 1, :Classic, UpwindFlux()), MOOD(), RK1_Euler_Tableau(Float64), NoGridMover()),
         ("MUSCL3 moving RK2",      () -> MUSCL(Float64, 1, 1, 3, NoLimiter(), RusanovFlux()), MOOD(), RK2_SSP_Tableau(Float64), mover),
         ("MUSCL4 IMEX ARS222",     () -> MUSCL(Float64, 1, 1, 4, NoLimiter(), RusanovFlux()), MOOD(EPD1(), MOODu1(1e-6)), IMEX_ARS222_Tableau(Float64), NoGridMover()),
+        ("WENO2 RK2",              () -> WENO(Float64, 1, 1, 2), MOOD(), RK2_SSP_Tableau(Float64), NoGridMover()),
+        ("Upwind1 Tiwari RK2",     () -> UpwindDivergence(Float64, 1, 1, 1, :Tiwari, UpwindFlux()), MOOD(), RK2_SSP_Tableau(Float64), NoGridMover()),
+        ("MUSCL3 sinusoidal RK2",  () -> MUSCL(Float64, 1, 1, 3, NoLimiter(), RusanovFlux()), MOOD(), RK2_SSP_Tableau(Float64), sinus),
     ]
     function run_case(backend, make_interp, mood, tab, mv)
         set_backend!(backend)

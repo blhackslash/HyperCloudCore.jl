@@ -85,11 +85,13 @@ function (weno::WENO{D, M, T, MAX_ORDER, DIV_ORDER, INTERPS})(
     @inbounds for global_idx in nb_slice; ib.mask[global_idx] = true; end
     
     div_idx_C = DIV_ORDER == 0 ? p_order : min(DIV_ORDER, p_order)
-    B_LEN_C_VAL = typeof(basis_length(Val(D), Val(div_idx_C))).parameters[1]
-    
+    # The dispatcher pads every result to the basis length of MAX_ORDER (static); a `Val` of the runtime
+    # order would be a dynamic dispatch, which kernels cannot do.
+    b_len = basis_length(Val(D), Val(MAX_ORDER))
+
     resC_raw = dispatch_interpolator(
-        weno.interpolators, div_idx_C, 
-        nb_slice, dist_all, w_all, df, ib.mask, scale_val, Val(B_LEN_C_VAL), State{M, T}
+        weno.interpolators, div_idx_C,
+        nb_slice, dist_all, w_all, df, ib.mask, scale_val, b_len, State{M, T}
     )
     resC = SVector{D, State{M, T}}(ntuple(d -> resC_raw[d], Val(D)))
 
@@ -130,11 +132,10 @@ function (weno::WENO{D, M, T, MAX_ORDER, DIV_ORDER, INTERPS})(
         end
 
         div_idx_S = DIV_ORDER == 0 ? p_order_d : min(DIV_ORDER, p_order_d)
-        B_LEN_D_VAL = typeof(basis_length(Val(D), Val(div_idx_S))).parameters[1]
-        
+
         resS_raw = dispatch_interpolator(
-            weno.interpolators, div_idx_S, 
-            nb_slice, dist_all, w_all, df, ib.mask, scale_val, Val(B_LEN_D_VAL), State{M, T}
+            weno.interpolators, div_idx_S,
+            nb_slice, dist_all, w_all, df, ib.mask, scale_val, b_len, State{M, T}
         )
         resS = SVector{D, State{M, T}}(ntuple(k -> resS_raw[k], Val(D)))
 

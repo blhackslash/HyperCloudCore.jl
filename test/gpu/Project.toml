@@ -1,5 +1,5 @@
-# Environment of the device tests: the test dependencies plus AMDGPU.jl. No AMDGPU release supports
-# KernelAbstractions 0.10 yet, so AMDGPU comes from its main branch. Instantiate once with
+# Environment of the device tests: the test dependencies plus AMDGPU.jl (the registered release; 2.9 supports
+# KernelAbstractions 0.10). Instantiate once with
 #     julia --project=test/gpu -e 'using Pkg; Pkg.instantiate()'
 # and run the suite with
 #     HYPERCLOUD_BACKEND=amdgpu julia --project=test/gpu test/runtests.jl
@@ -15,4 +15,6 @@ Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [sources]
 HyperCloudCore = {path = "../.."}
-AMDGPU = {url = "https://github.com/JuliaGPU/AMDGPU.jl", rev = "main"}
+
+[compat]
+AMDGPU = "2.9"

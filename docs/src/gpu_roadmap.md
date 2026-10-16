@@ -83,6 +83,16 @@ runtime and the reductions allocate. From then on a step that needs more than th
 particles from adaptivity or more neighbours per particle, throws a `CapacityError` instead of reallocating.
 The builders do the same with `context[:MemoryLimit]` (see `build_timestepper`).
 
+Known platform issue (AMDGPU.jl 2.9.1, ROCm 7.2, gfx1201): once a process has run device simulations, the
+contents copied by `reserve!` into the newly allocated device buffers can turn into zeros shortly afterwards
+(on the device as well as on the host; a read right after the copy still sees the data). It reproduced in
+every attempt and was unaffected by how the block was written (`copyto!` or a kernel), garbage collection,
+stream synchronisation, pool trimming, waiting or system-scope fences (`AMD_OPT_FLUSH=0`); the one condition
+under which the data stayed intact was keeping the replaced arrays alive. The cause is in the ROCm or AMDGPU.jl
+layer and is not worked around here; HyperCloud.jl's runners compare a fingerprint of the grid before and after
+the reservation and refuse to run on corrupted data (reproducer: a reserved device run after earlier device
+runs in the same session; a fresh session is unaffected).
+
 ```@docs
 ExecutionBackend
 set_backend!
@@ -171,8 +181,8 @@ reductions (total and maximum), all on the device.
 ## Testing on the device
 
 `HYPERCLOUD_BACKEND=amdgpu` adds the device tests (`test/gpu_tests.jl`) to the suite. They need AMDGPU.jl,
-which is not a test dependency of the package (no release supports KernelAbstractions 0.10 yet, it comes
-from the main branch), so they run in the `test/gpu` environment:
+which is not a test dependency of the package (the registered release 2.9 supports KernelAbstractions
+0.10), so they run in the `test/gpu` environment:
 
 ```sh
 julia --project=test/gpu -e 'using Pkg; Pkg.instantiate()'     # once
