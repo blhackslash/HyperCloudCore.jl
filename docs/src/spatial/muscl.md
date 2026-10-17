@@ -25,7 +25,8 @@ MUSCL(T, D, M, order, limiter, flux; div_order = 0)
 - `order ≥ 1` is the **consistency order**. The reconstruction has degree `order - 1`: `order = 1` is piecewise constant (first-order upwind with the given flux), `order = 2` linear, `order = 3` quadratic, and so on.
 - `limiter`: `NoLimiter()`, `BarthJespersenLimiter(mode)`, `VenkatakrishnanLimiter(mode)`, and (1-D only) `MinmodLimiter(mode)`, `SuperbeeLimiter(mode)`. `mode = :hard` limits all coefficients, `:soft` only the first-order ones.
 - `flux`: a `NumericalFluxFunction`.
-- `div_order`: with `0` the divergence fit has degree $\max(2, k_i) - 1$ for the particle's current order $k_i$. With a positive value the divergence degree is $\max(2, \texttt{div\_order}) - 1$ for every particle, independent of order drops.
+- `div_order`: with `0` the divergence fit follows the particle's current order $k_i$; with a positive value it uses `div_order` for every particle, independent of order drops. For an order $o$ (either one) the divergence is fitted with degree $o - 1$ for even $o$ and degree $o$ for odd $o$ ($\max(1, \cdot)$): on (nearly) symmetric stencils the derivative of an even-degree least-squares fit is only $O(h^q)$, because the next, odd monomial aliases into the gradient, while an odd degree gains one order. With degree $o - 1$, MUSCL3 and MUSCL5 were only second and fourth order. The higher degree is used where the stencil has at least 1.5× as many neighbours as the fit has unknowns (1-D MUSCL3: $R \ge 3.5\Delta x$) and up to degree 3 in 3-D; every fit lowers its degree where there are fewer neighbours than unknowns.
+- The divergence fit has a **constant term** and runs over the neighbours only (the reconstruction fits go through the particle). Its weights then sum to zero, $\sum_j c_{ij} = 0$, which removes one of the two conservation defects of $2\sum_j c_{ij}\cdot(F^*_{ij} - F_i)$ on irregular point clouds.
 
 ## The two passes
 
@@ -60,7 +61,7 @@ The end of `MUSCL.jl` defines the hooks that tell the time stepper and MOOD abou
 
 ```julia
 _order_reach(::MUSCL, ::MOODStrategy) = 1     # 2 for EPD2
-_divergence_degree(::MUSCL)                     # order - 1, for the CFL estimate
+_divergence_degree(::MUSCL)                     # degree of the full-order divergence fit, for the CFL estimate
 has_cached_gradients(::MUSCL) = true          # enables MOODu2's curvature test
 cached_gradients(m::MUSCL) = m.gradients
 ```

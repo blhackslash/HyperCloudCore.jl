@@ -33,7 +33,7 @@ The number of basis terms is $B(D, p) = \binom{p+D}{D} - 1$, available at compil
 
 - **Scaling.** Distances are multiplied by `1/scale` (the particle spacing) before the basis is evaluated, so $N$ is $\mathcal O(1)$ regardless of resolution. `build_scale_factors` undoes the scaling on the coefficients afterwards.
 - **Assembly.** `N` and `b` are accumulated as `SMatrix` types in one pass over the neighbours.
-- **Solve.** A Cholesky factorization of `Symmetric(N + ε I)`, with Tikhonov regularization `ε = 1e-10 · tr(N)/B`. The normal equations square the condition number, and the regularization keeps nearly degenerate neighbourhoods solvable. If the factorization still fails, the fit returns zero.
+- **Solve.** A Cholesky factorization of `Symmetric(N + ε I)`, with Tikhonov regularization `ε = min(10⁻¹⁰, 100 eps(T)) · tr(N)/B` (a fixed 10⁻¹⁰ capped the high-order fits at errors of ~10⁻⁸ in Float64). The normal equations square the condition number, and the regularization keeps nearly degenerate neighbourhoods solvable. If the factorization still fails, the fit returns zero.
 
 Variants of the same kernel:
 

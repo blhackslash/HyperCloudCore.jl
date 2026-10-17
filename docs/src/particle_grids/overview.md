@@ -64,7 +64,7 @@ A particle is never its own neighbour. For moving grids, `refresh_geometry!` rec
 \Delta t = \min_i \frac{1}{D \sum_d \lambda_d(U_i)\, \sum_{j} \lvert c^{(d)}_{ij} \rvert },
 ```
 
-where $\lambda_d$ is `max_eigenvalue(eq, U_i, d)` and $c^{(d)}_{ij}$ are the weights of the first-derivative operator of the MLS fit at particle $i$. The fit degree is `_divergence_degree(interp)`: the consistency order for Central/WENO/Upwind, and order − 1 for MUSCL (or `MLS_order` − 1 if that is set). Degrees above 4 (3 in 3-D) are clamped. Multiply the result by your CFL number.
+where $\lambda_d$ is `max_eigenvalue(eq, U_i, d)` and $c^{(d)}_{ij}$ are the weights of the first-derivative operator of the MLS fit at particle $i$. The fit degree is `_divergence_degree(interp)`: the consistency order for Central/WENO/Upwind, and for MUSCL the degree of its divergence fit (order − 1 for even and order for odd orders, see [MUSCL Reconstruction and Limiting](@ref)). Degrees above 4 (3 in 3-D) are clamped. Multiply the result by your CFL number.
 
 ### What the CFL number means on a point cloud
 
