@@ -7,11 +7,11 @@ include("Domains.jl")
 # ---------------------------------------------------------
 """
     GridMetadata{D, T}
-    SharedBuffers{D, M, T}
-    NeighborData{D, T, WF}
+    SharedBuffers{D, M, T, ...}
+    NeighborData{D, T, WF, ...}
     ReorderData{D}
-    GlobalBins{D, T, N_OFF}
-    ParticleGridCore{D, T}
+    GlobalBins{D, T, N_OFF, ...}
+    ParticleGridCore{D, T, ...}
 
 Internal structures managing the state, topology, and execution context of the mesh-free solver.
 - `GridMetadata`: Stores grid capacities, resolutions, and the active interaction radius.
@@ -37,67 +37,116 @@ mutable struct GridMetadata{D, T}
     geometry_version::Int
 end
 
+"""
+    GridMetadataView{D, T}
+
+Immutable snapshot of a `GridMetadata`, the form in which the metadata travels into kernels
+(see `DeviceAdapt.jl`). Kernels only read it.
+"""
+struct GridMetadataView{D, T}
+    N::Int
+    N_interior::Int
+    N_ghost::Int
+    R::T
+    max_dx::T
+    dx::Space{D, T}
+    interp_range_factor::T
+    max_nb::Int
+    geometry_version::Int
+end
+GridMetadataView(m::GridMetadata{D, T}) where {D, T} = GridMetadataView{D, T}(
+    m.N, m.N_interior, m.N_ghost, m.R, m.max_dx, m.dx, m.interp_range_factor, m.max_nb, m.geometry_version)
+
+# The storage containers are parametric in their vector types, so the same structs hold host `Vector`s,
+# device arrays (`CuArray`, ...) or the device views KernelAbstractions passes into kernels. Their arrays are
+# only ever resized in place (`ensure_capacity!`), never rebound, so the structs are immutable.
+
 # ---------------------------------------------------------
 # 2. Shared Workspace Buffers
 # ---------------------------------------------------------
-mutable struct SharedBuffers{D, M, T}
-    rho_buffer::Vector{State{M, T}}      
-    pos_buffer::Vector{Space{D, T}}
-    float_buffer::Vector{T}
-    float_buffer2::Vector{T}
-    bit_buffer::Vector{Bool}
-    int_buffer::Vector{Int}
+struct SharedBuffers{D, M, T, VS <: AbstractVector{State{M, T}}, VP <: AbstractVector{Space{D, T}},
+                     VT <: AbstractVector{T}, VB <: AbstractVector{Bool}, VI <: AbstractVector{Int}}
+    rho_buffer::VS
+    pos_buffer::VP
+    float_buffer::VT
+    float_buffer2::VT
+    bit_buffer::VB
+    int_buffer::VI
 end
+SharedBuffers{D, M, T}(rho, pos, f1::VT, f2::VT, bit, int) where {D, M, T, VT} =
+    SharedBuffers{D, M, T, typeof(rho), typeof(pos), VT, typeof(bit), typeof(int)}(rho, pos, f1, f2, bit, int)
 
 # ---------------------------------------------------------
 # 3. Neighbor Search Context
 # ---------------------------------------------------------
-mutable struct NeighborData{D, T, WF}    
+# The per-slot arrays (`indices`, `weights`, `distances`) are `Growable`s on the host grid: their length is
+# the neighbour total, which every search may change, on the device too. The per-particle arrays grow
+# only with adaptivity (host).
+# `ranges[i]` is the slot range of particle `i`: a `UnitRange` in the row-major layout (host grids: a
+# particle's slots are contiguous) or a `StepRange` with stride `N` in the slot-major layout (device
+# grids: slot k of all particles is contiguous, so a wavefront reads consecutive addresses). Kernel
+# bodies only ever iterate the range, so they serve both. See `NeighborLogic.jl`.
+struct NeighborData{D, T, WF, VR <: AbstractVector{<:OrdinalRange{Int, Int}}, VI <: AbstractVector{Int},
+                    GI <: AbstractVector{Int}, GT <: AbstractVector{T}, GP <: AbstractVector{Space{D, T}}}
     weight_func::WF
-    ranges::Vector{UnitRange{Int}}
-    indices::Vector{Int}
-    weights::Vector{T}
-    distances::Vector{Space{D, T}} 
-    counts::Vector{Int}
-    offsets::Vector{Int}
+    ranges::VR
+    indices::GI
+    weights::GT
+    distances::GP
+    counts::VI
+    offsets::VI
 end
+NeighborData{D, T, WF}(wf::WF, ranges, indices, weights, distances, counts::VI, offsets::VI) where {D, T, WF, VI} =
+    NeighborData{D, T, WF, typeof(ranges), VI, typeof(indices), typeof(weights), typeof(distances)}(
+        wf, ranges, indices, weights, distances, counts, offsets)
 
 # ---------------------------------------------------------
-# 4. Reordering / Sorting Context
+# 4. Reordering / Sorting Context (host only)
 # ---------------------------------------------------------
 struct ReorderData{D}
-    permutation::Vector{Int}          
-    inv_permutation::Vector{Int}      
-    new_permutation_buffer::Vector{Int} 
-    seen_buffer::Vector{Bool}            
+    permutation::Vector{Int}
+    inv_permutation::Vector{Int}
+    new_permutation_buffer::Vector{Int}
+    seen_buffer::Vector{Bool}
 end
 
-struct GlobalBins{D, T, N_OFF}
+# Counting-sort cell list; see `GlobalBins(...)` in NeighborLogic.jl for the layout.
+struct GlobalBins{D, T, N_OFF, VI <: AbstractVector{Int}, GI <: AbstractVector{Int}, VN <: AbstractVector{SVector{N_OFF, Int}}}
     mins::Space{D, T}
     maxs::Space{D, T}
     coarse_size::Space{D, T}
     coarse_dims::NTuple{D, Int}
-    head::Vector{Int}
-    next::Vector{Int}
-    bin_neighbors::Vector{SVector{N_OFF, Int}} 
+    cell_start::VI          # per bin (+ dummy bin + end sentinel)
+    cell_count::VI          # per bin (+ dummy bin)
+    cell_particles::GI      # per particle: indices sorted by bin (`Growable` on the host grid)
+    bin_of::GI              # per particle: its bin
+    bin_neighbors::VN       # per bin: the 3^D window
 end
+GlobalBins{D, T, N_OFF}(mins, maxs, coarse_size, coarse_dims, cell_start::VI, cell_count::VI, cell_particles::GI, bin_of::GI,
+                        bin_neighbors) where {D, T, N_OFF, VI, GI} =
+    GlobalBins{D, T, N_OFF, VI, GI, typeof(bin_neighbors)}(mins, maxs, coarse_size, coarse_dims, cell_start, cell_count,
+                                                            cell_particles, bin_of, bin_neighbors)
 
 # ---------------------------------------------------------
 # 6. Particle Grid Core (Geometry & Topology)
 # ---------------------------------------------------------
-mutable struct ParticleGridCore{D, T}
-    positions::Vector{Space{D, T}}
-    is_boundary::Vector{Bool}
-    volumes::Vector{T}
-    tags::Vector{Int}
+struct ParticleGridCore{D, T, VP <: AbstractVector{Space{D, T}}, VB <: AbstractVector{Bool},
+                        VT <: AbstractVector{T}, VI <: AbstractVector{Int}}
+    positions::VP
+    is_boundary::VB
+    volumes::VT
+    tags::VI
 
     # `volumes`: partition-of-unity quadrature weights, Σ V = |Ω| (see Volumes.jl). They define the
     # discrete mass Σ V U and make particle insertion/merging exactly conservative.
     # `particle_orders`: per-particle consistency order (read by every scheme, written by MOOD).
-    particle_orders::Vector{Int}
+    particle_orders::VI
 end
+ParticleGridCore{D, T}(positions, is_boundary, volumes, tags::VI, particle_orders::VI) where {D, T, VI} =
+    ParticleGridCore{D, T, typeof(positions), typeof(is_boundary), typeof(volumes), VI}(positions, is_boundary, volumes, tags, particle_orders)
+
 """
-    ParticleGrid{D, M, T, WF, GM, N_OFF, Geom}
+    ParticleGrid{D, M, T, WF, GM, N_OFF, Geom, META, CORE, SH, NB, RD, BINS, VS}
 
 The primary orchestrator representing the active computational domain, tying together the physical geometry, state vectors, and mesh-free topology.
 
@@ -105,21 +154,34 @@ The primary orchestrator representing the active computational domain, tying tog
 - Initializes the geometric and computational domains.
 - Invokes the universal narrow-band point generator to allocate `ParticleGridCore`.
 - Pre-allocates and assigns all internal components including `SharedBuffers`, `NeighborData`, `ReorderData`, and `GlobalBins`.
-- Automatically forces an initial spatial reordering and constructs the initial neighbor list upon instantiation if the dimension is greater than 1.
+- Runs the initial spatial reordering and constructs the initial neighbor list upon instantiation.
+
+The trailing type parameters are the storage types of the components. On the host they are the
+`Vector`-based structs; inside a kernel the grid arrives as a bits type with device arrays, an immutable
+`GridMetadataView` and `nothing` for the host-only parts (geometry, scratch buffers, reordering), see
+`DeviceAdapt.jl`.
 """
-struct ParticleGrid{D, M, T, WF, GM, N_OFF, Geom}
-    meta::GridMetadata{D, T}
-    geometry::Geom                             
-    domain::ComputationalDomain{D, T}          
-    core::ParticleGridCore{D, T}
-    shared::SharedBuffers{D, M, T}
-    neighbor::NeighborData{D, T, WF}
-    reorder::ReorderData{D}
-    bins::GlobalBins{D, T, N_OFF} 
+struct ParticleGrid{D, M, T, WF, GM, N_OFF, Geom, META, CORE, SH, NB, RD, BINS, VS}
+    meta::META
+    geometry::Geom
+    domain::ComputationalDomain{D, T}
+    core::CORE
+    shared::SH
+    neighbor::NB
+    reorder::RD
+    bins::BINS
     mover::GM
-    
-    rhos::Vector{State{M, T}}
-    curvatures::Vector{State{M, T}}
+
+    rhos::VS
+    curvatures::VS
+end
+
+function ParticleGrid(meta, geometry, domain::ComputationalDomain{D, T}, core::ParticleGridCore{D, T}, shared,
+                      neighbor::NeighborData{D, T, WF}, reorder, bins::GlobalBins{D, T, N_OFF}, mover::GM,
+                      rhos::VS, curvatures::VS) where {D, T, WF, N_OFF, GM, M, VS <: AbstractVector{State{M, T}}}
+    return ParticleGrid{D, M, T, WF, GM, N_OFF, typeof(geometry), typeof(meta), typeof(core), typeof(shared),
+                        typeof(neighbor), typeof(reorder), typeof(bins), VS}(
+        meta, geometry, domain, core, shared, neighbor, reorder, bins, mover, rhos, curvatures)
 end
 
 include("MLSWeightFunctions.jl")
@@ -191,22 +253,22 @@ function ParticleGrid(
     
     meta = GridMetadata{D, T}(N, N_interior, N_ghost, R, max_dx, dxs_f, interp_range_factor, 0, 0)
     
-    core = ParticleGridCore{D, T}(positions, is_boundary, volumes, tags, zeros(Int, N))
-    
-    shared = SharedBuffers{D, M, T}(zeros(State{M, T}, N), similar(positions), zeros(T, N), zeros(T, N), zeros(Bool, N), zeros(Int, N))
+    # Every per-particle array is a `Growable`, so a grid can grow on a device as well (adaptivity copies
+    # its result back into the device grid in place). The reordering state stays a host object.
+    core = ParticleGridCore{D, T}(Growable(positions), Growable(is_boundary), Growable(volumes), Growable(tags), Growable(zeros(Int, N)))
+
+    shared = SharedBuffers{D, M, T}(Growable(zeros(State{M, T}, N)), Growable(similar(positions)), Growable(zeros(T, N)),
+                                    Growable(zeros(T, N)), Growable(zeros(Bool, N)), Growable(zeros(Int, N)))
     reorder = ReorderData{D}(collect(1:N), collect(1:N), zeros(Int, N), zeros(Bool, N))
-    
-    bins = GlobalBins(T, comp_domain.canvas_mins, comp_domain.canvas_maxs, R, N)
+
+    bins = GlobalBins(T, comp_domain.canvas_mins, comp_domain.canvas_maxs, R, N, comp_domain.is_periodic)
     neighbors = NeighborData{D, T, typeof(weight_func)}(
-        weight_func, fill(1:0, N + 1), Int[], Vector{T}(undef, 0), Vector{Space{D, T}}(undef, 0), zeros(Int, N), zeros(Int, N)
+        weight_func, Growable(fill(1:0, N + 1)), Growable{Int}(Array), Growable{T}(Array), Growable{Space{D, T}}(Array),
+        Growable(zeros(Int, N)), Growable(zeros(Int, N))
     )
 
-    N_OFF = get_n_offsets(Val(D))
-    
-    pg = ParticleGrid{D, M, T, typeof(weight_func), typeof(mover), N_OFF, typeof(geom)}(
-        meta, geom, comp_domain, core, shared, neighbors, reorder, bins, mover,
-        zeros(State{M, T}, N), zeros(State{M, T}, N)
-    )
+    pg = ParticleGrid(meta, geom, comp_domain, core, shared, neighbors, reorder, bins, mover,
+                      Growable(zeros(State{M, T}, N)), Growable(zeros(State{M, T}, N)))
 
     # The spatial reordering only needs positions and the canvas box, so the neighbour search is run
     # once, after the particles have been laid out in memory.
@@ -265,10 +327,10 @@ end
     end
 end
 
-# Dispatch on the polynomial DEGREE of the divergence MLS (1..4; higher degrees clamp to 4,
+# Dispatch on the polynomial DEGREE of the divergence MLS (1..4, 1..3 in 3-D; higher degrees clamp,
 # which slightly over-estimates dt for such schemes).
 @generated function dispatch_cfl(degree::Int, ::Val{D}, nb_slice, dist_vec, w_vec, invL, ::Type{T}) where {D, T}
-    MAX_DEG = 4
+    MAX_DEG = D == 3 ? 3 : 4          # keep the basis small enough for the inline Cholesky (35 terms at degree 4 in 3-D would not be)
     B = typeof(basis_length(Val(D), Val(MAX_DEG))).parameters[1]
     expr = :(_compute_cfl_coeffs(Val($D), Val($MAX_DEG), Val($B), nb_slice, dist_vec, w_vec, invL, T))
     for deg in (MAX_DEG - 1):-1:1
@@ -302,39 +364,27 @@ Computes the exact geometric CFL-restricted time step dynamically across the act
     w_vec = get_weights(pg)
     dist_vec = get_distances(pg)
 
-    # Everything the @batch body needs from the type parameters is captured as a value: Polyester passes
-    # static parameters into the loop closure as runtime objects, which makes `T(...)`/`Val(D)` dynamic.
-    valD = Val(D)
-    invL = one(T) / minimum(pg.meta.dx)
-    tol = T(1e-14)
-    inv_dim = one(T) / D
-
     degree = _divergence_degree(main_grad)
+    invL   = one(T) / minimum(pg.meta.dx)
+    foreach_particle(_cfl_body!, get_backend(), pg.meta.N,
+        (dt_buffer, pg.core.is_boundary, pg.neighbor.ranges, pg.rhos, eq, degree, Val(D), dist_vec, w_vec, invL,
+         T(1e-14), one(T) / D))
 
-    @batch for i in 1:pg.meta.N
-        if pg.core.is_boundary[i]
-            continue
-        end
-
-        nb_slice = pg.neighbor.ranges[i]
-        if isempty(nb_slice)
-            continue
-        end
-
-        U_i = pg.rhos[i]
-        Lambda = _get_Lambda(eq, U_i, valD)
-
-        sum_c_vec = dispatch_cfl(degree, valD, nb_slice, dist_vec, w_vec, invL, typeof(invL))
-        sum_c = dot(Lambda, sum_c_vec)
-
-        if sum_c > tol
-            dt_buffer[i] = inv_dim / sum_c
-        end
-    end
-    
     # 2. Provide init=T(Inf) to prevent any future reduction errors
     return minimum(view(dt_buffer, 1:pg.meta.N); init=T(Inf))
 end
+# Kernel body of the CFL estimate (see Backend.jl): geometric coefficient of particle `i`.
+@inline function _cfl_body!(i, dt_buffer, is_boundary, ranges, rhos, eq, degree, valD, dist_vec, w_vec, invL, tol, inv_dim)
+    is_boundary[i] && return nothing
+    nb_slice = ranges[i]
+    isempty(nb_slice) && return nothing
+    Lambda    = _get_Lambda(eq, rhos[i], valD)
+    sum_c_vec = dispatch_cfl(degree, valD, nb_slice, dist_vec, w_vec, invL, typeof(invL))
+    sum_c     = dot(Lambda, sum_c_vec)
+    sum_c > tol && (dt_buffer[i] = inv_dim / sum_c)
+    return nothing
+end
+
 # =========================================================================
 # OVERLOADED CAPACITY MANAGERS
 # =========================================================================
@@ -358,15 +408,11 @@ end
     ensure_capacity!(core::ParticleGridCore, req_capacity::Int)
 """
 @inline function ensure_capacity!(core::ParticleGridCore{D, T}, req_capacity::Int) where {D, T}
-    if length(core.positions) < req_capacity
-        new_cap = ceil(Int, req_capacity * 1.25)
-        
-        resize!(core.positions, new_cap)
-        resize!(core.is_boundary, new_cap)
-        resize!(core.volumes, new_cap)
-        resize!(core.tags, new_cap)
-        resize!(core.particle_orders, new_cap)
-    end
+    ensure_capacity!(core.positions, req_capacity)
+    ensure_capacity!(core.is_boundary, req_capacity)
+    ensure_capacity!(core.volumes, req_capacity)
+    ensure_capacity!(core.tags, req_capacity)
+    ensure_capacity!(core.particle_orders, req_capacity)
     return nothing
 end
 
@@ -374,23 +420,20 @@ end
     ensure_capacity!(bins::GlobalBins, req_particles::Int)
 """
 @inline function ensure_capacity!(bins::GlobalBins, req_particles::Int)
-    if length(bins.next) < req_particles
-        new_cap = ceil(Int, req_particles * 1.25)
-        resize!(bins.next, new_cap)
-    end
+    ensure_capacity!(bins.cell_particles, req_particles)
+    ensure_capacity!(bins.bin_of, req_particles)
     return nothing
 end
 
 """
-    ensure_capacity!(nd::NeighborData, req_particles::Int)
+    ensure_capacity!(nd::NeighborData, req_neighbors::Int)
+
+Grows the per-slot arrays to hold `req_neighbors` entries (on the device too: they are `Growable`s).
 """
-@inline function ensure_capacity!(nd::NeighborData{D, T, WF}, req_neighbors::Int) where {D, T, WF}
-    if length(nd.indices) < req_neighbors
-        new_cap = ceil(Int, req_neighbors * 1.25)
-        resize!(nd.indices, new_cap)
-        resize!(nd.weights, new_cap)
-        resize!(nd.distances, new_cap)
-    end
+@inline function ensure_capacity!(nd::NeighborData, req_neighbors::Int)
+    ensure_capacity!(nd.indices, req_neighbors)
+    ensure_capacity!(nd.weights, req_neighbors)
+    ensure_capacity!(nd.distances, req_neighbors)
     return nothing
 end
 
@@ -400,39 +443,34 @@ end
 Grows the per-particle arrays of the neighbour structure (`ranges` needs `N + 1` entries).
 """
 function ensure_particle_capacity!(nd::NeighborData, N::Int)
-    if length(nd.ranges) < N + 1
-        new_cap = ceil(Int, (N + 1) * 1.25)
-        old_len = length(nd.ranges)
-        resize!(nd.ranges, new_cap)
-        for k in (old_len + 1):new_cap; nd.ranges[k] = 1:0; end
+    old_len = length(nd.ranges)
+    if old_len < N + 1
+        ensure_capacity!(nd.ranges, N + 1)
+        fill!(view(nd.ranges, (old_len + 1):length(nd.ranges)), _empty_slots(eltype(nd.ranges)))
     end
-    length(nd.counts)  < N && resize!(nd.counts,  ceil(Int, N * 1.25))
-    length(nd.offsets) < N && resize!(nd.offsets, ceil(Int, N * 1.25))
+    ensure_capacity!(nd.counts, N)
+    ensure_capacity!(nd.offsets, N)
     return nothing
 end
 
 @inline function ensure_capacity!(sb::SharedBuffers{D, M, T}, req_capacity::Int) where {D, M, T}
-    if length(sb.pos_buffer) < req_capacity
-        new_cap = ceil(Int, req_capacity * 1.25)
-        
-        resize!(sb.pos_buffer, new_cap)
-        resize!(sb.bit_buffer, new_cap)
-        resize!(sb.float_buffer, new_cap)
-        resize!(sb.float_buffer2, new_cap)
-        resize!(sb.int_buffer, new_cap)
-        resize!(sb.rho_buffer, new_cap)
-    end
+    ensure_capacity!(sb.pos_buffer, req_capacity)
+    ensure_capacity!(sb.bit_buffer, req_capacity)
+    ensure_capacity!(sb.float_buffer, req_capacity)
+    ensure_capacity!(sb.float_buffer2, req_capacity)
+    ensure_capacity!(sb.int_buffer, req_capacity)
+    ensure_capacity!(sb.rho_buffer, req_capacity)
     return nothing
 end
 
+"""
+    ensure_capacity!(pg::ParticleGrid, req_capacity::Int)
+
+Makes room for `req_capacity` particles in every per-particle array of the grid (on the device too).
+"""
 @inline function ensure_capacity!(pg::ParticleGrid, req_capacity::Int)
-    if length(pg.rhos) < req_capacity
-        new_cap = ceil(Int, req_capacity * 1.25)
-        
-        resize!(pg.rhos, new_cap)
-        resize!(pg.curvatures, new_cap)
-    end
-    
+    ensure_capacity!(pg.rhos, req_capacity)
+    ensure_capacity!(pg.curvatures, req_capacity)
     ensure_capacity!(pg.core, req_capacity)
     ensure_capacity!(pg.shared, req_capacity)
     ensure_capacity!(pg.reorder, req_capacity)

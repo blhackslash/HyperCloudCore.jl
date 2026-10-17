@@ -99,25 +99,23 @@ Recomputes neighbour distances and weights from the current `pg.core.positions` 
 neighbour lists. Pairs now farther than `R` get weight zero.
 """
 function refresh_geometry!(pg::ParticleGrid{D, M, T}) where {D, M, T}
-    N         = pg.meta.N
-    pos       = pg.core.positions
-    nb        = pg.neighbor
-    L, L_inv  = pg.domain.L_wrap, pg.domain.invL_wrap
-    R_sq      = pg.meta.R^2
-    wf        = nb.weight_func
-    use_threads = get_use_threads()
-    zero_T    = zero(T)   # captured as a value (static parameters are runtime objects in a @batch body)
-
-    @smart_parallel use_threads for i in 1:N
-        @inbounds for k in nb.ranges[i]
-            j    = nb.indices[k]
-            dist = get_distance(pos, i, j, L, L_inv)
-            d2   = sum(abs2, dist)
-            nb.distances[k] = dist
-            nb.weights[k]   = d2 <= R_sq ? wf(d2) : zero_T
-        end
-    end
+    nb = pg.neighbor
+    foreach_particle(_refresh_slots!, get_backend(), pg.meta.N,
+        (pg.core.positions, nb.ranges, nb.indices, nb.distances, nb.weights, pg.domain.L_wrap, pg.domain.invL_wrap,
+         pg.meta.R^2, nb.weight_func, zero(T)))
     pg.meta.geometry_version += 1
+    return nothing
+end
+
+# Kernel body: distances and weights of the existing neighbour slots of particle `i`.
+@inline function _refresh_slots!(i, pos, ranges, indices, distances, weights, L, L_inv, R_sq, wf, zero_T)
+    @inbounds for k in ranges[i]
+        j    = indices[k]
+        dist = get_distance(pos, i, j, L, L_inv)
+        d2   = sum(abs2, dist)
+        distances[k] = dist
+        weights[k]   = d2 <= R_sq ? wf(d2) : zero_T
+    end
     return nothing
 end
 
@@ -129,7 +127,7 @@ Writes stage positions `X` into the grid and refreshes the geometry: distances/w
 """
 function set_positions!(pg::ParticleGrid, X::AbstractVector, full_search::Bool)
     N = pg.meta.N
-    pg.core.positions[1:N] .= view(X, 1:N)
+    copyto!(pg.core.positions, 1, parent(X), 1, N)
     full_search ? pg.neighbor(pg) : refresh_geometry!(pg)
     return nothing
 end

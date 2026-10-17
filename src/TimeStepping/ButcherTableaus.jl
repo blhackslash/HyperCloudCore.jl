@@ -20,15 +20,16 @@ rigorous for SSP tableaus (every stage is a convex combination of Euler steps): 
 `RK4_Classical`, `IMEX_ARS222`, `IMEX_ARS233`) still run, but the per-stage DMP has no theoretical
 backing there.
 """
-struct IMEXButcherTableau{T}
-    a::Matrix{T}
-    a_t::Matrix{T}
-    c::Vector{T}
-    c_t::Vector{T}
-    b::Vector{T}
-    b_t::Vector{T}
+struct IMEXButcherTableau{T, MA <: AbstractMatrix{T}, VA <: AbstractVector{T}}
+    a::MA
+    a_t::MA
+    c::VA
+    c_t::VA
+    b::VA
+    b_t::VA
 
-    function IMEXButcherTableau(a::Matrix{T}, a_t::Matrix{T}, c::Vector{T}, c_t::Vector{T}, b::Vector{T}, b_t::Vector{T}) where {T}
+    # Host tableaus use Matrix/Vector; inside kernels they arrive as SMatrix/SVector (see DeviceAdapt.jl).
+    function IMEXButcherTableau(a::MA, a_t::MA, c::VA, c_t::VA, b::VA, b_t::VA) where {T, MA <: AbstractMatrix{T}, VA <: AbstractVector{T}}
         s = size(a, 1)
         @assert (size(a, 2) == s && size(a_t) == (s, s) &&
                  length(c) == s && length(c_t) == s && length(b) == s && length(b_t) == s) "All Butcher tableau components must match number of stages"
@@ -38,7 +39,7 @@ struct IMEXButcherTableau{T}
         for i in 1:s, j in i:s
             @assert a_t[i, j] == zero(T) "Explicit matrix a_t must be strictly lower triangular."
         end
-        new{T}(a, a_t, c, c_t, b, b_t)
+        new{T, MA, VA}(a, a_t, c, c_t, b, b_t)
     end
 end
 
@@ -48,6 +49,16 @@ end
 Number of stages `s` of the tableau.
 """
 @inline num_stages(bt::IMEXButcherTableau) = length(bt.b)
+
+"""
+    static_tableau(bt::IMEXButcherTableau, ::Val{S}) -> IMEXButcherTableau
+
+`bt` with `SMatrix` / `SVector` components, `S = num_stages(bt)`: a bits object with a concrete type
+that kernel bodies can take as an argument. `GeneralRKTimeStepper` stores its tableau in this form.
+"""
+static_tableau(bt::IMEXButcherTableau{T}, ::Val{S}) where {T, S} = IMEXButcherTableau(
+    SMatrix{S, S, T}(bt.a), SMatrix{S, S, T}(bt.a_t), SVector{S, T}(bt.c), SVector{S, T}(bt.c_t),
+    SVector{S, T}(bt.b), SVector{S, T}(bt.b_t))
 
 """
     RKButcherTableau(a, b, c) -> IMEXButcherTableau

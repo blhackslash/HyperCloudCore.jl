@@ -74,11 +74,9 @@ domain_volume(pg::ParticleGrid) = domain_volume(pg.geometry)
 Discrete conserved content `Σ_i V_i U_i` over all particles of the current cloud.
 """
 function total_mass(pg::ParticleGrid{D, M, T}) where {D, M, T}
-    acc = zero(State{M, T})
-    @inbounds for i in 1:pg.meta.N
-        acc += pg.core.volumes[i] * pg.rhos[i]
-    end
-    return acc
+    N = pg.meta.N
+    N == 0 && return zero(State{M, T})
+    return mapreduce((v, u) -> v * u, +, view(pg.core.volumes, 1:N), view(pg.rhos, 1:N); init = zero(State{M, T}))
 end
 
 # -------------------------------------------------------------------------
@@ -123,22 +121,22 @@ function _collect_near!(pg::ParticleGrid{D, M, T}, y::Space{D, T}, R_sq::T,
     n = 0
     for I in CartesianIndices(ranges)
         cart = ntuple(d -> is_per[d] ? mod1(I[d], dims[d]) : I[d], Val(D))
-        j = bins.head[li[CartesianIndex(cart)]]
-        @inbounds while j > 0
+        b = li[CartesianIndex(cart)]
+        @inbounds for s in bins.cell_start[b]:(bins.cell_start[b + 1] - 1)
+            j = bins.cell_particles[s]
             d = _wrapped_diff(pos[j], y, L, Li)
             if sum(abs2, d) <= R_sq
                 n += 1
                 if n > length(idx); push!(idx, j); push!(dvec, d); else; idx[n] = j; dvec[n] = d; end
             end
-            j = bins.next[j]
         end
     end
     return n
 end
 
 # Wrap a point into the primary cell on periodic axes (no-op otherwise)
-@inline function _wrap_point(pg::ParticleGrid{D, M, T}, y::Space{D, T}) where {D, M, T}
-    is_per, Lv, mins = pg.domain.is_periodic, pg.domain.L, pg.domain.canvas_mins
+@inline _wrap_point(pg::ParticleGrid, y::Space) = _wrap_coords(y, pg.domain.is_periodic, pg.domain.L, pg.domain.canvas_mins)
+@inline function _wrap_coords(y::Space{D, T}, is_per, Lv, mins) where {D, T}
     return Space{D, T}(ntuple(d -> is_per[d] ? mins[d] + mod(y[d] - mins[d], Lv[d]) : y[d], Val(D)))
 end
 
@@ -154,7 +152,6 @@ function update_volumes!(pg::ParticleGrid{D, M, T}, est::ShepardVolumes) where {
     Vt  = pg.shared.float_buffer2
     wf  = nb.weight_func
     w0  = wf(zero(T))
-    use_threads = get_use_threads()
     if !isfinite(w0) || w0 > T(1e8) * wf(pg.meta.dx[1]^2)
         # Singular kernel (e.g. InverseWeightFunction): the Shepard partition degenerates to a delta.
         @warn "ShepardVolumes needs a kernel that is bounded at zero distance; using uniform volumes |Ω|/N." maxlog = 1
@@ -162,23 +159,10 @@ function update_volumes!(pg::ParticleGrid{D, M, T}, est::ShepardVolumes) where {
         return nothing
     end
 
-    one_T = one(T)   # captured as a value (static parameters are runtime objects in a @batch body)
-    @smart_parallel use_threads for i in 1:N
-        s = w0
-        @inbounds for k in nb.ranges[i]; s += nb.weights[k]; end
-        S[i] = s
-        V[i] = one_T / s
-    end
-
+    backend = get_backend()
+    foreach_particle(_shepard_sums!, backend, N, (S, V, nb.ranges, nb.weights, w0, one(T)))
     for _ in 1:est.sweeps
-        @smart_parallel use_threads for i in 1:N
-            acc = w0 / S[i] * V[i]
-            @inbounds for k in nb.ranges[i]
-                j = nb.indices[k]
-                acc += nb.weights[k] / S[j] * V[j]
-            end
-            Vt[i] = acc
-        end
+        foreach_particle(_shepard_sweep!, backend, N, (Vt, V, S, nb.ranges, nb.indices, nb.weights, w0))
         copyto!(V, 1, Vt, 1, N)
     end
 
@@ -186,16 +170,30 @@ function update_volumes!(pg::ParticleGrid{D, M, T}, est::ShepardVolumes) where {
     return nothing
 end
 
-function _renormalise_volumes!(pg::ParticleGrid{D, M, T}) where {D, M, T}
-    N = pg.meta.N
-    V = pg.core.volumes
-    s = zero(T)
-    @inbounds for i in 1:N
-        V[i] = max(V[i], zero(T))
-        s += V[i]
+# Kernel bodies of the Shepard partition (see Backend.jl).
+@inline function _shepard_sums!(i, S, V, ranges, weights, w0, one_T)
+    s = w0
+    @inbounds for k in ranges[i]; s += weights[k]; end
+    S[i] = s
+    V[i] = one_T / s
+    return nothing
+end
+
+@inline function _shepard_sweep!(i, Vt, V, S, ranges, indices, weights, w0)
+    acc = w0 / S[i] * V[i]
+    @inbounds for k in ranges[i]
+        j = indices[k]
+        acc += weights[k] / S[j] * V[j]
     end
-    c = domain_volume(pg) / s
-    @inbounds for i in 1:N; V[i] *= c; end
+    Vt[i] = acc
+    return nothing
+end
+
+# Clamps negative volumes to zero and rescales to Σ V = |Ω| (broadcasts and a reduction: runs on a device grid).
+function _renormalise_volumes!(pg::ParticleGrid{D, M, T}) where {D, M, T}
+    V = view(pg.core.volumes, 1:pg.meta.N)
+    V .= max.(V, zero(T))
+    V .*= domain_volume(pg) / sum(V)
     return nothing
 end
 

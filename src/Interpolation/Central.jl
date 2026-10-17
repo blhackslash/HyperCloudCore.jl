@@ -47,28 +47,29 @@ function CentralDivergence(::Type{T}, dimension::Int, M::Int, order::Int; div_or
 end
 
 function (central::CentralDivergence{D, M, T, MAX_ORDER, DIV_ORDER, INTERPS})(
-    eq::HyperbolicPDE, i::Int, f_i::State{M, T}, nb_slice::UnitRange{Int},
-    pg::ParticleGrid{D, M, T}, ib::InteractionBuffer{D, M, T}, ::MOODStrategy
+    eq::HyperbolicPDE, i::Int, f_i::State{M, T}, nb_slice::OrdinalRange{Int, Int},
+    pg::ParticleGrid{D, M, T}, U::AbstractVector{State{M, T}}, ib::InteractionBuffer{D, M, T}, ::MOODStrategy
 ) where {D, M, T, MAX_ORDER, DIV_ORDER, INTERPS}
 
     num_nb = length(nb_slice)
     p_order = pg.core.particle_orders[i]
 
     while p_order > 1
-        req_nb = typeof(basis_length(Val(D), Val(p_order))).parameters[1]
+        req_nb = basis_count(D, p_order)
         if num_nb >= req_nb; break; end
         p_order -= 1
     end
-    
-    if num_nb < typeof(basis_length(Val(D), Val(p_order))).parameters[1]
+
+    if num_nb < basis_count(D, p_order)
         return zero(State{M, T})
     end
 
     F_i = flux(eq, f_i)
     dist_all = get_distances(pg)
+    f_nb = neighbour_states(U, pg)
 
     @inbounds for global_idx in nb_slice
-        f_j    = ib.f[global_idx]
+        f_j    = f_nb[global_idx]
         F_j    = flux(eq, f_j)
         ib.df_flux[global_idx] = F_j - F_i
     end

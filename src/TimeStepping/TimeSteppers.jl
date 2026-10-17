@@ -1,71 +1,61 @@
 export GeneralRKTimeStepper, GeneralIMEXTimeStepper, mood_flags
 
 """
-    MOODWork
+    MOODWork(storage = Array)
 
 Scratch owned by the time stepper: `triggered` (this pass), `changed` (orders that moved, i.e. C),
 `dirty` (fluxes to recompute, C ⊕ reach), `scratch`, an `Int` order snapshot for forcing, and
 `triggered_step`, a per-step diagnostic of every particle that dropped an order (see `mood_flags`).
+The masks are `Growable` buffers with arrays of type `storage`.
 """
-struct MOODWork
-    triggered::Vector{Bool}
-    changed::Vector{Bool}
-    dirty::Vector{Bool}
-    scratch::Vector{Bool}
-    snapshot::Vector{Int}
-    triggered_step::Vector{Bool}
-    MOODWork() = new(Bool[], Bool[], Bool[], Bool[], Int[], Bool[])
+struct MOODWork{GB <: Growable{Bool}, GI <: Growable{Int}}
+    triggered::GB
+    changed::GB
+    dirty::GB
+    scratch::GB
+    snapshot::GI
+    triggered_step::GB
+    N::Base.RefValue{Int}           # particles of the last `update_size!`: the active part of the masks
 end
+MOODWork(::Type{AT} = Array) where {AT <: AbstractArray} =
+    MOODWork(Growable{Bool}(AT), Growable{Bool}(AT), Growable{Bool}(AT), Growable{Bool}(AT), Growable{Int}(AT), Growable{Bool}(AT), Ref(0))
 
 function update_size!(w::MOODWork, N::Int)
     ensure_capacity!(w.triggered, N); ensure_capacity!(w.changed, N)
     ensure_capacity!(w.dirty, N);     ensure_capacity!(w.scratch, N)
     ensure_capacity!(w.snapshot, N);  ensure_capacity!(w.triggered_step, N)
+    w.N[] = N
     return nothing
 end
 
 """
-    InteractionBuffer{D, M, T}
+    InteractionBuffer{D, M, T}(storage = Array)
 
-Pre-allocated neighbour workspace, indexed by global neighbour slot (so per-particle slices are
-disjoint and the passes are thread-safe).
+Per-slot scratch of the schemes, indexed by global neighbour slot (so per-particle slices are
+disjoint and the passes are thread-safe). The host object holds `Growable` buffers with arrays of
+type `storage`; kernels receive it with the raw arrays (see `DeviceAdapt.jl`). Neighbour states are
+not buffered: schemes read them from the state vector through `neighbour_states` /
+`neighbour_differences`.
 
 # Fields
-- `f`, `df`: neighbour states and differences to the centre particle.
 - `df_flux`: numerical flux differences / non-conservative jumps.
 - `df_scratch`: MLS scratch.
 - `mask`: directional stencil filter.
 """
-struct InteractionBuffer{D, M, T}
-    f::Vector{State{M, T}}
-    df::Vector{State{M, T}}
-    df_flux::Vector{Flux{D, M, T}}
-    df_scratch::Vector{State{M, T}}
-    mask::Vector{Bool}
-
-    InteractionBuffer{D, M, T}() where {D, M, T} = new{D, M, T}(
-        State{M, T}[], State{M, T}[], Flux{D, M, T}[], State{M, T}[], Bool[]
-    )
+struct InteractionBuffer{D, M, T, VS <: AbstractVector{State{M, T}}, VF <: AbstractVector{Flux{D, M, T}}, VB <: AbstractVector{Bool}}
+    df_flux::VF
+    df_scratch::VS
+    mask::VB
 end
+InteractionBuffer{D, M, T}(df_flux::VF, df_scratch::VS, mask::VB) where {D, M, T, VS, VF, VB} =
+    InteractionBuffer{D, M, T, VS, VF, VB}(df_flux, df_scratch, mask)
+InteractionBuffer{D, M, T}(::Type{AT} = Array) where {D, M, T, AT <: AbstractArray} =
+    InteractionBuffer{D, M, T}(Growable{Flux{D, M, T}}(AT), Growable{State{M, T}}(AT), Growable{Bool}(AT))
 
 function update_size!(ib::InteractionBuffer, num_interactions::Int)
-    ensure_capacity!(ib.f, num_interactions)
-    ensure_capacity!(ib.df, num_interactions)
     ensure_capacity!(ib.df_flux, num_interactions)
     ensure_capacity!(ib.df_scratch, num_interactions)
     ensure_capacity!(ib.mask, num_interactions)
-    return nothing
-end
-
-@inline function update_content!(
-    ib::InteractionBuffer{D, M, T}, nb_indices::AbstractVector{Int},
-    f_i::State{M, T}, nb_slice::UnitRange{Int}, fVec::AbstractVector{State{M, T}}
-) where {D, M, T}
-    @inbounds for k in nb_slice
-        f_j = fVec[nb_indices[k]]
-        ib.f[k]  = f_j
-        ib.df[k] = f_j - f_i
-    end
     return nothing
 end
 
@@ -136,56 +126,69 @@ exact for SSP tableaus.
   (default: freeze topology, refresh distances/weights only).
 - `volume_estimator = ShepardVolumes()`: how `pg.core.volumes` is recomputed after each step of a
   moving grid (`nothing` leaves the volumes untouched).
+- `storage = Array`: array type of the stage buffers, e.g. `ROCArray` for a stepper that advances a
+  grid built with `device_grid` (the interpolator needs the same `storage`).
 
 # Fields
 - `rho_n`, `rho_cand`, `Y_stages`, `K_E_stages`, `K_I_stages`: states and RHS (`K_E = -div(F − w_i ρ) + S_expl`).
 - `x_n`, `x_cand`, `X_stages`, `K_X_stages`: positions and grid velocities (sized only when moving).
 - `int_buffer`, `work`: neighbour gather buffer and MOOD scratch.
+All of them are `Growable` buffers, sized by `update_size!` at the start of every step.
 """
 struct GeneralRKTimeStepper{D, M, T, PDE <: HyperbolicPDE, G <: DivergenceInterpolator, MO <: MOOD,
                             EST <: Tuple{Vararg{AbstractExplicitSourceTerm}},
                             IST <: Tuple{Vararg{AbstractImplicitSourceTerm}},
-                            VE <: Union{Nothing, VolumeEstimator}} <: TimeStepper
+                            VE <: Union{Nothing, VolumeEstimator}, S,
+                            GS <: Growable{State{M, T}}, GP <: Growable{Space{D, T}},
+                            IB <: InteractionBuffer{D, M, T}, WORK <: MOODWork,
+                            BT <: IMEXButcherTableau{T}} <: TimeStepper
     pde::PDE
     divergence_interpolator::G
     mood::MO
     explicit_sources::EST
     implicit_sources::IST
-    tableau::IMEXButcherTableau{T}
+    tableau::BT          # static form (`static_tableau`): a bits kernel argument of concrete type
     reset_orders_per_stage::Bool
     full_search_per_stage::Bool
     volume_estimator::VE
 
-    rho_n::Vector{State{M, T}}
-    rho_cand::Vector{State{M, T}}
-    Y_stages::Vector{Vector{State{M, T}}}
-    K_E_stages::Vector{Vector{State{M, T}}}
-    K_I_stages::Vector{Vector{State{M, T}}}
+    rho_n::GS
+    rho_cand::GS
+    # Stage arrays as tuples (one entry per stage): indexable inside kernels, unlike a Vector of Vectors.
+    Y_stages::NTuple{S, GS}
+    K_E_stages::NTuple{S, GS}
+    K_I_stages::NTuple{S, GS}
 
-    x_n::Vector{Space{D, T}}
-    x_cand::Vector{Space{D, T}}
-    X_stages::Vector{Vector{Space{D, T}}}
-    K_X_stages::Vector{Vector{Space{D, T}}}
+    x_n::GP
+    x_cand::GP
+    X_stages::NTuple{S, GP}
+    K_X_stages::NTuple{S, GP}
 
-    int_buffer::InteractionBuffer{D, M, T}
-    work::MOODWork
+    int_buffer::IB
+    work::WORK
     num_stages::Int
 
     function GeneralRKTimeStepper(
         pde::HyperbolicPDE{D, M, T}, div_interp::G, mood::MO,
         explicit_sources::EST, implicit_sources::IST, tableau::IMEXButcherTableau{T};
         reset_orders_per_stage::Bool = false, full_search_per_stage::Bool = false,
-        volume_estimator::VE = ShepardVolumes()
-    ) where {D, M, T, G, MO <: MOOD, EST <: Tuple{Vararg{AbstractExplicitSourceTerm}}, IST <: Tuple{Vararg{AbstractImplicitSourceTerm}}, VE <: Union{Nothing, VolumeEstimator}}
-        s = num_stages(tableau)
-        new{D, M, T, typeof(pde), G, MO, EST, IST, VE}(
-            pde, div_interp, mood, explicit_sources, implicit_sources, tableau,
+        volume_estimator::VE = ShepardVolumes(), storage::Type{AT} = Array
+    ) where {D, M, T, G, MO <: MOOD, EST <: Tuple{Vararg{AbstractExplicitSourceTerm}}, IST <: Tuple{Vararg{AbstractImplicitSourceTerm}},
+             VE <: Union{Nothing, VolumeEstimator}, AT <: AbstractArray}
+        s  = num_stages(tableau)
+        bt = static_tableau(tableau, Val(s))
+        states    = () -> Growable{State{M, T}}(AT)
+        positions = () -> Growable{Space{D, T}}(AT)
+        ib   = InteractionBuffer{D, M, T}(AT)
+        work = MOODWork(AT)
+        new{D, M, T, typeof(pde), G, MO, EST, IST, VE, s, typeof(states()), typeof(positions()), typeof(ib), typeof(work), typeof(bt)}(
+            pde, div_interp, mood, explicit_sources, implicit_sources, bt,
             reset_orders_per_stage, full_search_per_stage, volume_estimator,
-            State{M, T}[], State{M, T}[],
-            [State{M, T}[] for _ in 1:s], [State{M, T}[] for _ in 1:s], [State{M, T}[] for _ in 1:s],
-            Space{D, T}[], Space{D, T}[],
-            [Space{D, T}[] for _ in 1:s], [Space{D, T}[] for _ in 1:s],
-            InteractionBuffer{D, M, T}(), MOODWork(), s
+            states(), states(),
+            ntuple(_ -> states(), s), ntuple(_ -> states(), s), ntuple(_ -> states(), s),
+            positions(), positions(),
+            ntuple(_ -> positions(), s), ntuple(_ -> positions(), s),
+            ib, work, s
         )
     end
 end
@@ -208,8 +211,13 @@ end
 GeneralRKTimeStepper(pde::HyperbolicPDE{D, M, T}, div_interp, mood::MOOD, tableau::IMEXButcherTableau{T}; kwargs...) where {D, M, T} =
     GeneralRKTimeStepper(pde, div_interp, mood, (), (), tableau; kwargs...)
 
-"Per-step diagnostic: `true` for every particle that dropped an order during the last step."
-mood_flags(ts::GeneralRKTimeStepper) = ts.work.triggered_step
+"""
+    mood_flags(ts::GeneralRKTimeStepper) -> AbstractVector{Bool}
+
+Per-step diagnostic: `true` for every particle that dropped an order during the last step. A view of the
+stepper's mask over the particles of that step (the buffer behind it is over-allocated).
+"""
+mood_flags(ts::GeneralRKTimeStepper) = view(parent(ts.work.triggered_step), 1:ts.work.N[])
 
 @inline _is_moving(pg::ParticleGrid) = !(pg.mover isa NoGridMover)
 
@@ -242,56 +250,55 @@ update_size!(ts::GeneralRKTimeStepper, N::Int, M_neighbors::Int) = update_size!(
 """
     compute_explicit_rhs!(ts, eq, pg, K_E, K_X, Y, t, full)
 
-Pre-gather (neighbour states, cached gradients) and flux pass at the CURRENT grid geometry:
+Scheme pre-pass (cached gradients) and flux pass at the CURRENT grid geometry:
 `K_E = -div(F − w_i ρ) + S_expl` (the PDE wrapped in an `ALEFrame` with the particle's own grid
-velocity), and `K_X = w` when the grid moves. `full = true` covers all
-interior particles; otherwise gradients are recomputed on `work.changed` and fluxes on `work.dirty`.
+velocity), and `K_X = w` when the grid moves. Both passes read neighbour states straight from `Y`.
+`full = true` covers all interior particles; otherwise gradients are recomputed on `work.changed`
+and fluxes on `work.dirty`.
 """
 function compute_explicit_rhs!(ts::GeneralRKTimeStepper{D, M, T}, eq, pg, K_E, K_X, Y, t, full::Bool) where {D, M, T}
-    N           = pg.meta.N
-    nb_slices   = pg.neighbor.ranges
-    nb_indices  = pg.neighbor.indices
-    is_boundary = pg.core.is_boundary
-    ib          = ts.int_buffer
-    interp      = ts.divergence_interpolator
-    strategy    = ts.mood.strategy
-    mover       = pg.mover
-    moving      = _is_moving(pg)
-    grad_mask   = ts.work.changed
-    flux_mask   = ts.work.dirty
-    use_threads = get_use_threads()
-    # Captured as values: static parameters are runtime objects inside a @batch body (see Utils.jl).
-    zero_state  = zero(State{M, T})
-    zero_space  = zero(Space{D, T})
+    N       = pg.meta.N
+    interp  = ts.divergence_interpolator
+    moving  = _is_moving(pg)
+    backend = get_backend()
 
     prepare_geometry!(interp, pg)   # refreshes geometry caches only if the grid changed
 
-    @smart_parallel use_threads for p in 1:N
-        if is_boundary[p] || !(full || grad_mask[p]); continue; end
-        fi = Y[p]; nb = nb_slices[p]
-        update_content!(ib, nb_indices, fi, nb, Y)
-        update_content!(interp, p, fi, nb, pg, ib)
-    end
+    foreach_particle(_rhs_gather!, backend, N,
+        (Y, pg.core.is_boundary, pg.neighbor.ranges, ts.int_buffer, interp, pg, ts.work.changed, full))
+    foreach_particle(_rhs_flux!, backend, N,
+        (eq, Y, K_E, K_X, pg.core.is_boundary, pg.neighbor.ranges, ts.int_buffer, interp, ts.mood.strategy, pg.mover, pg,
+         ts.explicit_sources, ts.work.dirty, full, moving, t, zero(State{M, T}), zero(Space{D, T})))
+    return nothing
+end
 
-    @smart_parallel use_threads for p in 1:N
-        if is_boundary[p]
-            if full
-                K_E[p] = zero_state
-                moving && (K_X[p] = zero_space)
-            end
-            continue
+# Kernel bodies of the right-hand side (see Backend.jl): the scheme's pre-pass (cached gradients), then the flux pass.
+@inline function _rhs_gather!(p, Y, is_boundary, nb_slices, ib, interp, pg, grad_mask, full)
+    (is_boundary[p] || !(full || grad_mask[p])) && return nothing
+    fi = Y[p]; nb = nb_slices[p]
+    update_content!(interp, p, fi, nb, pg, Y, ib)
+    return nothing
+end
+
+@inline function _rhs_flux!(p, eq, Y, K_E, K_X, is_boundary, nb_slices, ib, interp, strategy, mover, pg, sources,
+                            flux_mask, full, moving, t, zero_state, zero_space)
+    if is_boundary[p]
+        if full
+            K_E[p] = zero_state
+            moving && (K_X[p] = zero_space)
         end
-        if !(full || flux_mask[p]); continue; end
-        fi = Y[p]; nb = nb_slices[p]
-        if moving
-            w      = grid_velocity(mover, eq, p, fi, pg, t)
-            K_X[p] = w
-            div_F  = interp(ALEFrame(eq, w), p, fi, nb, pg, ib, strategy)   # relative flux F − w_i ρ
-        else
-            div_F  = interp(eq, p, fi, nb, pg, ib, strategy)
-        end
-        K_E[p] = -div_F + evaluate_sources(ts.explicit_sources, fi, p, pg, t)
+        return nothing
     end
+    (full || flux_mask[p]) || return nothing
+    fi = Y[p]; nb = nb_slices[p]
+    if moving
+        w      = grid_velocity(mover, eq, p, fi, pg, t)
+        K_X[p] = w
+        div_F  = interp(ALEFrame(eq, w), p, fi, nb, pg, Y, ib, strategy)   # relative flux F − w_i ρ
+    else
+        div_F  = interp(eq, p, fi, nb, pg, Y, ib, strategy)
+    end
+    K_E[p] = -div_F + evaluate_sources(sources, fi, p, pg, t)
     return nothing
 end
 
@@ -303,66 +310,70 @@ For `i == s + 1`: builds the final state into `rho_cand` / `x_cand` (BCs applied
 Positions are NOT applied to the grid here; see `set_positions!`.
 """
 function form_candidate!(ts::GeneralRKTimeStepper{D, M, T}, eq, pg, i::Int, dt::T, time::Real) where {D, M, T}
-    N           = pg.meta.N
-    s           = ts.num_stages
-    bt          = ts.tableau
-    is_boundary = pg.core.is_boundary
-    U_n, x_n    = ts.rho_n, ts.x_n
-    K_E, K_I, K_X = ts.K_E_stages, ts.K_I_stages, ts.K_X_stages
-    moving      = _is_moving(pg)
-    use_threads = get_use_threads()
+    N        = pg.meta.N
+    s        = ts.num_stages
+    bt       = ts.tableau
+    moving   = _is_moving(pg)
+    backend  = get_backend()
 
     is_final = i > s
     target   = is_final ? ts.rho_cand : ts.Y_stages[i]
     x_target = is_final ? ts.x_cand   : ts.X_stages[i]
     t_i      = is_final ? time + dt : time + bt.c_t[i] * dt
     n_prev   = is_final ? s : i - 1
-    # Captured as values: `zero(Space{D, T})` inside the @batch body built the type at runtime for every
-    # particle (several MiB of allocations per stage and no thread scaling).
-    zero_T      = zero(T)
-    zero_state  = zero(State{M, T})
-    zero_space  = zero(Space{D, T})
 
-    @smart_parallel use_threads for p in 1:N
-        if is_boundary[p]
-            target[p] = pg.rhos[p]
-            moving && (x_target[p] = x_n[p])
-            continue
-        end
-        Y = U_n[p]
-        X = moving ? x_n[p] : zero_space
-        for j in 1:n_prev
-            a_t = is_final ? bt.b_t[j] : bt.a_t[i, j]
-            a   = is_final ? bt.b[j]   : bt.a[i, j]
-            if a_t != zero_T
-                Y += (dt * a_t) * K_E[j][p]
-                moving && (X += (dt * a_t) * K_X[j][p])
-            end
-            a != zero_T && (Y += (dt * a) * K_I[j][p])
-        end
-        target[p] = Y
-        moving && (x_target[p] = X)
-    end
+    foreach_particle(_stage_predictor!, backend, N,
+        (target, x_target, ts.rho_n, ts.x_n, ts.K_E_stages, ts.K_I_stages, ts.K_X_stages, pg.rhos,
+         pg.core.is_boundary, bt, i, n_prev, is_final, dt, moving, zero(T), zero(Space{D, T})))
 
     if !is_final
-        pre_solve_updates!(ts.implicit_sources, target, pg, t_i)
+        pre_solve_updates!(ts.implicit_sources, parent(target), pg, t_i)
         a_ii = bt.a[i, i]
         if abs(a_ii) > T(1e-14)
-            dt_ii = dt * a_ii
-            @smart_parallel use_threads for p in 1:N
-                if is_boundary[p]; continue; end
-                target[p] = implicit_solve(ts.implicit_sources, target[p], dt_ii, p, pg, t_i)
-            end
+            foreach_particle(_stage_implicit_solve!, backend, N,
+                (target, pg.core.is_boundary, ts.implicit_sources, dt * a_ii, pg, t_i))
         end
-        K_I_i = K_I[i]
-        @smart_parallel use_threads for p in 1:N
-            K_I_i[p] = is_boundary[p] ? zero_state :
-                       evaluate_sources(ts.implicit_sources, target[p], p, pg, t_i)
-        end
+        foreach_particle(_stage_implicit_rhs!, backend, N,
+            (ts.K_I_stages[i], target, pg.core.is_boundary, ts.implicit_sources, pg, t_i, zero(State{M, T})))
     end
 
-    apply_boundary_conditions!(pg, target, ts, eq, t_i)
+    apply_boundary_conditions!(pg, parent(target), ts, eq, t_i)
     return target, t_i
+end
+
+# Kernel bodies of the stage assembly (see Backend.jl).
+@inline function _stage_predictor!(p, target, x_target, U_n, x_n, K_E, K_I, K_X, rhos, is_boundary, bt, i, n_prev,
+                                   is_final, dt, moving, zero_T, zero_space)
+    if is_boundary[p]
+        target[p] = rhos[p]
+        moving && (x_target[p] = x_n[p])
+        return nothing
+    end
+    Y = U_n[p]
+    X = moving ? x_n[p] : zero_space
+    for j in 1:n_prev
+        a_t = is_final ? bt.b_t[j] : bt.a_t[i, j]
+        a   = is_final ? bt.b[j]   : bt.a[i, j]
+        if a_t != zero_T
+            Y += (dt * a_t) * K_E[j][p]
+            moving && (X += (dt * a_t) * K_X[j][p])
+        end
+        a != zero_T && (Y += (dt * a) * K_I[j][p])
+    end
+    target[p] = Y
+    moving && (x_target[p] = X)
+    return nothing
+end
+
+@inline function _stage_implicit_solve!(p, target, is_boundary, sources, dt_ii, pg, t_i)
+    is_boundary[p] && return nothing
+    target[p] = implicit_solve(sources, target[p], dt_ii, p, pg, t_i)
+    return nothing
+end
+
+@inline function _stage_implicit_rhs!(p, K_I_i, target, is_boundary, sources, pg, t_i, zero_state)
+    K_I_i[p] = is_boundary[p] ? zero_state : evaluate_sources(sources, target[p], p, pg, t_i)
+    return nothing
 end
 
 """
@@ -384,10 +395,10 @@ function mood_checkpoint!(ts::GeneralRKTimeStepper{D, M, T}, eq, pg, i::Int, dt:
     full = true
     while true
         target, _ = form_candidate!(ts, eq, pg, i, dt, time)
-        detect_and_drop!(ts.mood, work, interp, pg, ts.int_buffer, Y_prev, target, full) || return nothing
+        detect_and_drop!(ts.mood, work, interp, pg, Y_prev, target, full; eq = eq) || return nothing
 
-        copyto!(work.dirty, 1, work.changed, 1, N)
-        expand_mask!(work.dirty, work.scratch, pg, reach)
+        copyto!(parent(work.dirty), 1, parent(work.changed), 1, N)
+        expand_mask!(parent(work.dirty), parent(work.scratch), pg, reach)
         compute_explicit_rhs!(ts, eq, pg, ts.K_E_stages[i - 1], ts.K_X_stages[i - 1], Y_prev, t_prev, false)
         full = false
     end
@@ -414,8 +425,8 @@ function (ts::GeneralRKTimeStepper{D, M, T})(eq::HyperbolicPDE, pg::ParticleGrid
     update_size!(ts, N, length(pg.neighbor.indices), moving)
     update_size!(interp, N)                       # once per step; gradients persist across checkpoints
 
-    ts.rho_n[1:N] .= view(pg.rhos, 1:N)
-    moving && (ts.x_n[1:N] .= view(pg.core.positions, 1:N))
+    copyto!(parent(ts.rho_n), 1, pg.rhos, 1, N)
+    moving && copyto!(parent(ts.x_n), 1, pg.core.positions, 1, N)
 
     max_order = _extract_order(interp)
     fill!(view(orders, 1:N), max_order)
@@ -434,10 +445,10 @@ function (ts::GeneralRKTimeStepper{D, M, T})(eq::HyperbolicPDE, pg::ParticleGrid
     end
 
     mood_checkpoint!(ts, eq, pg, s + 1, dt, time)          # uses geometry of stage s
-    pg.rhos[1:N] .= view(ts.rho_cand, 1:N)
+    copyto!(pg.rhos, 1, parent(ts.rho_cand), 1, N)
 
     if moving
-        pg.core.positions[1:N] .= view(ts.x_cand, 1:N)
+        copyto!(pg.core.positions, 1, parent(ts.x_cand), 1, N)
         pg.neighbor(pg)                                    # full search + periodic wrap for the next step
         ts.volume_estimator === nothing || update_volumes!(pg, ts.volume_estimator)
     end

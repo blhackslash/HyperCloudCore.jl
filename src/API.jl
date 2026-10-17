@@ -1,4 +1,4 @@
-export flux, max_eigenvalue, prim2cons, cons2prim, velocity, fluid_velocity
+export flux, max_eigenvalue, is_admissible, prim2cons, cons2prim, velocity, fluid_velocity
 export evaluate_nc_jump
 export pre_solve_update!, evaluate_source, implicit_solve
 export update_size!, update_content!, prepare_geometry!, _extract_order, _divergence_degree, _order_reach
@@ -36,6 +36,16 @@ Calculates the maximum absolute wave speed of the system along a specific spatia
 - A scalar of type `T` representing the highest observed eigenvalue for that dimension.
 """
 @inline max_eigenvalue(eq::HyperbolicPDE, u::State, dim::Int) = error("`max_eigenvalue` not implemented for $(typeof(eq))")
+
+"""
+    is_admissible(eq::HyperbolicPDE, U::State) -> Bool
+
+Physical admissibility of a state (the PAD of MOOD): a MOOD time stepper drops the order of a particle
+whose candidate state is not admissible, whatever its criterion says. The default only rejects
+non-finite states (NaN or Inf); systems with an admissible set (e.g. positive density and pressure for
+the Euler equations) add a method. Runs inside kernels.
+"""
+@inline is_admissible(eq::HyperbolicPDE, U::State) = all(isfinite, U)
 
 """
     max_eigenvalue(eq::HyperbolicPDE, U::State, d::Int, shift::Real)
@@ -184,9 +194,10 @@ Dynamically resizes internal evaluation buffers (like cached gradients) to match
 @inline update_size!(::DivergenceInterpolator, ::Int) = error("`update_size!` not implemented!")
 
 """
-    update_content!(interp::DivergenceInterpolator, i::Int, f_i::State, nb_slice::UnitRange, pg::ParticleGrid, ib::InteractionBuffer)
+    update_content!(interp::DivergenceInterpolator, i::Int, f_i::State, nb_slice::OrdinalRange, pg::ParticleGrid, U::AbstractVector{State}, ib::InteractionBuffer)
 
-Executes pre-gather computations (such as resolving MLS gradients or limiting slopes) prior to the primary flux pass. Defaults to a no-op for stateless algorithms.
+Executes the pre-pass computations (such as resolving MLS gradients or limiting slopes) prior to the
+primary flux pass; `U` is the stage state vector. Defaults to a no-op for stateless algorithms.
 """
 @inline update_content!(::DivergenceInterpolator, args...) = nothing
 

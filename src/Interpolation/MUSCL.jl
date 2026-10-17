@@ -52,12 +52,15 @@ Computes the divergence of the flux at particle `i`. Note that `MUSCL` relies on
 - `flux`: The associated numerical flux function (`NF`).
 - `gradients`: A pre-allocated vector storing the reconstructed, limited spatial gradients for all particles.
 - `grad_weights`, `div_weights`: cached inverse MLS moment matrices (`MLSWeights`) of the full-order reconstruction and divergence fits, refreshed by `prepare_geometry!` when the grid geometry changes.
+
+The per-particle caches are `Growable` buffers whose array type is the `storage` keyword of the constructor
+(`Array` by default; `ROCArray` etc. for a grid built with `device_grid`).
 """
-struct MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER, INTERPS, L, NF, WG, WD} <: DivergenceInterpolator
+struct MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER, INTERPS, L, NF, VG <: AbstractVector{SVector{B_LEN, State{M, T}}}, WG, WD} <: DivergenceInterpolator
     interpolators::INTERPS
     limiter::L
     flux::NF
-    gradients::Vector{SVector{B_LEN, State{M, T}}}
+    gradients::VG
     # Cached inverse MLS moment matrices for a frozen geometry (see `MLSWeights`): the full-order reconstruction and the
     # divergence fit. They are the same object when both use the same degree. Particles at reduced (MOOD)
     # order fall back to the direct solves.
@@ -72,10 +75,10 @@ end
 @inline _extract_order(::MUSCL{D, M, T, B_LEN, MAX_ORDER}) where {D, M, T, B_LEN, MAX_ORDER} = MAX_ORDER
 
 function MUSCL(
-    ::Type{T}, dimension::Int, M::Int, max_order::Int, 
-    limiter, flux; 
-    div_order::Int=0
-) where {T}
+    ::Type{T}, dimension::Int, M::Int, max_order::Int,
+    limiter, flux;
+    div_order::Int=0, storage::Type{AT} = Array
+) where {T, AT <: AbstractArray}
     @assert max_order >= 1 "MUSCL must have a maximum order of at least 1."
     @assert div_order >= 0 "Divergence order only supports 0 (adaptive) or positive values!"
     
@@ -94,15 +97,18 @@ function MUSCL(
 
     # Cached weights: the reconstruction degree at full order and the divergence degree at full order.
     div_degree = _full_div_idx(Val(max_order), Val(div_order)) - 1
-    grad_weights = MLSWeights{B_LEN, max_degree, T}()
+    grad_weights = MLSWeights{B_LEN, max_degree, T}(AT)
     div_weights  = div_degree == max_degree ? grad_weights :
-                   MLSWeights{typeof(basis_length(Val(dimension), Val(div_degree))).parameters[1], div_degree, T}()
+                   MLSWeights{typeof(basis_length(Val(dimension), Val(div_degree))).parameters[1], div_degree, T}(AT)
 
-    return MUSCL{dimension, M, T, B_LEN, max_order, div_order, typeof(interps), typeof(limiter), typeof(flux),
-                 typeof(grad_weights), typeof(div_weights)}(
-        interps, limiter, flux, SVector{B_LEN, State{M, T}}[], grad_weights, div_weights
-    )
+    return MUSCL{dimension, M, T, B_LEN, max_order, div_order}(interps, limiter, flux, Growable{SVector{B_LEN, State{M, T}}}(AT),
+                                                              grad_weights, div_weights)
 end
+
+# Infers the storage types (host vectors, or device views when adapted for a kernel).
+MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER}(interps, limiter, flux, gradients, grad_weights, div_weights) where {D, M, T, B_LEN, MAX_ORDER, DIV_ORDER} =
+    MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER, typeof(interps), typeof(limiter), typeof(flux), typeof(gradients),
+          typeof(grad_weights), typeof(div_weights)}(interps, limiter, flux, gradients, grad_weights, div_weights)
 
 function prepare_geometry!(muscl::MUSCL, pg::ParticleGrid)
     update_weights!(muscl.grad_weights, pg)
@@ -121,15 +127,15 @@ end
 # =========================================================================
 
 function update_content!(
-    muscl::MUSCL{D, M, T, B_LEN, MAX_ORDER}, i::Int, f_i::State{M, T}, nb_slice::UnitRange{Int},
-    pg::ParticleGrid{D, M, T}, ib::InteractionBuffer{D, M, T}
+    muscl::MUSCL{D, M, T, B_LEN, MAX_ORDER}, i::Int, f_i::State{M, T}, nb_slice::OrdinalRange{Int, Int},
+    pg::ParticleGrid{D, M, T}, U::AbstractVector{State{M, T}}, ib::InteractionBuffer{D, M, T}
 ) where {D, M, T, B_LEN, MAX_ORDER}
-    
+    df = neighbour_differences(U, pg, f_i)
     num_nb = length(nb_slice)
     p_order = pg.core.particle_orders[i]
 
     req_deg = p_order - 1
-    req_nb = req_deg == 0 ? 0 : typeof(basis_length(Val(D), Val(req_deg))).parameters[1]
+    req_nb = basis_count(D, req_deg)
     
     # Dynamically clamp spatial order in core arrays if neighborhood is starved
     if num_nb < req_nb
@@ -142,16 +148,16 @@ function update_content!(
 
     wg = muscl.grad_weights
     raw_grad = if p_order == MAX_ORDER && p_order > 1 && is_current(wg, pg) && wg.ok[i]
-        apply_weights(wg, i, nb_slice, dist_all, w_all, ib.df)   # cached full-order fit
+        apply_weights(wg, i, nb_slice, dist_all, w_all, df)   # cached full-order fit
     else
         scale_val = minimum(pg.meta.dx)
-        dispatch_interpolator(muscl.interpolators, p_order, nb_slice, dist_all, w_all, ib.df, scale_val, Val(B_LEN), State{M, T})
+        dispatch_interpolator(muscl.interpolators, p_order, nb_slice, dist_all, w_all, df, scale_val, Val(B_LEN), State{M, T})
     end
-    
+
     if p_order == 1
-        muscl.gradients[i] = raw_grad 
+        muscl.gradients[i] = raw_grad
     else
-        muscl.gradients[i] = _limit_slopes(muscl.limiter, raw_grad, nb_slice, f_i, ib.f, pg, dist_all, Val(MAX_ORDER - 1))
+        muscl.gradients[i] = _limit_slopes(muscl.limiter, raw_grad, nb_slice, f_i, neighbour_states(U, pg), pg, dist_all, Val(MAX_ORDER - 1))
     end
     return nothing
 end
@@ -161,8 +167,8 @@ end
 # =========================================================================
 
 function (muscl::MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER})(
-    eq::HyperbolicPDE, i::Int, f_i::State{M, T}, nb_slice::UnitRange{Int},
-    pg::ParticleGrid{D, M, T}, ib::InteractionBuffer{D, M, T}, strategy::MOODStrategy
+    eq::HyperbolicPDE, i::Int, f_i::State{M, T}, nb_slice::OrdinalRange{Int, Int},
+    pg::ParticleGrid{D, M, T}, U::AbstractVector{State{M, T}}, ib::InteractionBuffer{D, M, T}, strategy::MOODStrategy
 ) where {D, M, T, B_LEN, MAX_ORDER, DIV_ORDER}
 
     if isempty(nb_slice)
@@ -179,8 +185,8 @@ function (muscl::MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER})(
 
     @inbounds for global_idx in nb_slice
         dist_k = dist_all[global_idx]
-        f_j    = ib.f[global_idx]
         j_idx  = nb_indices[global_idx]
+        f_j    = U[j_idx]
         grad_j = muscl.gradients[j_idx]
 
         p_interface_i_raw = build_basis(degree,  T(0.5) * dist_k)

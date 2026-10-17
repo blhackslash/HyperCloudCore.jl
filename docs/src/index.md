@@ -76,7 +76,7 @@ A call `ts(eq, pg, t, dt)` advances one step. Per stage, it forms the stage stat
 - **Consistency order.** Every scheme is configured, and every particle's order in `pg.core.particle_orders` is stored, as a *consistency order* $k$, i.e. the expected convergence rate. Central and WENO use an MLS fit of polynomial degree $k$. MUSCL uses a reconstruction of degree $k-1$. Upwind is fixed at $k = 1$.
 - **Sign of the right-hand side.** The stepper integrates $\mathrm{d}U/\mathrm{d}t = K_E + K_I$ with $K_E = -\nabla\cdot F + S_E$ and $K_I = S_I$. A divergence interpolator returns $+\nabla\cdot F$.
 - **Element type.** The time step `dt` must have the grid's element type `T`; a `Float64` step on a `Float32` grid is a `MethodError` rather than a silent promotion.
-- **Threading.** All particle loops go through `@smart_parallel`, which uses `Threads.@threads` when `set_threads!(true)` and Polyester's `@batch` otherwise.
+- **Parallel loops.** All particle loops go through `foreach_particle` and run on the backend chosen with `set_backend!`: Polyester's `@batch` (default), `Threads.@threads`, or a KernelAbstractions backend (see [Execution backends](gpu_roadmap.md)).
 
 ## Package layout and load order
 

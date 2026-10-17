@@ -97,7 +97,7 @@ function solve_equation(
     saveData!(xs, us, ts, snap_counter, pg, t, remove_ghosts)
     snap_counter += 1 
     
-    @info "Using $(get_use_threads() ? "@threads" : "@batch") for parallel runs!"
+    @info "Running the particle loops on $(nameof(typeof(get_backend())))"
     
     # Initialize trackers for the interval-based ETA
     last_log_time = time()
