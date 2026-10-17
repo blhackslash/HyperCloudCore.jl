@@ -241,7 +241,7 @@ end
         p = _full_basis(Val(P), dvec[k] * invL)
         Mm += wf(sum(abs2, dvec[k])) * (p * p')
     end
-    eps_reg = T(1e-10) * tr(Mm) / B
+    eps_reg = _mls_reg(T) * tr(Mm) / B
     C = cholesky(Symmetric(Mm + eps_reg * I), check = false)
     if !LinearAlgebra.issuccess(C)
         # Degenerate neighbourhood: fall back to the Shepard partition at this point

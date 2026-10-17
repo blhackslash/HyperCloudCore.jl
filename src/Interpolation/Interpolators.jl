@@ -17,6 +17,15 @@ end
 
 struct ConstantReconstruction end
 
+"""
+    _mls_reg(T)
+
+Relative Tikhonov regularisation of the MLS moment matrices, `ε tr(N) / B` on the diagonal. It only has to
+keep the Cholesky factorisation of (nearly) singular stencils alive; `1e-10` set an error floor of ~1e-8 for
+the high-order fits in Float64, so it scales with the machine precision (Float32 keeps `1e-10`).
+"""
+@inline _mls_reg(::Type{T}) where {T} = T(min(1e-10, 100 * eps(T)))
+
 # =========================================================================
 # UNIVERSAL DYNAMIC DISPATCH ROUTERS (Zero-Allocation)
 # =========================================================================
@@ -271,7 +280,7 @@ end
         b_s += w * (p_s * row')
     end
 
-    eps_reg = T(1e-10) * tr(N_s) / B_LEN
+    eps_reg = _mls_reg(T) * tr(N_s) / B_LEN
     C = cholesky(Symmetric(N_s + eps_reg * I), check = false)
     LinearAlgebra.issuccess(C) || return zero(State{M, T})
     c_s = C \ b_s
@@ -321,7 +330,7 @@ end
     end
     
     # REGULARIZATION: Add small eps to the diagonal to stabilize Cholesky
-    eps_reg = T(1e-10) * tr(N_s) / B_LEN
+    eps_reg = _mls_reg(T) * tr(N_s) / B_LEN
     N_s_reg = N_s + eps_reg * I
     
     C = cholesky(Symmetric(N_s_reg), check=false)
@@ -370,7 +379,7 @@ end
     end
 
     # Same scale-invariant regularisation as the unmasked solve (one-sided stencils are ill-conditioned more often)
-    eps_reg = T(1e-10) * tr(N_s) / B_LEN
+    eps_reg = _mls_reg(T) * tr(N_s) / B_LEN
     C = cholesky(Symmetric(N_s + eps_reg * I), check=false)
     
     if !LinearAlgebra.issuccess(C)
@@ -475,7 +484,7 @@ function _inverse_moment(nb_slice::OrdinalRange{Int, Int}, distVec::AbstractVect
         p_s = build_basis(Val(IO), distVec[k] * invL)
         N_s += wVec[k] * (p_s * p_s')
     end
-    eps_reg = T(1e-10) * tr(N_s) / B_LEN
+    eps_reg = _mls_reg(T) * tr(N_s) / B_LEN
     C = cholesky(Symmetric(N_s + eps_reg * I), check = false)
     LinearAlgebra.issuccess(C) || return (zero(template), false)
     return (SMatrix{B_LEN, B_LEN, T, B_LEN * B_LEN}(inv(C)), true)
