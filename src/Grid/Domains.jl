@@ -204,7 +204,10 @@ function get_points(
     
     for I in CartesianIndices(Ns_total)
         pos_tuple = ntuple(Val(D)) do d
-            cd.canvas_mins[d] + (I[d] - 1) * dxs_f[d] + rand_f[d] * (rand(rng, T) * 2 - 1)
+            x = cd.canvas_mins[d] + (I[d] - 1) * dxs_f[d] + rand_f[d] * (rand(rng, T) * 2 - 1)
+            # A jittered point that left a periodic axis belongs to the other end: classifying it
+            # before wrapping made it a (frozen) boundary particle at the seam.
+            cd.is_periodic[d] ? _wrap_periodic(x, geom.mins[d], cd.L_wrap[d]) : x
         end
         
         pos = Space{D, T}(pos_tuple)
@@ -235,6 +238,8 @@ function get_points(
     
     return positions, is_boundary, tags, volumes, Tuple(dxs_f)
 end
+
+@inline _wrap_periodic(x::T, lo, L) where {T} = (y = T(lo) + mod(x - T(lo), T(L)); y >= T(lo) + T(L) ? T(lo) : y)
 
 # The ghost candidates within `sqrt(cutoff_sq)` of an interior point, in their original order. Interior
 # points are hashed into cells of that width, so only the 3^D surrounding cells are searched and the

@@ -116,6 +116,18 @@ end
         @test count(i -> pg.core.positions[i][1] ≈ 1.0, 1:pg.meta.N) == 0               # no duplicated seam
     end
 
+    @testset "Jittered periodic grids have no boundary particles at the seam" begin
+        for D in (1, 2), seed in 1:3
+            geom = get_rectangular_domain(Float64, ntuple(_ -> 0.0, D), ntuple(_ -> 1.0, D); is_periodic = true)
+            pg = ParticleGrid(geom, ntuple(_ -> 0.05, D), ExponentialWeightFunction(1.0, 0.125), 1;
+                              randomness = ntuple(_ -> 0.01, D), rng = MersenneTwister(seed))
+            N = pg.meta.N
+            @test N == 20^D && pg.meta.N_ghost == 0
+            @test !any(view(pg.core.is_boundary, 1:N))
+            @test all(i -> all(0 .<= pg.core.positions[i] .< 1), 1:N)
+        end
+    end
+
     @testset "Small periodic domains do not duplicate neighbours" begin
         geom = get_rectangular_domain(Float64, (0.0,), (1.0,); is_periodic = true)
         for R in (0.45, 0.6)                                   # two and one coarse bins along the axis
