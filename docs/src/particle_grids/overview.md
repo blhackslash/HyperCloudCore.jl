@@ -58,13 +58,45 @@ A particle is never its own neighbour. For moving grids, `refresh_geometry!` rec
 
 ## CFL time step
 
-`get_time_step(pg, eq, interp)` returns the largest stable explicit step for CFL number 1:
+`get_time_step(pg, eq, interp)` returns the time step for CFL number 1:
 
 ```math
 \Delta t = \min_i \frac{1}{D \sum_d \lambda_d(U_i)\, \sum_{j} \lvert c^{(d)}_{ij} \rvert },
 ```
 
-where $\lambda_d$ is `max_eigenvalue(eq, U_i, d)` and $c^{(d)}_{ij}$ are the weights of the first-derivative operator of the MLS fit at particle $i$. The fit degree is `_divergence_degree(interp)`: the consistency order for Central/WENO/Upwind, and order − 1 for MUSCL. Degrees above 4 are clamped to 4. Multiply the result by your CFL number.
+where $\lambda_d$ is `max_eigenvalue(eq, U_i, d)` and $c^{(d)}_{ij}$ are the weights of the first-derivative operator of the MLS fit at particle $i$. The fit degree is `_divergence_degree(interp)`: the consistency order for Central/WENO/Upwind, and order − 1 for MUSCL (or `MLS_order` − 1 if that is set). Degrees above 4 (3 in 3-D) are clamped. Multiply the result by your CFL number.
+
+### What the CFL number means on a point cloud
+
+The number is **not** a classical Courant number $\lambda \Delta t / \Delta x$. On a mesh the update of a cell involves its faces, and $\Delta x$ is the distance to them. Here the update of particle $i$ involves every neighbour $j$ in the support radius, each through its own MLS weight, and the role of $1/\Delta x$ is played by the $\ell^1$ norm $\sum_j \lvert c^{(d)}_{ij} \rvert$ of the derivative stencil. That norm depends on the support radius, the weight function, the local point distribution and the fit degree, so the time step adapts to all of them per particle.
+
+Where the bound comes from: the schemes evaluate the divergence as $2 \sum_j c_{ij} \cdot (F^*_{ij} - F_i)$ with a numerical flux $F^*$. For the first-order scheme with the Rusanov flux, one forward Euler step can be written as a convex combination of $U_i$ and states of the form $U_j \mp F_d(U_j)/\lambda_d$ (which are admissible for $\lambda_d$ at least the wave speed) as long as
+
+```math
+\Delta t \sum_d \lambda_d \sum_j \lvert c^{(d)}_{ij} \rvert \le 1 ,
+```
+
+i.e. **CFL ≤ D**. Then the step preserves invariant domains (positivity of density and pressure, the maximum principle for scalar laws), and SSP Runge-Kutta methods inherit the bound. The argument assumes $\sum_j c_{ij} = 0$ and $\operatorname{sign} c^{(d)}_{ij} = \operatorname{sign}(x_j - x_i)_d$ (true on regular, nearly symmetric stencils) and wave speeds of the neighbours not larger than that of particle $i$; it is a sufficient condition, not a sharp stability limit. The extra factor $1/D$ in the formula above keeps CFL 1 inside the bound in every dimension.
+
+Consequences:
+
+- **The scale differs from a Courant number.** On a 2-D jittered grid with support radius 2.5 Δx and a linear fit, CFL 1 corresponds to $\lambda_d \Delta t / \Delta x \approx 0.3$ per direction (measured on the Euler quadrant and double Mach reflection problems).
+- **Higher fit degrees give smaller steps at the same CFL number**: the derivative stencil of a cubic fit has a larger $\ell^1$ norm than that of a linear fit (about 2.7× in 2-D with support radius 5.5 Δx), so MUSCL4 takes about 2.7× as many steps as MUSCL2 at the same CFL number.
+- **Larger support radii give larger steps**: the stencil averages over more distant neighbours (Euler quadrant problem, 400², linear fit: 6474 steps with radius 2.5 Δx, 2870 with 5.5 Δx at the same CFL number).
+
+### Measured limits
+
+RK2 (SSP) and RK4, Float32/Float64, from the HyperCloud.jl example problems (2026-10):
+
+| Problem | Schemes | Runs at | Fails at |
+|---|---|---|---|
+| 2-D Euler quadrant problem, 400², radius 2.5 Δx | RK2 Upwind1, MUSCL2 (VK, MOOD EPD1/EPD2) | 3.0 | 4.0 |
+| 2-D double Mach reflection, 960×300 | same | 2.0 (highest tried) | – |
+| 2-D forward-facing step, 600×200 | RK2 MUSCL2 (VK, MOOD EPD1) | 0.8 (highest tried) | – |
+| 1-D Sod, 330 particles, radius 5.5 Δx | RK2 Upwind1, MUSCL2 (MOOD, VK, minmod); RK4 MUSCL4 MOOD | 1.2 | 1.5 (VK and minmod still run) |
+| 1-D linear advection, smooth | RK4 MUSCL2 … MUSCL5 | 1.5 (MUSCL2) … 3.0 (MUSCL5) | 2.0 … 4.0 |
+
+On the 2-D shock problems, the solutions at CFL 1 differ from those at CFL 0.2 by 1e-5 (limiters, first order) to a few 1e-3 (MOOD, whose order decisions shift) in relative L1 norm of the density, far below the discretisation error. CFL 0.5 – 1 is a reasonable default for shock problems in 2-D; in 1-D stay at or below 1.
 
 On moving grids this estimate uses the absolute wave speed $\lambda$, not the relative speed $\lvert\lambda - w\rvert$ seen by the scheme. See [Moving Grids (ALE)](@ref) for the consequences.
 
