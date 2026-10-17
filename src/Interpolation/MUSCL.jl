@@ -3,8 +3,33 @@ export MUSCL
 # =========================================================================
 # DIVERGENCE ORDER DISPATCH
 # =========================================================================
-@inline _resolve_div_idx(::Val{0}, p_order) = max(2, p_order)
-@inline _resolve_div_idx(::Val{DO}, p_order) where {DO} = max(2, DO)
+# Interpolator-table entry (fit degree + 1) of the divergence for consistency order `o`. On (nearly)
+# symmetric stencils the derivative of a least-squares fit of degree q is O(h^q) for even q (the next
+# monomial d^(q+1) is odd and aliases into the gradient) but O(h^(q+1)) for odd q (the next monomial is
+# even and orthogonal to it). Degree o - 1 therefore gives order o for even o only; odd orders use degree o
+# (MUSCL3: 2nd → 3rd order, MUSCL5: 4th → 5th). In 3-D the bump stops at degree 3 (basis size).
+@inline function _div_idx(::Val{D}, o::Int) where {D}
+    o <= 2 && return 2
+    return (isodd(o) && (D < 3 || o <= 3)) ? o + 1 : o
+end
+@inline _resolve_div_idx(::Val{0}, ::Val{D}, p_order) where {D} = _div_idx(Val(D), p_order)
+@inline _resolve_div_idx(::Val{DO}, ::Val{D}, p_order) where {DO, D} = _div_idx(Val(D), DO)
+
+# The divergence entry of a particle with `num_nb` neighbours. The fit of degree q (with its constant term)
+# has basis_count(D, q) + 1 unknowns. The odd-order degree bump is only used on stencils with at least 1.5×
+# as many neighbours (an exactly determined fit is fragile on moving grids: 1-D, R = 2.5Δx has 4 neighbours
+# for the 4 unknowns of degree 3); any fit needs at least as many neighbours as unknowns.
+@inline function _divergence_index(::Val{DO}, ::Val{D}, p_order::Int, num_nb::Int) where {DO, D}
+    idx  = _resolve_div_idx(Val(DO), Val(D), p_order)
+    base = max(2, DO == 0 ? p_order : DO)                         # entry without the odd-order bump
+    if idx > base && 2 * num_nb < 3 * (basis_count(D, idx - 1) + 1)
+        idx = base
+    end
+    while idx > 2 && num_nb < basis_count(D, idx - 1) + 1
+        idx -= 1
+    end
+    return idx
+end
 
 @inline function (::ConstantReconstruction)(
     nb_slice, dist_all, w_all, df_flux, df_scratch; scale::T
@@ -33,7 +58,7 @@ A divergence interpolator executing MUSCL-type interface reconstruction and flux
 - `max_order`: Maximum consistency order; the reconstruction has degree `max_order - 1.
 - `limiter`: The slope/gradient limiter applied during the pre-gather pass to enforce monotonicity.
 - `flux`: The numerical flux function used to resolve interface states.
-- `div_order`: Target order for the final divergence calculation (defaults to `0`, adapting to the maximum available order).
+- `div_order`: Target order for the final divergence calculation (defaults to `0`, adapting to the maximum available order). The divergence is fitted with degree `order - 1` for even and degree `order` for odd orders (see `_div_idx`), with a constant term so that its weights sum to zero.
 
 # Callable / Functor
 
@@ -69,8 +94,8 @@ struct MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER, INTERPS, L, NF, VG <: Abstrac
 end
 
 # Interpolator-table entry the divergence uses at full order (see `_resolve_div_idx`).
-@inline _full_div_idx(::Val{MAX_ORDER}, ::Val{DIV_ORDER}) where {MAX_ORDER, DIV_ORDER} =
-    DIV_ORDER == 0 ? max(2, MAX_ORDER) : max(2, DIV_ORDER)
+@inline _full_div_idx(::Val{MAX_ORDER}, ::Val{DIV_ORDER}, ::Val{D}) where {MAX_ORDER, DIV_ORDER, D} =
+    _div_idx(Val(D), DIV_ORDER == 0 ? MAX_ORDER : DIV_ORDER)
 
 @inline _extract_order(::MUSCL{D, M, T, B_LEN, MAX_ORDER}) where {D, M, T, B_LEN, MAX_ORDER} = MAX_ORDER
 
@@ -90,16 +115,18 @@ function MUSCL(
 
     # Entry k reconstructs with degree k - 1 (entry 1: piecewise constant). The divergence always uses
     # an entry ≥ 2 (`_resolve_div_idx`), so a first-order scheme still needs the degree-1 interpolator
-    # for its divergence; without it the flux divergence was identically zero.
-    interps = ntuple(Val(max(2, max_order))) do k
+    # for its divergence; without it the flux divergence was identically zero. Odd orders fit the
+    # divergence one degree above the reconstruction (`_div_idx`), so the table can be one entry longer.
+    full_div = _full_div_idx(Val(max_order), Val(div_order), Val(dimension))
+    interps = ntuple(Val(max(2, max_order, full_div))) do k
         k == 1 ? ConstantReconstruction() : Interpolator{dimension, k - 1, 1}()
     end
 
-    # Cached weights: the reconstruction degree at full order and the divergence degree at full order.
-    div_degree = _full_div_idx(Val(max_order), Val(div_order)) - 1
+    # Cached weights: the reconstruction degree at full order and the divergence degree at full order (the
+    # divergence fit has a constant term, so it never shares the reconstruction matrices).
+    div_degree = full_div - 1
     grad_weights = MLSWeights{B_LEN, max_degree, T}(AT)
-    div_weights  = div_degree == max_degree ? grad_weights :
-                   MLSWeights{typeof(basis_length(Val(dimension), Val(div_degree))).parameters[1], div_degree, T}(AT)
+    div_weights  = MLSWeights{typeof(basis_length(Val(dimension), Val(div_degree))).parameters[1] + 1, div_degree, T}(AT; intercept = true)
 
     return MUSCL{dimension, M, T, B_LEN, max_order, div_order}(interps, limiter, flux, Growable{SVector{B_LEN, State{M, T}}}(AT),
                                                               grad_weights, div_weights)
@@ -211,9 +238,9 @@ function (muscl::MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER})(
         ib.df_flux[global_idx] = F_num - F_i + nc_jump
     end
 
-    div_idx = _resolve_div_idx(Val(DIV_ORDER), eff_order_i)
+    div_idx = _divergence_index(Val(DIV_ORDER), Val(D), eff_order_i, length(nb_slice))
     wd = muscl.div_weights
-    div = if div_idx == _full_div_idx(Val(MAX_ORDER), Val(DIV_ORDER)) && is_current(wd, pg) && wd.ok[i]
+    div = if div_idx == _full_div_idx(Val(MAX_ORDER), Val(DIV_ORDER), Val(D)) && is_current(wd, pg) && wd.ok[i]
         apply_weights_divergence(wd, i, nb_slice, dist_all, get_weights(pg), ib.df_flux)   # cached full-order fit
     else
         compute_dynamic_divergence(muscl.interpolators, div_idx, nb_slice, dist_all, get_weights(pg),

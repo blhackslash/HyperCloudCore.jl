@@ -263,17 +263,23 @@ end
 
 # One moment matrix and one factorisation for all D flux components (instead of one per direction):
 # the right-hand side holds the D·M flux differences side by side and the divergence is Σ_d ∂_d F_d.
+#
+# The divergence fit has a constant term (an intercept) and runs over the neighbours only: its derivative
+# weights then sum to zero exactly, Σ_j c_ij = 0, which removes the row-sum part of the conservation defect
+# of `2 Σ_j c_ij·(F*_ij - F_i)` on irregular point clouds (the reconstruction fits keep the Taylor form
+# through the particle). See `_intercept_basis`.
 @inline function _mls_divergence(
     nb_slice::OrdinalRange{Int, Int}, distVec::AbstractVector{Space{D, T}}, wVec::AbstractVector{T},
-    dfFluxVec::AbstractVector{Flux{D, M, T}}, scale::T, ::Val{B_LEN}, ::Val{IO}, ::Val{D}
-) where {B_LEN, IO, D, M, T}
+    dfFluxVec::AbstractVector{Flux{D, M, T}}, scale::T, ::Val{B0}, ::Val{IO}, ::Val{D}
+) where {B0, IO, D, M, T}
+    B_LEN = B0 + 1
     invL = one(T) / scale
     N_s = zero(SMatrix{B_LEN, B_LEN, T, B_LEN * B_LEN})
     b_s = zero(SMatrix{B_LEN, D * M, T, B_LEN * D * M})
 
     @inbounds for i in nb_slice
         w   = wVec[i]
-        p_s = build_basis(Val(IO), distVec[i] * invL)
+        p_s = _intercept_basis(Val(IO), distVec[i] * invL)
         F   = dfFluxVec[i]
         row = SVector{D * M, T}(ntuple(k -> F[(k - 1) ÷ M + 1][(k - 1) % M + 1], Val(D * M)))
         N_s += w * (p_s * p_s')
@@ -285,15 +291,18 @@ end
     LinearAlgebra.issuccess(C) || return zero(State{M, T})
     c_s = C \ b_s
 
-    # The first D basis terms are the first derivatives in axis order, scaled by invL.
+    # Basis term 1 is the constant, terms 2..D+1 the first derivatives in axis order (scaled by invL).
     return State{M, T}(ntuple(Val(M)) do m
         acc = zero(T)
         for d in 1:D
-            acc += c_s[d, (d - 1) * M + m]
+            acc += c_s[d + 1, (d - 1) * M + m]
         end
         acc * invL
     end)
 end
+
+"`[1; build_basis(Val(IO), d)]`: the Taylor basis with a constant term (divergence fits)."
+@inline _intercept_basis(::Val{IO}, d::SVector{D, T}) where {IO, D, T} = vcat(SVector{1, T}(one(T)), build_basis(Val(IO), d))
 
 # =========================================================================
 # THE UNIVERSAL MLS INTERPOLATOR
@@ -413,18 +422,19 @@ which returns zero). `version` is the `geometry_version` the matrices belong to;
 """
 abstract type AbstractMLSWeights{B_LEN, IO, T} end
 
-struct MLSWeights{B_LEN, IO, T, L, GM <: Growable{SMatrix{B_LEN, B_LEN, T, L}}, GB <: Growable{Bool}} <: AbstractMLSWeights{B_LEN, IO, T}   # L = B_LEN^2 (StaticArrays needs it)
+# `C`: the fit has a constant term (`_intercept_basis`, divergence fits); `B_LEN` then counts it.
+struct MLSWeights{B_LEN, IO, T, L, GM <: Growable{SMatrix{B_LEN, B_LEN, T, L}}, GB <: Growable{Bool}, C} <: AbstractMLSWeights{B_LEN, IO, T}   # L = B_LEN^2 (StaticArrays needs it)
     inv_moment::GM
     ok::GB
     version::Base.RefValue{Int}
     invL::Base.RefValue{T}
     scales::Base.RefValue{SVector{B_LEN, T}}
 end
-function MLSWeights{B_LEN, IO, T}(::Type{AT} = Array) where {B_LEN, IO, T, AT <: AbstractArray}
+function MLSWeights{B_LEN, IO, T}(::Type{AT} = Array; intercept::Bool = false) where {B_LEN, IO, T, AT <: AbstractArray}
     inv_moment = Growable{SMatrix{B_LEN, B_LEN, T, B_LEN * B_LEN}}(AT)
     ok         = Growable{Bool}(AT)
-    return MLSWeights{B_LEN, IO, T, B_LEN * B_LEN, typeof(inv_moment), typeof(ok)}(inv_moment, ok, Ref(-1),
-                                                                                   Ref(one(T)), Ref(zero(SVector{B_LEN, T})))
+    return MLSWeights{B_LEN, IO, T, B_LEN * B_LEN, typeof(inv_moment), typeof(ok), intercept}(inv_moment, ok, Ref(-1),
+                                                                                              Ref(one(T)), Ref(zero(SVector{B_LEN, T})))
 end
 
 """
@@ -433,7 +443,7 @@ end
 The bits-type form of `MLSWeights` that enters kernels (see `DeviceAdapt.jl`): device arrays and plain values
 instead of `Ref`s.
 """
-struct MLSWeightsView{B_LEN, IO, T, L, VM <: AbstractVector{SMatrix{B_LEN, B_LEN, T, L}}, VB <: AbstractVector{Bool}} <: AbstractMLSWeights{B_LEN, IO, T}
+struct MLSWeightsView{B_LEN, IO, T, L, VM <: AbstractVector{SMatrix{B_LEN, B_LEN, T, L}}, VB <: AbstractVector{Bool}, C} <: AbstractMLSWeights{B_LEN, IO, T}
     inv_moment::VM
     ok::VB
     version::Int
@@ -448,6 +458,10 @@ end
 @inline _cache_invL(w::MLSWeightsView) = w.invL
 @inline _cache_scales(w::MLSWeights) = w.scales[]
 @inline _cache_scales(w::MLSWeightsView) = w.scales
+@inline _has_intercept(::MLSWeights{B, IO, T, L, GM, GB, C}) where {B, IO, T, L, GM, GB, C} = C
+@inline _has_intercept(::MLSWeightsView{B, IO, T, L, VM, VB, C}) where {B, IO, T, L, VM, VB, C} = C
+@inline _fit_basis(::Val{false}, ::Val{IO}, d) where {IO} = build_basis(Val(IO), d)
+@inline _fit_basis(::Val{true}, ::Val{IO}, d) where {IO} = _intercept_basis(Val(IO), d)
 
 """
     update_weights!(w::MLSWeights, pg::ParticleGrid)
@@ -462,26 +476,28 @@ function update_weights!(w::MLSWeights{B_LEN, IO, T}, pg::ParticleGrid{D, M, T})
     ensure_capacity!(w.inv_moment, N)
     ensure_capacity!(w.ok, N)
     invL = one(T) / minimum(pg.meta.dx)
-    foreach_particle(_moment_body!, get_backend(), N, (w.inv_moment, w.ok, nb.ranges, nb.distances, nb.weights, invL, Val(IO)))
+    C = Val(_has_intercept(w))
+    foreach_particle(_moment_body!, get_backend(), N, (w.inv_moment, w.ok, nb.ranges, nb.distances, nb.weights, invL, Val(IO), C))
     w.invL[]    = invL
-    w.scales[]  = build_scale_factors(Val(D), Val(IO), invL)
+    s = build_scale_factors(Val(D), Val(IO), invL)
+    w.scales[]  = _has_intercept(w) ? vcat(SVector{1, T}(one(T)), s) : s
     w.version[] = pg.meta.geometry_version
     return w
 end
 
 # Kernel body (see Backend.jl): inverse moment matrix of particle `i`.
-@inline function _moment_body!(i, inv_moment, ok, ranges, dists, wts, invL, val_io)
-    inv_moment[i], ok[i] = _inverse_moment(ranges[i], dists, wts, invL, val_io, inv_moment[i])
+@inline function _moment_body!(i, inv_moment, ok, ranges, dists, wts, invL, val_io, val_c)
+    inv_moment[i], ok[i] = _inverse_moment(ranges[i], dists, wts, invL, val_io, inv_moment[i], val_c)
     return nothing
 end
 
 # Inverse of the regularised moment matrix of one particle (the same fit as `_mls_solve`); `template` only
 # fixes the return type when the factorisation fails.
 function _inverse_moment(nb_slice::OrdinalRange{Int, Int}, distVec::AbstractVector, wVec::AbstractVector{T}, invL::T,
-                         ::Val{IO}, template::SMatrix{B_LEN, B_LEN, T}) where {T, IO, B_LEN}
+                         ::Val{IO}, template::SMatrix{B_LEN, B_LEN, T}, val_c::Val = Val(false)) where {T, IO, B_LEN}
     N_s = zero(SMatrix{B_LEN, B_LEN, T, B_LEN * B_LEN})
     @inbounds for k in nb_slice
-        p_s = build_basis(Val(IO), distVec[k] * invL)
+        p_s = _fit_basis(val_c, Val(IO), distVec[k] * invL)
         N_s += wVec[k] * (p_s * p_s')
     end
     eps_reg = _mls_reg(T) * tr(N_s) / B_LEN
@@ -525,18 +541,20 @@ moment matrix (replaces the factorisation in `_mls_divergence`).
                                           distVec::AbstractVector, wVec::AbstractVector{T},
                                           dfFluxVec::AbstractVector{Flux{D, M, T}}) where {B_LEN, IO, T, D, M}
     invL = _cache_invL(w)
+    C    = _has_intercept(w)
     b_s = zero(SMatrix{B_LEN, D * M, T, B_LEN * D * M})
     @inbounds for k in nb_slice
-        p_s = build_basis(Val(IO), distVec[k] * invL)
+        p_s = _fit_basis(Val(C), Val(IO), distVec[k] * invL)
         F   = dfFluxVec[k]
         row = SVector{D * M, T}(ntuple(q -> F[(q - 1) ÷ M + 1][(q - 1) % M + 1], Val(D * M)))
         b_s += wVec[k] * (p_s * row')
     end
     c_s = w.inv_moment[i] * b_s
+    off = C ? 1 : 0                                    # the constant term comes first
     return State{M, T}(ntuple(Val(M)) do m
         acc = zero(T)
         for d in 1:D
-            acc += c_s[d, (d - 1) * M + m]
+            acc += c_s[d + off, (d - 1) * M + m]
         end
         acc * invL
     end)

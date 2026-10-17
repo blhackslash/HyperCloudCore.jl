@@ -198,14 +198,36 @@ end
     df_flux = [Flux{2, 2, Float64}((State{2, Float64}(sin(k), k / 10), State{2, Float64}(cos(2k), -k / 7))) for k in 1:length(nb.indices)]
     scratch = similar(df)
 
+    @testset "Divergence fit: weights sum to zero, odd-order degree, regularisation" begin
+        # The divergence fit has a constant term, so a constant flux difference has zero divergence on any
+        # stencil (the Taylor fit through the particle does not have this property on irregular stencils).
+        const_flux = fill(Flux{2, 2, Float64}((State{2, Float64}(1.0, -2.0), State{2, Float64}(0.5, 3.0))), length(nb.indices))
+        for q in 1:3, i in (1, N ÷ 2, N)
+            d = HyperCloudCore.Interpolator{2, q, 1}()(nb.ranges[i], nb.distances, nb.weights, const_flux, scratch; scale = pg.meta.dx)
+            @test maximum(abs, d) < 1e-9
+        end
+        # Even fit degrees lose an order on symmetric stencils: odd orders fit the divergence one degree up,
+        # if the stencil has 1.5× as many neighbours as unknowns (in 3-D only up to degree 3)
+        @test HyperCloudCore._div_idx(Val(2), 1) == 2 && HyperCloudCore._div_idx(Val(2), 2) == 2
+        @test HyperCloudCore._div_idx(Val(2), 3) == 4 && HyperCloudCore._div_idx(Val(2), 4) == 4
+        @test HyperCloudCore._div_idx(Val(2), 5) == 6 && HyperCloudCore._div_idx(Val(3), 5) == 5
+        @test HyperCloudCore._divergence_index(Val(0), Val(1), 3, 4) == 3     # 1-D, 4 neighbours: no bump
+        @test HyperCloudCore._divergence_index(Val(0), Val(1), 3, 6) == 4
+        @test HyperCloudCore._divergence_index(Val(3), Val(1), 1, 6) == 4     # a fixed MLS order ignores the particle order
+        @test HyperCloudCore._divergence_index(Val(0), Val(1), 4, 3) == 3     # too few neighbours for degree 3
+        @test HyperCloudCore._mls_reg(Float64) ≈ 100 * eps(Float64) && HyperCloudCore._mls_reg(Float32) == 1f-10
+    end
+
     for (order, div_order) in ((3, 0), (4, 2), (2, 0))
         interp = MUSCL(Float64, 2, 2, order, NoLimiter(), RusanovFlux(); div_order = div_order)
         @test !HyperCloudCore.is_current(interp.grad_weights, pg)
         HyperCloudCore.prepare_geometry!(interp, pg)
         @test HyperCloudCore.is_current(interp.grad_weights, pg) && HyperCloudCore.is_current(interp.div_weights, pg)
         grad_deg = max(1, order - 1)
-        div_idx  = div_order == 0 ? max(2, order) : max(2, div_order)
-        @test (interp.div_weights === interp.grad_weights) == (div_idx - 1 == grad_deg)
+        div_idx  = HyperCloudCore._full_div_idx(Val(order), Val(div_order), Val(2))
+        @test div_idx == Dict((3, 0) => 4, (4, 2) => 2, (2, 0) => 2)[(order, div_order)]   # odd orders: one degree up
+        @test interp.div_weights !== interp.grad_weights                # the divergence fit has a constant term
+        @test HyperCloudCore._has_intercept(interp.div_weights) && !HyperCloudCore._has_intercept(interp.grad_weights)
         for i in (1, N ÷ 3, N)
             sl = nb.ranges[i]
             interp.grad_weights.ok[i] || continue
@@ -453,7 +475,7 @@ end
         @test _order_reach(interp, EPD1()) == 1
         @test _order_reach(interp, EPD2()) == 2
         @test _order_reach(CentralDivergence(Float64, 1, 1, 2), EPD2()) == 0
-        @test _divergence_degree(interp) == 2
+        @test _divergence_degree(interp) == 3                       # MUSCL3: the divergence is fitted with degree 3
         @test _divergence_degree(CentralDivergence(Float64, 1, 1, 2)) == 2
     end
 
@@ -646,8 +668,10 @@ end
         # df_flux, df_scratch, mask. No position buffers on a static grid.
         @test memory_estimate(pg, ts).per_particle - g.per_particle == 11S + 5 + sizeof(Int)
         @test memory_estimate(pg, ts).per_slot - g.per_slot == F + S + 1
-        # MUSCL: gradients SVector{2, State} + one shared weight cache (SMatrix{2,2} + Bool)
-        @test memory_estimate(pg, interp).per_particle - g.per_particle == 2S + sizeof(SMatrix{2, 2, Float64, 4}) + 1
+        # MUSCL3: gradients SVector{2, State} + the reconstruction cache (SMatrix{2,2} + Bool) + the divergence
+        # cache (degree 3 with a constant term: SMatrix{4,4} + Bool)
+        @test memory_estimate(pg, interp).per_particle - g.per_particle ==
+              2S + sizeof(SMatrix{2, 2, Float64, 4}) + 1 + sizeof(SMatrix{4, 4, Float64, 16}) + 1
         @test memory_estimate(pg, interp).per_slot == g.per_slot
         # A moving grid adds x_n, x_cand and 3 stages × (X, K_X): 8 position buffers
         pgm = make_pg_1d(N; mover = LagrangianMover())
