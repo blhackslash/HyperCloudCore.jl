@@ -395,7 +395,7 @@ function mood_checkpoint!(ts::GeneralRKTimeStepper{D, M, T}, eq, pg, i::Int, dt:
     full = true
     while true
         target, _ = form_candidate!(ts, eq, pg, i, dt, time)
-        detect_and_drop!(ts.mood, work, interp, pg, Y_prev, target, full) || return nothing
+        detect_and_drop!(ts.mood, work, interp, pg, Y_prev, target, full; eq = eq) || return nothing
 
         copyto!(parent(work.dirty), 1, parent(work.changed), 1, N)
         expand_mask!(parent(work.dirty), parent(work.scratch), pg, reach)

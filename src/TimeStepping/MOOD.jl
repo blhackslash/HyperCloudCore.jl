@@ -196,10 +196,16 @@ end
 # =========================================================================
 
 
-# Kernel body of the candidate check (see Backend.jl).
-@inline function _mood_flag!(p, mood, interp, pg, rho_prev, rho_cand, nb_slices, is_boundary, dirty, triggered, full)
+# Physical admissibility detection (PAD) of a candidate state; `nothing`: no equation given, no check.
+@inline _admissible(::Nothing, U) = true
+@inline _admissible(eq, U) = is_admissible(eq, U)
+
+# Kernel body of the candidate check (see Backend.jl): a candidate is flagged if it is not admissible
+# (PAD) or fails the criterion.
+@inline function _mood_flag!(p, mood, interp, pg, rho_prev, rho_cand, nb_slices, is_boundary, dirty, triggered, full, eq)
     (is_boundary[p] || !(full || dirty[p])) && return nothing
-    mood(interp, p, rho_prev[p], nb_slices[p], rho_cand[p], pg, rho_prev) && (triggered[p] = true)
+    cand = rho_cand[p]
+    (!_admissible(eq, cand) || mood(interp, p, rho_prev[p], nb_slices[p], cand, pg, rho_prev)) && (triggered[p] = true)
     return nothing
 end
 
@@ -272,9 +278,10 @@ function force_neighbours!(strategy::MOODStrategy, pg::ParticleGrid, triggered, 
 end
 
 """
-    detect_and_drop!(mood, work, interp, pg, rho_prev, rho_cand, full) -> Bool
+    detect_and_drop!(mood, work, interp, pg, rho_prev, rho_cand, full; eq = nothing) -> Bool
 
-Checks `rho_cand` against the neighbourhood of `rho_prev` (neighbour states read from `rho_prev`,
+With an equation `eq`, a candidate state that is not admissible (`is_admissible(eq, U)`, e.g. a NaN or a
+negative pressure) is flagged as well. Checks `rho_cand` against the neighbourhood of `rho_prev` (neighbour states read from `rho_prev`,
 gradients cached in `interp`) for all interior particles (`full`) or only those in `work.dirty`.
 Drops one order on every flagged particle, applies forcing halos from a snapshot, and records the
 set of changed orders in `work.changed`. Returns `true` if any order changed. Three kernel passes
@@ -282,7 +289,7 @@ set of changed orders in `work.changed`. Returns `true` if any order changed. Th
 """
 function detect_and_drop!(
     mood::MOOD, work::MOODWork, interp::DivergenceInterpolator, pg::ParticleGrid{D, M, T},
-    rho_prev::AbstractVector, rho_cand::AbstractVector, full::Bool
+    rho_prev::AbstractVector, rho_cand::AbstractVector, full::Bool; eq = nothing
 ) where {D, M, T}
     mood.criterion isa NoMOOD && return false
 
@@ -298,7 +305,7 @@ function detect_and_drop!(
 
     # 1. Candidate check (per-particle writes only)
     foreach_particle(_mood_flag!, get_backend(), N,
-        (mood, interp, pg, rho_prev, rho_cand, nb_slices, is_boundary, dirty, triggered, full))
+        (mood, interp, pg, rho_prev, rho_cand, nb_slices, is_boundary, dirty, triggered, full, eq))
 
     # 2. Decrement. Particles already at order 1 are un-flagged so they don't force.
     foreach_particle(_mood_drop!, get_backend(), N, (orders, triggered, changed, triggered_step))
