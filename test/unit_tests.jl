@@ -502,6 +502,19 @@ end
         update_size!(ts0, N, length(nb_i), false)
         @test HyperCloudCore.detect_and_drop!(ts0.mood, ts0.work, interp, pg, pg.rhos, pg.rhos, true) == false
     end
+
+    @testset "detect_and_drop! flags inadmissible candidates (PAD)" begin
+        ts = GeneralRKTimeStepper(eq, interp, MOOD(EPD1(), MOODu1(0.0)), RK3_SSP_Tableau(Float64))
+        update_size!(ts, N, length(nb_i), false)
+        update_size!(interp, N)
+        fill!(ts.work.dirty, false); fill!(ts.work.triggered_step, false)
+        q = findfirst(i -> !pg.core.is_boundary[i], 1:N)
+        cand = copy(pg.rhos); cand[q] = cand[q] * NaN        # passes the DMP: comparisons with NaN are false
+        f = (; kw...) -> (fill!(orders, 3); HyperCloudCore.detect_and_drop!(ts.mood, ts.work, interp, pg, pg.rhos, cand, true; kw...))
+        @test f() == false                                   # without an equation: no PAD
+        @test f(eq = eq) == true && orders[q] == 2 && count(==(2), view(orders, 1:N)) == 1
+        @test is_admissible(eq, pg.rhos[q]) && !is_admissible(eq, cand[q])
+    end
 end
 
 @testset "Time stepper (static grid)" begin
