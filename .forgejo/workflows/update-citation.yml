@@ -15,51 +15,87 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Update CITATION.cff
+      - name: Update and push CITATION.cff via Forgejo API
+        env:
+          BOT_PAT: ${{ secrets.BOT_PAT }}
+          SERVER_URL: ${{ github.server_url }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name }}
         run: |
+          if [ -z "$BOT_PAT" ]; then
+            echo "::error::Secret BOT_PAT is empty! Make sure it is added under Repository Settings -> Actions -> Secrets (or the repo owner's User/Org Action Secrets)."
+            exit 1
+          fi
+
           node - << 'EOF'
           const fs = require('fs');
 
-          // 1. Read Project.toml version
-          const proj = fs.readFileSync('Project.toml', 'utf8');
-          const verMatch = proj.match(/^version\s*=\s*"([^"]+)"/m);
-          if (!verMatch) {
-            console.log('No version found in Project.toml');
-            process.exit(0);
-          }
-          const newVer = verMatch[1];
+          async function run() {
+            // 1. Read Project.toml version
+            const proj = fs.readFileSync('Project.toml', 'utf8');
+            const verMatch = proj.match(/^version\s*=\s*"([^"]+)"/m);
+            if (!verMatch) {
+              console.log('No version found in Project.toml');
+              return;
+            }
+            const newVer = verMatch[1];
 
-          // 2. Read CITATION.cff
-          if (!fs.existsSync('CITATION.cff')) {
-            console.error('CITATION.cff not found.');
+            // 2. Read CITATION.cff
+            if (!fs.existsSync('CITATION.cff')) {
+              console.error('CITATION.cff not found.');
+              process.exit(1);
+            }
+            let cff = fs.readFileSync('CITATION.cff', 'utf8');
+
+            // 3. Skip if already updated
+            const curMatch = cff.match(/^version:\s*([^\s\n]+)/m);
+            if (curMatch && curMatch[1].replace(/['"]/g, '') === newVer) {
+              console.log(`CITATION.cff is already at version ${newVer}. No change needed.`);
+              return;
+            }
+
+            // 4. Update version and release date in memory
+            const today = new Date().toISOString().split('T')[0];
+            cff = cff.replace(/^version:\s*.*$/m, `version: ${newVer}`);
+            cff = cff.replace(/^date-released:\s*.*$/m, `date-released: ${today}`);
+
+            const apiUrl = `${process.env.SERVER_URL.replace(/\/$/, '')}/api/v1/repos/${process.env.REPO}/contents/CITATION.cff`;
+            const headers = {
+              'Authorization': `token ${process.env.BOT_PAT}`,
+              'Accept': 'application/json',
+              'Content-Type': 'application/json'
+            };
+
+            // 5. Fetch current file metadata from Forgejo to get its blob SHA
+            const getRes = await fetch(`${apiUrl}?ref=${encodeURIComponent(process.env.BRANCH)}`, { headers });
+            if (!getRes.ok) {
+              console.error(`Failed to fetch CITATION.cff metadata: ${getRes.status} ${await getRes.text()}`);
+              process.exit(1);
+            }
+            const fileData = await getRes.json();
+
+            // 6. Commit updated file via API (Forgejo automatically signs with Instance Key)
+            const putRes = await fetch(apiUrl, {
+              method: 'PUT',
+              headers,
+              body: JSON.stringify({
+                message: 'chore: bump version in CITATION.cff',
+                content: Buffer.from(cff, 'utf8').toString('base64'),
+                sha: fileData.sha,
+                branch: process.env.BRANCH
+              })
+            });
+
+            if (!putRes.ok) {
+              console.error(`Failed to push update via API: ${putRes.status} ${await putRes.text()}`);
+              process.exit(1);
+            }
+
+            console.log(`Successfully updated and signed CITATION.cff to version ${newVer} (${today})`);
+          }
+
+          run().catch(err => {
+            console.error(err);
             process.exit(1);
-          }
-          let cff = fs.readFileSync('CITATION.cff', 'utf8');
-
-          // 3. Skip if already updated
-          const curMatch = cff.match(/^version:\s*([^\s\n]+)/m);
-          if (curMatch && curMatch[1].replace(/['"]/g, '') === newVer) {
-            console.log(`CITATION.cff is already at version ${newVer}. No change needed.`);
-            process.exit(0);
-          }
-
-          // 4. Update version and release date
-          const today = new Date().toISOString().split('T')[0];
-          cff = cff.replace(/^version:\s*.*$/m, `version: ${newVer}`);
-          cff = cff.replace(/^date-released:\s*.*$/m, `date-released: ${today}`);
-
-          fs.writeFileSync('CITATION.cff', cff, 'utf8');
-          console.log(`Updated CITATION.cff to version ${newVer} (${today})`);
+          });
           EOF
-
-      - name: Commit and push changes
-        run: |
-          git config --local user.name "forgejo-actions[bot]"
-          git config --local user.email "actions@forgejo.local"
-          if [ -n "$(git status --porcelain CITATION.cff)" ]; then
-            git add CITATION.cff
-            git commit -m "chore: bump version in CITATION.cff"
-            git push origin HEAD:${{ github.ref_name }}
-          else
-            echo "No changes to commit."
-          fi
