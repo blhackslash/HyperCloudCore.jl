@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+  
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
+
+jobs:
+  test:
+    name: Julia ${{ matrix.version }}
+    runs-on: docker
+    strategy:
+      fail-fast: false
+      matrix:
+        version:
+          - '1.12'
+          - '1'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Julia
+        uses: https://github.com/julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.version }}
+
+      - uses: https://github.com/julia-actions/julia-buildpkg@v1
+        with:
+          ignore-no-cache: true
+
+      - uses: https://github.com/julia-actions/julia-runtest@v1
+        with:
+          coverage: false
