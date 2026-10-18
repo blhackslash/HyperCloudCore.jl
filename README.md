@@ -1,8 +1,9 @@
 # HyperCloudCore.jl
 
-[![DOI](https://zenodo.org/badge/23124663.svg)](https://doi.org/10.5281/zenodo.23124663)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23124663.svg)](https://doi.org/10.5281/zenodo.23124663)
 [![Build Status](https://github.com/blhackslash/HyperCloudCore.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/blhackslash/HyperCloudCore.jl/actions/workflows/CI.yml)
 [![Coverage](https://codecov.io/gh/blhackslash/HyperCloudCore.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/blhackslash/HyperCloudCore.jl)
+[![Dev Docs](https://img.shields.io/badge/docs-dev-blue.svg)](https://blhackslash.github.io/HyperCloudCore.jl/dev/)
 [![Stable Docs](https://img.shields.io/badge/docs-stable-blue.svg)](https://blhackslash.github.io/HyperCloudCore.jl/stable/)
 
 **HyperCloudCore.jl** is a high-performance, physics-agnostic meshless solver backend designed for the numerical integration of hyperbolic Partial Differential Equations (PDEs) in Julia. 
