@@ -81,7 +81,8 @@ its slot-major layout holds `max_nb` slots per particle). Raise `slots_per_parti
 grids whose neighbourhoods grow, and keep `tolerance` (5 % of the limit by default) for what the vendor
 runtime and the reductions allocate. From then on a step that needs more than the reserved capacity, more
 particles from adaptivity or more neighbours per particle, throws a `CapacityError` instead of reallocating.
-The builders do the same with `context[:MemoryLimit]` (see `build_timestepper`).
+The builders do the same with `context[:MemoryLimit]` (see [`build_timestepper`](@ref) and
+[Context keys](@ref)); HyperCloud.jl sets it from its session-wide `set_memory_limit!`.
 
 Known platform issue (AMDGPU.jl 2.9.1, ROCm 7.2, gfx1201): once a process has run device simulations, the
 contents copied by `reserve!` into the newly allocated device buffers can turn into zeros shortly afterwards
@@ -89,8 +90,8 @@ contents copied by `reserve!` into the newly allocated device buffers can turn i
 every attempt and was unaffected by how the block was written (`copyto!` or a kernel), garbage collection,
 stream synchronisation, pool trimming, waiting or system-scope fences (`AMD_OPT_FLUSH=0`); the one condition
 under which the data stayed intact was keeping the replaced arrays alive. The cause is in the ROCm or AMDGPU.jl
-layer and is not worked around here; HyperCloud.jl's runners compare a fingerprint of the grid before and after
-the reservation and refuse to run on corrupted data (reproducer: a reserved device run after earlier device
+layer and is not worked around here; [HyperCloud.jl's runners](@extref HyperCloud Simulation-Engine) compare a
+fingerprint of the grid before and after the reservation and refuse to run on corrupted data (reproducer: a reserved device run after earlier device
 runs in the same session; a fresh session is unaffected).
 
 ```@docs
@@ -109,8 +110,11 @@ slots_per_particle
 CapacityError
 ```
 
-With the config-driven builders, `context[:Storage] = ROCArray` does the same: `build_particle_grid`
-returns the device grid, `build_scheme` and `build_timestepper` allocate on it.
+With the [config-driven builders](@ref "Config-Driven Builders"), `context[:Storage] = ROCArray` does the
+same: [`build_particle_grid`](@ref) returns the device grid, [`build_scheme`](@ref) and
+[`build_timestepper`](@ref) allocate on it. HyperCloud.jl's runners set it from the active backend, so
+`set_backend!(ROCBackend())` alone moves a [`run_direct_simulation`](@extref HyperCloud HyperCloud.run_direct_simulation)
+to the GPU.
 
 Before a `KABackend` launch, `check_resident` walks the arguments and throws if an array does not live on
 that backend. Without it AMDGPU.jl would copy a host array to the device for the launch and silently drop
@@ -133,7 +137,6 @@ the kernel's writes to it.
 |---|---|---|
 | Morton reordering | host (`sort!`); only runs when a grid is constructed | device sort of the keys + permutation kernels, if ever needed between steps |
 | particle adaptivity (events) | host: detection, remap and compaction are serial per event | stays there; a kernel pre-check (`_adapt_candidate!`) skips the round trip when the cloud is well spaced, otherwise the grid is copied to the host, adapted, and copied back in place |
-| WENO, Tiwari upwind | not device-compatible: the stencil order is a runtime `Val` | pad to the maximum basis length and mask |
 | data residency | the grid (`device_grid`), the stepper and MUSCL (`storage`) live on the device; static and moving grids step entirely there, neighbour search, MOOD, boundary conditions and the reductions included (the `bc_map` loop itself is on the host, its conditions are kernels); the builders follow `context[:Storage]` | |
 | growing a device grid | every per-particle and per-slot array of the grid is a `Growable`, so `ensure_capacity!` works on the device (adaptivity relies on it) | |
 | MLS volumes | host (point queries on the cell list) | `ShepardVolumes` is on the device; `MLSVolumes` is a construction-time choice |

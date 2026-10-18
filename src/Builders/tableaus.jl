@@ -5,6 +5,8 @@ Selector `:stepper`: `:Euler`, `:RK2` (SSP), `:RK2Ralston`, `:RK3` (SSP), `:RK4`
 `:ARS233`, `:PRSSP3`, `:SSP332`, `:IMEXEuler`. Explicit tableaus are returned as
 `IMEXButcherTableau`s with a zero implicit part.
 """
+function build_tableau end
+
 function build_tableau(time_conf::Dict, context::Dict)
     name = time_conf[:stepper]::Symbol
     return build_tableau(Val(name), time_conf, context)

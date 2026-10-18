@@ -9,6 +9,8 @@ the grid, the scheme and the stepper are reserved under that limit (`reserve!`, 
 `context[:MemoryTolerance]` and `context[:SlotsPerParticle]`); the reservation is stored in
 `context[:Memory]`.
 """
+function build_timestepper end
+
 function build_timestepper(context::Dict; time_conf::Dict = Dict{Symbol, Any}())
     kwargs = (; reset_orders_per_stage = get(time_conf, :reset_orders_per_stage, false)::Bool,
                 full_search_per_stage  = get(time_conf, :full_search_per_stage, false)::Bool,

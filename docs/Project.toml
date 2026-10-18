@@ -1,6 +1,11 @@
 [deps]
 Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
+DocumenterInterLinks = "d12716ef-a0f6-4df4-a9f1-a5a34e75c656"
 HyperCloudCore = "61b85536-db47-4754-9d50-4ccb1001a5ed"
 
 [sources]
 HyperCloudCore = {path = ".."}
+
+[compat]
+Documenter = "1"
+DocumenterInterLinks = "1"

@@ -2,6 +2,19 @@
 # MODULAR WEIGHT BUILDER
 # =========================================================================
 
+"""
+    build_weights(weight_conf, context) -> MLSWeightFunction
+    build_weights(::Val{name}, weight_conf, context)
+
+`Weight` namespace. Selector `:name`: `:exponential` ([`ExponentialWeightFunction`](@ref)) or `:inverse`
+([`InverseWeightFunction`](@ref)), both with the required shape parameter `:alpha`. `:range` (required) is
+the support radius in multiples of `context[:max_dx]` (set by [`build_particle_grid`](@ref), which calls this
+builder); the absolute radius is stored in `context[:interp_range]`.
+
+Add a weight function with a method `build_weights(::Val{:my_weight}, weight_conf, context)`.
+"""
+function build_weights end
+
 function build_weights(weight_conf::Dict, context::Dict)
     if !haskey(weight_conf, :name)
         error("Weight configuration must include a strictly typed :name Symbol (e.g., :exponential, :inverse).")
