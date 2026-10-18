@@ -296,7 +296,7 @@ end
         end
         
         # 1. Scale-invariant Tikhonov Regularization
-        eps_reg = T(1e-10) * tr(N_s) / B_LEN
+        eps_reg = _mls_reg(T) * tr(N_s) / B_LEN
         N_s_reg = N_s + eps_reg * I
         
         # 2. Fast Cholesky factorization to guarantee invertibility

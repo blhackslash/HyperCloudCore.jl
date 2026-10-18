@@ -97,6 +97,19 @@ end
     end
 end
 
+# ---- 2b. Odd orders reach their order once the stencil can carry the higher divergence degree ----
+
+@testset "Odd MUSCL orders with enough neighbours" begin
+    # The degree-o divergence fit of an odd order o needs 1.5× as many neighbours as unknowns: degree 3 in
+    # 1-D (4 unknowns) from R = 3.5Δx, degree 5 (6 unknowns) from R = 5.5Δx.
+    for (o, R, lo, hi) in ((3, 3.5, 2.6, 3.6), (5, 5.5, 4.85, 6.0))   # before: 2.09 and 4.76
+        shared  = merge(BASE_1D, Dict(:Time_stepper => :RK4, :Weight_range => R, :Time_CFL => 0.2, :IC_width => 0.2))
+        methods = Dict{Symbol, Any}(Symbol("plain$o") => muscl(o))
+        sim = run_suite(shared, methods; varied = Dict(:Grid_Ns => [(200,), (400,)]))
+        @test lo < eoc(sim(Symbol("plain$o"); Grid_Ns = (200,)), sim(Symbol("plain$o"); Grid_Ns = (400,))) < hi
+    end
+end
+
 # ---- 3. Boundedness on a discontinuity: MOOD and VK bound, unlimited does not
 
 @testset "Boundedness on a box (MOOD, VK limiter vs unlimited)" begin

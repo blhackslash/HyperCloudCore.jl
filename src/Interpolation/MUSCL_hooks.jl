@@ -10,9 +10,9 @@
 @inline _order_reach(::MUSCL, ::MOODStrategy) = 1
 @inline _order_reach(::MUSCL, ::EPD2) = 2
 
-# --- CFL: consistency order o ⇒ divergence Interpolator{D, o-1} ---
+# --- CFL: the degree of the full-order divergence fit (`_div_idx`) ---
 @inline _divergence_degree(::MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER}) where {D, M, T, B_LEN, MAX_ORDER, DIV_ORDER} =
-    DIV_ORDER == 0 ? max(1, MAX_ORDER - 1) : max(1, DIV_ORDER - 1)
+    _full_div_idx(Val(MAX_ORDER), Val(DIV_ORDER), Val(D)) - 1
 
 # --- MOODu2: curvature coefficients come from the cached limited gradients ---
 @inline has_cached_gradients(::MUSCL) = true
