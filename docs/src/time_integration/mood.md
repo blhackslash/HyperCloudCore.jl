@@ -35,6 +35,10 @@ Without cached coefficients, or at order ≤ 2, `MOODu2` behaves like `MOODu1`. 
 
 **`OnlyMOOD()`** flags every particle (useful for testing: one step drives everything to order 1). **`NoMOOD`** (via `MOOD()`) never flags.
 
+## Physical admissibility detection (PAD)
+
+Independently of the criterion, a candidate state that is not physically admissible is always flagged: the stepper tests every candidate with [`is_admissible`](@ref)`(eq, U)`. The default only rejects non-finite states (NaN or Inf), which catches a blow-up that the DMP test would let through (a NaN compares false against every bound). Equations with an admissible set add a method; HyperCloud's [`EulerEquation`](@extref HyperCloud HyperCloud.EulerEquation), for example, requires positive density and pressure. The check runs on the PDE itself, also on moving grids, inside the same kernel as the criterion, so it has to follow the [rules for kernel bodies](@ref "Rules for kernel bodies"). PAD is part of MOOD: with `MOOD()` (criterion `NoMOOD`) nothing is checked.
+
 ## Strategies (`MOODStrategy`)
 
 A strategy answers two questions:

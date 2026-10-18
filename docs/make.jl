@@ -1,10 +1,24 @@
 # docs/make.jl
 using Documenter
+using DocumenterInterLinks
 using HyperCloudCore
+
+# Cross-references into the physics wrapper, e.g. [`run_direct_simulation`](@extref HyperCloud).
+# HYPERCLOUD_INVENTORY overrides the inventory, e.g. with a local HyperCloud.jl/docs/build/objects.inv
+# to check references to names that are not deployed yet.
+links = InterLinks(
+    "HyperCloud" => (
+        "https://blhackslash.github.io/HyperCloud.jl/dev/",
+        get(ENV, "HYPERCLOUD_INVENTORY", "https://blhackslash.github.io/HyperCloud.jl/dev/objects.inv"),
+    ),
+)
 
 makedocs(
     sitename = "HyperCloudCore.jl",
     modules = [HyperCloudCore],
+    # Explicit, so the build does not depend on the `origin` remote (Forgejo checkouts).
+    repo = Remotes.GitHub("blhackslash", "HyperCloudCore.jl"),
+    plugins = [links],
     checkdocs = :exports,
     format = Documenter.HTML(
         prettyurls = get(ENV, "CI", "false") == "true",

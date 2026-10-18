@@ -1,11 +1,23 @@
 """
     build_particle_grid(grid_conf, context) -> ParticleGrid
 
-Requires `real_type(context)`, `[:D]`, `[:M]`, `[:Domain]`, `[:WeightConf]`. Stores `:max_dx` in the
-context, builds the weight function, the grid mover and the volume estimator from the same
-`Grid` namespace, and sets `context[:Grid]`. The grid is built on the host and moved to
-`storage_type(context)` with `device_grid` if that is not `Array`.
+`Grid` namespace. Requires `real_type(context)`, `[:D]`, `[:M]`, `[:Domain]` and `[:WeightConf]` (the
+`Weight` namespace).
+
+| Key | Meaning |
+|:--|:--|
+| `:Ns` | Particles per direction (tuple, required); the lattice spacing is `(maxs - mins) ./ Ns` |
+| `:randomness_factor` | Jitter per direction as a fraction of the spacing (default 0) |
+| `:seed` (legacy `:SEED`) | Seed of the `MersenneTwister` for the jitter (default 42) |
+| `:mover`, `:mover_*` | Grid mover, see [`build_mover`](@ref) |
+| `:volumes`, `:volumes_*` | Volume estimator, see [`build_volume_estimator`](@ref) |
+
+Stores the largest spacing in `context[:max_dx]`, builds the weight function with
+[`build_weights`](@ref)`(context[:WeightConf], context)` and sets `context[:Grid]`. The grid is built on
+the host and moved to [`storage_type`](@ref)`(context)` with [`device_grid`](@ref) if that is not `Array`.
 """
+function build_particle_grid end
+
 function build_particle_grid(grid_conf::Dict, context::Dict)
     T = real_type(context)
     D = context[:D]::Int

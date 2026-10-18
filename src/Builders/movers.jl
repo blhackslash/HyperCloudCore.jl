@@ -1,8 +1,22 @@
 # --- Grid Mover Builder ---
-# Grid namespace keys:
-#   :mover           => :none | :lagrangian | :scaled_lagrangian | :sinusoidal   (default :none)
-#   :mover_alpha     => α for :scaled_lagrangian
-#   :mover_amplitude => A for :sinusoidal, w_d(x) = A * sin(2π (x_d - min_d) / L_d)  (periodic-safe)
+"""
+    build_mover(grid_conf, context) -> GridMover
+    build_mover(::Val{name}, grid_conf, context)
+
+`Grid` namespace. Selector `:mover` (default `:none`):
+
+| `:mover` | Mover | Keys |
+|:--|:--|:--|
+| `:none` | [`NoGridMover`](@ref) | |
+| `:lagrangian` | [`LagrangianMover`](@ref) | |
+| `:scaled_lagrangian` | [`ScaledLagrangianMover`](@ref) | `:mover_alpha` |
+| `:sinusoidal` | [`PrescribedMover`](@ref) with [`SinusoidalVelocity`](@ref) | `:mover_amplitude` (needs `context[:Domain]`) |
+
+The `:sinusoidal` velocity, ``w_d(x) = A \\sin(2\\pi (x_d - \\mathrm{min}_d) / L_d)``, is periodic on the domain.
+Called by [`build_particle_grid`](@ref).
+"""
+function build_mover end
+
 function build_mover(grid_conf::Dict, context::Dict)
     name = get(grid_conf, :mover, :none)::Symbol
     return build_mover(Val(name), grid_conf, context)

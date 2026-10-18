@@ -3,6 +3,16 @@
 # =========================================================================
 
 # --- Boundary Condition Parsing ---
+"""
+    parse_bc(domain_conf) -> Dict{Int, AbstractBoundaryCondition}
+
+The `bc_map` of a domain from `domain_conf[:bc]` (or `:bc_map`): a dictionary `tag => bc`, where `bc` is an
+[`AbstractBoundaryCondition`](@ref) instance, `:outflow`/`:OutflowBC`, `:fixed_dirichlet`/`:FixedDirichlet`,
+or the name of a zero-argument constructor defined in HyperCloudCore or in `Main`. A string is parsed and
+evaluated as Julia code first. Without the key the map is empty.
+"""
+function parse_bc end
+
 function parse_bc(domain_conf::Dict)
     raw_bc = get(domain_conf, :bc, get(domain_conf, :bc_map, Dict{Int, AbstractBoundaryCondition}()))
     
@@ -37,6 +47,22 @@ function parse_bc(domain_conf::Dict)
 end
 
 # --- Main Domain Builder ---
+"""
+    build_domain(domain_conf, context) -> GeometricDomain
+    build_domain(::Val{name}, domain_conf, context)
+
+`Grid` namespace. Selector `:domain` (a `Symbol` or `String`):
+
+- `:rectangular`: [`get_rectangular_domain`](@ref) on the box `:mins`, `:maxs`;
+- `:spherical`: [`get_spherical_domain`](@ref) with the midpoint of the box as centre and half its first
+  extent as radius (needs `context[:D]`).
+
+Both read `:periodic` (`Bool` or `NTuple{D, Bool}`, default `false`) and the boundary conditions
+(`:bc`, see [`parse_bc`](@ref)). A [`GeometricDomain`](@ref) among the values of `domain_conf` is returned
+as it is, so a pre-built domain can be passed through the configuration.
+"""
+function build_domain end
+
 function build_domain(domain_conf::Dict, context::Dict)
 
     for (_,val) in domain_conf

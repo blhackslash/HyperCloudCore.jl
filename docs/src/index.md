@@ -14,6 +14,8 @@ The solution lives on a cloud of particles. Spatial derivatives come from Moving
 
 The package is a backend: it provides the numerical machinery and expects you to bring the PDE (and, optionally, source terms, boundary conditions and grid movers) by implementing a small set of methods. See [API Contracts](@ref) for the full list.
 
+[HyperCloud.jl](@extref HyperCloud HyperCloud.jl) is the physics front end on top of it: it adds equations (linear advection, Burgers, Euler), initial conditions, kinetic relaxation and exact solutions, and runs whole simulations from a flat parameter dictionary through the [config-driven builders](@ref "Config-Driven Builders") of this package. Use HyperCloud to run simulations, and this package directly to write a scheme or an equation of your own or to embed the solver in another driver.
+
 ## Quick start
 
 A 1-D periodic advection problem, with a third-order MUSCL scheme, MOOD, and SSP-RK3:
