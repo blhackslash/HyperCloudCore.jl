@@ -20,7 +20,6 @@ jobs:
       fail-fast: false
       matrix:
         version:
-          - '1.10'
           - '1.12'
           - '1' # Tests latest stable (e.g. 1.13)
         os:
