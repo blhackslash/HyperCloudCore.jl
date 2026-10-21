@@ -307,24 +307,31 @@ end
         
         # 3. Safely invert the regularized matrix
         inv_N_s = inv(C)
-        sum_c_local = zero(MVector{D, T})
+        sum_c_local = zero(SVector{D, T})
         
         @inbounds for idx in 1:length(nb_slice)
             k = nb_slice[idx]
             w = w_vec[k]
             p_s = build_basis(Val(IO), dist_vec[k] * invL)
             
-            # Extract the effective geometric coefficient for the linear spatial derivatives
-            for d in 1:D
-                c_val = zero(T)
-                for j in 1:B_LEN
-                    c_val += inv_N_s[d, j] * p_s[j]
-                end
-                sum_c_local[d] += abs(c_val * w * invL)
-            end
+            # Accumulate the effective geometric coefficient for the linear spatial derivatives
+            sum_c_local += abs.(_linear_coeffs(inv_N_s, p_s, Val(D)) * w * invL)
         end
-        return SVector{D, T}(sum_c_local)
+        return sum_c_local
     end
+end
+
+# MLS coefficients of the D linear basis terms for one neighbour (rows 1:D of inv_N_s times p_s).
+# Static on purpose: it runs inside the CFL kernel (`_cfl_body!`), where an `MVector` accumulator does
+# not compile on device backends. A separate function because a generated body cannot hold the closure.
+@inline function _linear_coeffs(inv_N_s::SMatrix{B_LEN, B_LEN, T}, p_s::SVector{B_LEN, T}, ::Val{D}) where {B_LEN, T, D}
+    return SVector{D, T}(ntuple(Val(D)) do d
+        c_val = zero(T)
+        @inbounds for j in 1:B_LEN
+            c_val += inv_N_s[d, j] * p_s[j]
+        end
+        c_val
+    end)
 end
 
 # Dispatch on the polynomial DEGREE of the divergence MLS (1..4, 1..3 in 3-D; higher degrees clamp,
