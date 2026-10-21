@@ -50,6 +50,51 @@ end
     return math_max(zero(T), min1)
 end
 
+# Component-wise extrema of the target state and its neighbours. Static `SVector`s only:
+# this runs inside the MUSCL pre-gather kernel, where an `MVector` would allocate on the
+# host and does not compile on device backends.
+@inline function _local_extrema(f_i::State{M, T}, f_neighbors, nb_slice) where {M, T}
+    u_max = f_i
+    u_min = f_i
+    @inbounds for global_idx in nb_slice
+        f_j = f_neighbors[global_idx]
+        u_max = max.(u_max, f_j)
+        u_min = min.(u_min, f_j)
+    end
+    return u_max, u_min
+end
+
+# Tighten the bounding coefficient of every equation with one reconstructed interface increment.
+@inline function _update_phi(strategy, phi::State{M, T}, delta_recon::State{M, T}, f_i::State{M, T},
+                             u_max::State{M, T}, u_min::State{M, T}) where {M, T}
+    return State{M, T}(ntuple(Val(M)) do m
+        recon_m = delta_recon[m]
+        if abs(recon_m) > T(1e-12)
+            r = recon_m > zero(T) ? (u_max[m] - f_i[m]) / recon_m : (u_min[m] - f_i[m]) / recon_m
+            min(phi[m], limiter_phi(strategy, r))
+        else
+            phi[m]
+        end
+    end)
+end
+
+# Bounding coefficient per equation over all interfaces of the neighbourhood.
+@inline function _bounding_phi(strategy, raw_grad::SVector{B_LEN, State{M, T}}, nb_slice, f_i::State{M, T},
+                               u_max::State{M, T}, u_min::State{M, T}, distVec, ::Val{DEGREE}) where {B_LEN, M, T, DEGREE}
+    phi = ones(State{M, T})
+    @inbounds for global_idx in nb_slice
+        p_interface = build_basis(Val(DEGREE), T(0.5) * distVec[global_idx])
+
+        delta_recon = zero(State{M, T})
+        for k in 1:B_LEN
+            delta_recon += raw_grad[k] * p_interface[k]
+        end
+
+        phi = _update_phi(strategy, phi, delta_recon, f_i, u_max, u_min)
+    end
+    return phi
+end
+
 """
     _limit_slopes(strategy, raw_grad, nb_slice, f_i, f_neighbors, pg, distVec, ::Val{DEGREE})
 
@@ -59,6 +104,7 @@ Applies the specified slope limiter strategy to the raw gradient of a target par
 - For `BarthJespersen` and `Venkatakrishnan`, it evaluates local maxima and minima, reconstructs the interface state using the raw gradient, and computes a limiting coefficient `phi` for each target equation.
 - For `Minmod` and `Superbee`, it computes left and right finite difference slopes based on neighbor distances and limits the gradient strictly along a 1D stencil.
 - Returns a limited gradient vector where specific polynomial basis terms are scaled by the bounding coefficient `phi`.
+- Runs inside the MUSCL pre-gather kernel: all per-equation scratch is static (`SVector`), nothing is allocated.
 """
 function _limit_slopes(
     strategy::Union{BarthJespersenLimiter{Mode}, VenkatakrishnanLimiter{Mode}},
@@ -71,43 +117,12 @@ function _limit_slopes(
     ::Val{DEGREE} 
 ) where {B_LEN, M, D, T, DEGREE, Mode}
     
-    u_max = MVector{M, T}(f_i)
-    u_min = MVector{M, T}(f_i)
-    
-    @inbounds for global_idx in nb_slice
-        f_j = f_neighbors[global_idx]
-        for m in 1:M
-            u_max[m] = max(u_max[m], f_j[m])
-            u_min[m] = min(u_min[m], f_j[m])
-        end
-    end
-
-    phi_i = MVector{M, T}(undef)
-    fill!(phi_i, one(T))
-    
-    @inbounds for global_idx in nb_slice
-        dist_k = distVec[global_idx] 
-        
-        p_interface = build_basis(Val(DEGREE), T(0.5) * dist_k)
-        
-        delta_recon = zero(State{M, T})
-        for k in 1:B_LEN
-            delta_recon += raw_grad[k] * p_interface[k]
-        end
-        
-        for m in 1:M
-            recon_m = delta_recon[m]
-            if abs(recon_m) > T(1e-12)
-                r = recon_m > zero(T) ? (u_max[m] - f_i[m]) / recon_m : (u_min[m] - f_i[m]) / recon_m
-                phi_j = limiter_phi(strategy, r)
-                phi_i[m] = min(phi_i[m], phi_j)
-            end
-        end
-    end
+    u_max, u_min = _local_extrema(f_i, f_neighbors, nb_slice)
+    phi_i = _bounding_phi(strategy, raw_grad, nb_slice, f_i, u_max, u_min, distVec, Val(DEGREE))
 
     limited_grad = SVector{B_LEN, State{M, T}}(ntuple(Val(B_LEN)) do k
         if Mode === :hard || k <= D
-            State{M, T}(ntuple(m -> raw_grad[k][m] * phi_i[m], Val(M)))
+            raw_grad[k] .* phi_i
         else
             raw_grad[k] 
         end
@@ -157,31 +172,24 @@ function _limit_slopes(
     slope_L = abs(dist_L) > T(1e-12) ? (f_i - val_L) / (-dist_L) : zero(State{M, T})
     slope_R = abs(dist_R) > T(1e-12) ? (val_R - f_i) / dist_R    : zero(State{M, T})
 
-    phi_scale = MVector{M, T}(undef)
-    
-    for m in 1:M
+    phi_scale = State{M, T}(ntuple(Val(M)) do m
         sL = slope_L[m]
         sR = slope_R[m]
         orig_slope = raw_grad[1][m] 
         
         if sL * sR <= zero(T)
-            phi_scale[m] = zero(T)
+            zero(T)
         else
             r = abs(sR) < T(1e-12) ? one(T) : sL / sR
-            phi = limiter_phi(strategy, r)
-            new_slope = phi * sR
+            new_slope = limiter_phi(strategy, r) * sR
             
-            if orig_slope * new_slope <= zero(T)
-                phi_scale[m] = zero(T)
-            else
-                phi_scale[m] = clamp(new_slope / orig_slope, zero(T), one(T))
-            end
+            orig_slope * new_slope <= zero(T) ? zero(T) : clamp(new_slope / orig_slope, zero(T), one(T))
         end
-    end
+    end)
     
     limited_grad = SVector{B_LEN, State{M, T}}(ntuple(Val(B_LEN)) do k
         if Mode === :hard || k <= 1 
-            State{M, T}(ntuple(m -> raw_grad[k][m] * phi_scale[m], Val(M))) 
+            raw_grad[k] .* phi_scale
         else
             raw_grad[k] 
         end

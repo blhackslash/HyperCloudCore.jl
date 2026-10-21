@@ -287,6 +287,8 @@ end
     cases = [
         ("MUSCL3 VK MOODu2 RK3",  () -> MUSCL(Float64, 1, 1, 3, VenkatakrishnanLimiter(:hard), RusanovFlux()), MOOD(EPD1(), MOODu2(1e-6)), RK3_SSP_Tableau(Float64), NoGridMover()),
         ("MUSCL2 MOODu1 EPD2 RK2", () -> MUSCL(Float64, 1, 1, 2, NoLimiter(), RusanovFlux()), MOOD(EPD2(), MOODu1(1e-6)), RK2_SSP_Tableau(Float64), NoGridMover()),
+        ("MUSCL3 BJ soft RK2",     () -> MUSCL(Float64, 1, 1, 3, BarthJespersenLimiter(:soft), RusanovFlux()), MOOD(), RK2_SSP_Tableau(Float64), NoGridMover()),
+        ("MUSCL2 Minmod RK2",      () -> MUSCL(Float64, 1, 1, 2, MinmodLimiter(:hard), RusanovFlux()), MOOD(), RK2_SSP_Tableau(Float64), NoGridMover()),
         ("Central2 RK2",           () -> CentralDivergence(Float64, 1, 1, 2), MOOD(), RK2_SSP_Tableau(Float64), NoGridMover()),
         ("Upwind Euler",           () -> UpwindDivergence(Float64, 1, 1, 1, :Classic, UpwindFlux()), MOOD(), RK1_Euler_Tableau(Float64), NoGridMover()),
         ("MUSCL3 moving RK2",      () -> MUSCL(Float64, 1, 1, 3, NoLimiter(), RusanovFlux()), MOOD(), RK2_SSP_Tableau(Float64), mover),
@@ -644,6 +646,19 @@ end
         @test (@allocated update_volumes!(pg, ShepardVolumes())) < (tasks ? 32_768 : 8192)
     end
     set_backend!(PolyesterBackend())
+
+    # Slope limiters run inside the MUSCL pre-gather kernel: static scratch only, nothing allocated per call
+    # (the former `MVector` scratch did not compile on device backends).
+    let pgl = set_ic!(make_pg_1d(200), x -> exp(-x^2 / 0.02)), i = 100
+        nb_slice = pgl.neighbor.ranges[i]
+        f_i, f_nb, dists = pgl.rhos[i], neighbour_states(pgl.rhos, pgl), pgl.neighbor.distances
+        g = SVector{2, State{1, Float64}}(State{1, Float64}(-3.0), State{1, Float64}(0.5))
+        for lim in (BarthJespersenLimiter(:hard), VenkatakrishnanLimiter(:soft), MinmodLimiter(:hard), SuperbeeLimiter(:soft))
+            lg = HyperCloudCore._limit_slopes(lim, g, nb_slice, f_i, f_nb, pgl, dists, Val(2))
+            @test lg isa SVector{2, State{1, Float64}} && all(isfinite, lg[1]) && lg[1][1] / g[1][1] >= 0
+            @test (@allocated HyperCloudCore._limit_slopes(lim, g, nb_slice, f_i, f_nb, pgl, dists, Val(2))) == 0
+        end
+    end
 end
 
 @testset "Memory budget" begin
