@@ -241,9 +241,8 @@ end
         p = _full_basis(Val(P), dvec[k] * invL)
         Mm += wf(sum(abs2, dvec[k])) * (p * p')
     end
-    eps_reg = _mls_reg(T) * tr(Mm) / B
-    C = cholesky(Symmetric(Mm + eps_reg * I), check = false)
-    if !LinearAlgebra.issuccess(C)
+    C, ok = _cholesky_moment(Mm)                  # regularised only if the neighbourhood is degenerate
+    if !ok
         # Degenerate neighbourhood: fall back to the Shepard partition at this point
         s = zero(T)
         @inbounds for k in 1:n; s += wf(sum(abs2, dvec[k])); end

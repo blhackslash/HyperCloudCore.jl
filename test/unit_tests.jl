@@ -215,7 +215,29 @@ end
         @test HyperCloudCore._divergence_index(Val(0), Val(1), 3, 6) == 4
         @test HyperCloudCore._divergence_index(Val(3), Val(1), 1, 6) == 4     # a fixed MLS order ignores the particle order
         @test HyperCloudCore._divergence_index(Val(0), Val(1), 4, 3) == 3     # too few neighbours for degree 3
-        @test HyperCloudCore._mls_reg(Float64) ≈ 100 * eps(Float64) && HyperCloudCore._mls_reg(Float32) == 1f-10
+        @test HyperCloudCore._mls_reg(Float64) == 1e-10 && HyperCloudCore._mls_reg(Float32) ≈ 100 * eps(Float32)
+    end
+
+    @testset "Conditional regularisation of degenerate stencils" begin
+        for T in (Float64, Float32)
+            # Healthy stencil: the plain factorisation is used as it is (no Tikhonov term)
+            dists = [Space{2, T}(T(0.37) * cos(k), T(0.37) * sin(k) + T(0.1) * k) for k in 1:12]
+            wts   = [exp(-sum(abs2, d)) for d in dists]
+            Ns = sum(w * (HyperCloudCore.build_basis(Val(2), d) * HyperCloudCore.build_basis(Val(2), d)') for (w, d) in zip(wts, dists))
+            C, ok = HyperCloudCore._cholesky_moment(Ns)
+            @test ok && C.factors == cholesky(Symmetric(Ns)).factors
+            # Collinear neighbours (all on the x axis): the y-moments vanish, so the plain factorisation fails or
+            # leaves round-off pivots; the retry gives a finite, damped fit whose x-derivative is still right
+            xd = [Space{2, T}(T(0.3) * k, zero(T)) for k in -4:4 if k != 0]
+            xw = ones(T, length(xd))
+            Nx = sum(w * (HyperCloudCore.build_basis(Val(2), d) * HyperCloudCore.build_basis(Val(2), d)') for (w, d) in zip(xw, xd))
+            @test !HyperCloudCore._pivots_ok(cholesky(Symmetric(Nx), check = false), Nx)
+            @test HyperCloudCore._cholesky_moment(Nx)[2]
+            f = [State{1, T}(2 * d[1] + d[1]^2) for d in xd]              # f = 2x + x²: ∂x f(0) = 2, ∂y f = 0
+            g = HyperCloudCore.Interpolator{2, 2, 1}()(1:length(xd), xd, xw, f; scale = one(T))
+            @test all(s -> all(isfinite, s), g)
+            @test isapprox(g[1][1], 2; atol = 100 * sqrt(eps(T))) && abs(g[2][1]) < 100 * sqrt(eps(T))
+        end
     end
 
     for (order, div_order) in ((3, 0), (4, 2), (2, 0))
