@@ -295,17 +295,13 @@ end
             N_s += w_vec[k] * (p_s * p_s')
         end
         
-        # 1. Scale-invariant Tikhonov Regularization
-        eps_reg = _mls_reg(T) * tr(N_s) / B_LEN
-        N_s_reg = N_s + eps_reg * I
-        
-        # 2. Fast Cholesky factorization to guarantee invertibility
-        C = cholesky(Symmetric(N_s_reg), check=false)
-        if !LinearAlgebra.issuccess(C)
+        # 1. Cholesky factorisation, regularised only if the stencil is degenerate (`_cholesky_moment`)
+        C, ok = _cholesky_moment(N_s)
+        if !ok
             return zero(SVector{D, T})
         end
-        
-        # 3. Safely invert the regularized matrix
+
+        # 2. Safely invert the moment matrix
         inv_N_s = inv(C)
         sum_c_local = zero(SVector{D, T})
         

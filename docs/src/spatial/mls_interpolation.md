@@ -33,7 +33,7 @@ The number of basis terms is $B(D, p) = \binom{p+D}{D} - 1$, available at compil
 
 - **Scaling.** Distances are multiplied by `1/scale` (the particle spacing) before the basis is evaluated, so $N$ is $\mathcal O(1)$ regardless of resolution. `build_scale_factors` undoes the scaling on the coefficients afterwards.
 - **Assembly.** `N` and `b` are accumulated as `SMatrix` types in one pass over the neighbours.
-- **Solve.** A Cholesky factorization of `Symmetric(N + ε I)`, with Tikhonov regularization `ε = min(10⁻¹⁰, 100 eps(T)) · tr(N)/B` (a fixed 10⁻¹⁰ capped the high-order fits at errors of ~10⁻⁸ in Float64). The normal equations square the condition number, and the regularization keeps nearly degenerate neighbourhoods solvable. If the factorization still fails, the fit returns zero.
+- **Solve.** A Cholesky factorization of `Symmetric(N)`. The Tikhonov regularization is conditional: only if the factorization fails, or leaves a pivot at round-off level (below `10 eps(T)` times its diagonal entry: too few or collinear neighbours), is `ε = sqrt(eps(T)) · tr(N)/B` added to the diagonal and the factorization repeated (the normal equations square the conditioning; `sqrt(eps)` balances the spurious coefficients of the undetermined directions, ∝ `eps/ε`, against the distortion of the determined ones, ∝ `ε`). Healthy stencils are therefore never regularized (a fixed 10⁻¹⁰ capped the high-order fits at errors of ~10⁻⁸ in Float64, and any term that is representable in Float32 costs an order of magnitude on degree-5 fits), while nearly degenerate neighbourhoods, whose normal equations square the condition number, still get a damped fit. If the retry fails as well, the fit returns zero.
 
 Variants of the same kernel:
 

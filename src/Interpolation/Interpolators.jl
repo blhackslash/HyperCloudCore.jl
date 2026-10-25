@@ -20,11 +20,48 @@ struct ConstantReconstruction end
 """
     _mls_reg(T)
 
-Relative Tikhonov regularisation of the MLS moment matrices, `ε tr(N) / B` on the diagonal. It only has to
-keep the Cholesky factorisation of (nearly) singular stencils alive; `1e-10` set an error floor of ~1e-8 for
-the high-order fits in Float64, so it scales with the machine precision (Float32 keeps `1e-10`).
+Relative Tikhonov term of the *retry* factorisation in [`_cholesky_moment`](@ref): `ε tr(N) / B` is added to
+the diagonal only after the plain Cholesky factorisation of a moment matrix has failed or produced a pivot at
+round-off level. `ε = sqrt(eps(T))` (1.5e-8 in Float64, 3.5e-4 in Float32): the normal equations square the
+conditioning, and `sqrt(eps)` balances the two errors of the retry, the spurious coefficients of the directions
+the stencil cannot determine (∝ `eps / ε`) against the distortion of the directions it can (∝ `ε`). Healthy
+stencils are never regularised: a fixed `1e-10` capped high-order Float64 fits at errors of ~1e-8, and any term
+that is representable in Float32 costs an order of magnitude on degree-5 fits.
 """
-@inline _mls_reg(::Type{T}) where {T} = T(min(1e-10, 100 * eps(T)))
+@inline _mls_reg(::Type{T}) where {T} = sqrt(eps(T))
+
+# Smallest acceptable Cholesky pivot of a moment matrix, relative to its diagonal entry. A smaller one is the
+# round-off of a (numerically) singular stencil, which `cholesky` alone does not report.
+@inline _pivot_tol(::Type{T}) where {T} = T(10 * eps(T))
+
+"""
+    _cholesky_moment(N_s::SMatrix{B, B, T}) -> (C, ok)
+
+Cholesky factorisation of an MLS moment matrix with conditional regularisation. The matrix is factorised as it
+is; only if that fails, or leaves a pivot below `_pivot_tol(T)` times its diagonal entry (too few or collinear
+neighbours), is the Tikhonov term `_mls_reg(T) tr(N_s) / B` added to the diagonal and the factorisation
+repeated. A healthy stencil therefore keeps the exact fit for the price of one factorisation; a degenerate one
+gets a damped fit instead of none. `ok` is `false` if the retry fails as well.
+"""
+@inline function _cholesky_moment(N_s::SMatrix{B, B, T}) where {B, T}
+    C = cholesky(Symmetric(N_s), check = false)
+    _pivots_ok(C, N_s) && return C, true
+    eps_reg = _mls_reg(T) * tr(N_s) / B
+    C = cholesky(Symmetric(N_s + eps_reg * I), check = false)
+    return C, LinearAlgebra.issuccess(C)
+end
+
+# `true` if the factorisation succeeded with every pivot `U[k, k]^2` above `_pivot_tol(T) * N_s[k, k]`
+# (strict, so zero and NaN pivots fail too).
+@inline function _pivots_ok(C, N_s::SMatrix{B, B, T}) where {B, T}
+    LinearAlgebra.issuccess(C) || return false
+    U   = C.factors
+    tol = _pivot_tol(T)
+    @inbounds for k in 1:B
+        U[k, k]^2 > tol * N_s[k, k] || return false
+    end
+    return true
+end
 
 # =========================================================================
 # UNIVERSAL DYNAMIC DISPATCH ROUTERS (Zero-Allocation)
@@ -286,9 +323,8 @@ end
         b_s += w * (p_s * row')
     end
 
-    eps_reg = _mls_reg(T) * tr(N_s) / B_LEN
-    C = cholesky(Symmetric(N_s + eps_reg * I), check = false)
-    LinearAlgebra.issuccess(C) || return zero(State{M, T})
+    C, ok = _cholesky_moment(N_s)
+    ok || return zero(State{M, T})
     c_s = C \ b_s
 
     # Basis term 1 is the constant, terms 2..D+1 the first derivatives in axis order (scaled by invL).
@@ -338,17 +374,10 @@ end
         b_s += w * (p_s * dfVec[i]') 
     end
     
-    # REGULARIZATION: Add small eps to the diagonal to stabilize Cholesky
-    eps_reg = _mls_reg(T) * tr(N_s) / B_LEN
-    N_s_reg = N_s + eps_reg * I
-    
-    C = cholesky(Symmetric(N_s_reg), check=false)
-    
-    if !LinearAlgebra.issuccess(C)
-        return zero(SVector{B_LEN, State{M, T}})
-    end
-    
-    c_s = C \ b_s 
+    C, ok = _cholesky_moment(N_s)                 # regularised only if the plain factorisation fails
+    ok || return zero(SVector{B_LEN, State{M, T}})
+
+    c_s = C \ b_s
     scales = build_scale_factors(Val(D), Val(IO), invL)
     
     return SVector{B_LEN, State{M, T}}(ntuple(Val(B_LEN)) do k
@@ -387,15 +416,11 @@ end
         b_s += w * (p_s * dfVec[i]')
     end
 
-    # Same scale-invariant regularisation as the unmasked solve (one-sided stencils are ill-conditioned more often)
-    eps_reg = _mls_reg(T) * tr(N_s) / B_LEN
-    C = cholesky(Symmetric(N_s + eps_reg * I), check=false)
-    
-    if !LinearAlgebra.issuccess(C)
-        return zero(SVector{B_LEN, State{M, T}})
-    end
-    
-    c_s = C \ b_s 
+    # Same conditional regularisation as the unmasked solve (one-sided stencils are degenerate more often)
+    C, ok = _cholesky_moment(N_s)
+    ok || return zero(SVector{B_LEN, State{M, T}})
+
+    c_s = C \ b_s
     scales = build_scale_factors(Val(D), Val(IO), invL)
     
     return SVector{B_LEN, State{M, T}}(ntuple(Val(B_LEN)) do k
@@ -491,8 +516,8 @@ end
     return nothing
 end
 
-# Inverse of the regularised moment matrix of one particle (the same fit as `_mls_solve`); `template` only
-# fixes the return type when the factorisation fails.
+# Inverse of the moment matrix of one particle (the same fit as `_mls_solve`, regularised only if the stencil
+# is degenerate); `template` only fixes the return type when the factorisation fails.
 function _inverse_moment(nb_slice::OrdinalRange{Int, Int}, distVec::AbstractVector, wVec::AbstractVector{T}, invL::T,
                          ::Val{IO}, template::SMatrix{B_LEN, B_LEN, T}, val_c::Val = Val(false)) where {T, IO, B_LEN}
     N_s = zero(SMatrix{B_LEN, B_LEN, T, B_LEN * B_LEN})
@@ -500,9 +525,8 @@ function _inverse_moment(nb_slice::OrdinalRange{Int, Int}, distVec::AbstractVect
         p_s = _fit_basis(val_c, Val(IO), distVec[k] * invL)
         N_s += wVec[k] * (p_s * p_s')
     end
-    eps_reg = _mls_reg(T) * tr(N_s) / B_LEN
-    C = cholesky(Symmetric(N_s + eps_reg * I), check = false)
-    LinearAlgebra.issuccess(C) || return (zero(template), false)
+    C, ok = _cholesky_moment(N_s)
+    ok || return (zero(template), false)
     return (SMatrix{B_LEN, B_LEN, T, B_LEN * B_LEN}(inv(C)), true)
 end
 
