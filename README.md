@@ -18,6 +18,8 @@ Built with a zero-overhead, trait-based API, `HyperCloudCore` provides a strict 
 * **Unified Source Term API:** Zero-cost tuple unrolling for stacking multiple explicit (e.g., gravity, body forces) and implicit (e.g., stiff kinetic relaxation) source terms natively into the sub-stages of the RK/IMEX tableaus.
 * **Dimensional & Physical Generality:** A completely decoupled architecture allowing it to solve anything from simple 1D scalar advection to 3D non-linear gas dynamics (Euler) and kinetic relaxation systems without altering the core solver logic.
 
+> HyperCloudCore.jl started as a fork of meshfree4hypeq by Klaas Willems, the code accompanying Willems, Klar and Samaey, J. Sci. Comput. 105 (2025) 90. It has since been largely rewritten and extended.
+
 ## Quick Start Guide: Step-by-Step Implementation
 This guide details the complete configuration and execution of a numerical simulation using the HyperCloudCore framework. Because HyperCloudCore is a physics-agnostic mathematical engine, we will demonstrate how to define a custom governing equation from scratch, discretize it on a two-dimensional rectangular domain, and march the solution forward in time.
 
