@@ -12,13 +12,13 @@ By operating entirely on unstructured point clouds, the framework completely byp
 
 Built with a zero-overhead, trait-based API, `HyperCloudCore` provides a strict but flexible mathematical engine. Users simply define their governing physical equations, fluxes, and source terms, while the backend autonomously handles the complex spatial reconstruction, stabilization, and time integration.
 
+> HyperCloudCore.jl started as a fork of meshfree4hypeq by Klaas Willems, the code accompanying Willems, Klar and Samaey, J. Sci. Comput. 105 (2025) 90. It has since been largely rewritten and extended.
+
 ## Core Capabilities
 * **Meshless Spatial Discretization:** High-order spatial gradients via MLS, supporting advanced reconstruction schemes like **MUSCL** (stabilized by Multi-Dimensional Optimal Order Detection, or **MOOD**) and meshless **WENO**.
 * **Advanced Time Integration:** A robust suite of time-steppers including explicit Strong Stability Preserving Runge-Kutta (**SSP-RK**) methods and **IMEX** (Implicit-Explicit) tableaus for resolving stiff operator interactions.
 * **Unified Source Term API:** Zero-cost tuple unrolling for stacking multiple explicit (e.g., gravity, body forces) and implicit (e.g., stiff kinetic relaxation) source terms natively into the sub-stages of the RK/IMEX tableaus.
 * **Dimensional & Physical Generality:** A completely decoupled architecture allowing it to solve anything from simple 1D scalar advection to 3D non-linear gas dynamics (Euler) and kinetic relaxation systems without altering the core solver logic.
-
-> HyperCloudCore.jl started as a fork of meshfree4hypeq by Klaas Willems, the code accompanying Willems, Klar and Samaey, J. Sci. Comput. 105 (2025) 90. It has since been largely rewritten and extended.
 
 ## Quick Start Guide: Step-by-Step Implementation
 This guide details the complete configuration and execution of a numerical simulation using the HyperCloudCore framework. Because HyperCloudCore is a physics-agnostic mathematical engine, we will demonstrate how to define a custom governing equation from scratch, discretize it on a two-dimensional rectangular domain, and march the solution forward in time.
