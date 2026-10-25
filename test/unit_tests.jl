@@ -215,7 +215,7 @@ end
         @test HyperCloudCore._divergence_index(Val(0), Val(1), 3, 6) == 4
         @test HyperCloudCore._divergence_index(Val(3), Val(1), 1, 6) == 4     # a fixed MLS order ignores the particle order
         @test HyperCloudCore._divergence_index(Val(0), Val(1), 4, 3) == 3     # too few neighbours for degree 3
-        @test HyperCloudCore._mls_reg(Float64) == 1e-10 && HyperCloudCore._mls_reg(Float32) ≈ 100 * eps(Float32)
+        @test HyperCloudCore._mls_reg(Float64) == sqrt(eps(Float64)) && HyperCloudCore._mls_reg(Float32) == sqrt(eps(Float32))
     end
 
     @testset "Conditional regularisation of degenerate stencils" begin

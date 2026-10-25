@@ -22,12 +22,13 @@ struct ConstantReconstruction end
 
 Relative Tikhonov term of the *retry* factorisation in [`_cholesky_moment`](@ref): `ε tr(N) / B` is added to
 the diagonal only after the plain Cholesky factorisation of a moment matrix has failed or produced a pivot at
-round-off level. `max(1e-10, 100 eps(T))`: `1e-10` keeps degenerate Float64 stencils solvable, and in Float32
-`100 eps` (≈ 1.2e-5) is the smallest term that is representable against the diagonal. Healthy stencils are
-never regularised: a fixed `1e-10` capped high-order Float64 fits at errors of ~1e-8, and any term that is
-representable in Float32 costs an order of magnitude on degree-5 fits.
+round-off level. `ε = sqrt(eps(T))` (1.5e-8 in Float64, 3.5e-4 in Float32): the normal equations square the
+conditioning, and `sqrt(eps)` balances the two errors of the retry, the spurious coefficients of the directions
+the stencil cannot determine (∝ `eps / ε`) against the distortion of the directions it can (∝ `ε`). Healthy
+stencils are never regularised: a fixed `1e-10` capped high-order Float64 fits at errors of ~1e-8, and any term
+that is representable in Float32 costs an order of magnitude on degree-5 fits.
 """
-@inline _mls_reg(::Type{T}) where {T} = T(max(1e-10, 100 * eps(T)))
+@inline _mls_reg(::Type{T}) where {T} = sqrt(eps(T))
 
 # Smallest acceptable Cholesky pivot of a moment matrix, relative to its diagonal entry. A smaller one is the
 # round-off of a (numerically) singular stencil, which `cholesky` alone does not report.
