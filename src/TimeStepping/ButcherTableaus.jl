@@ -1,5 +1,5 @@
 export IMEXButcherTableau, RKButcherTableau, num_stages
-export RK1_Euler_Tableau, RK2_SSP_Tableau, RK2_Ralston_Tableau, RK3_SSP_Tableau, RK4_Classical_Tableau
+export RK1_Euler_Tableau, RK2_SSP_Tableau, RK2_Ralston_Tableau, RK3_SSP_Tableau, RK4_Classical_Tableau, RK4_SSP_Tableau
 export IMEX_Euler_Tableau, IMEX_ARS233_Tableau, IMEX_ARS222_Tableau, IMEX_PRSSP3_Tableau, IMEX_SSP2332_Tableau
 
 """
@@ -106,6 +106,25 @@ function RK4_Classical_Tableau(::Type{T}) where {T}
           0.0 0.5 0.0 0.0;
           0.0 0.0 1.0 0.0]
     return RKButcherTableau(A, T[1/6, 1/3, 1/3, 1/6], T[0.0, 0.5, 0.5, 1.0])
+end
+
+"""
+    RK4_SSP_Tableau(T)
+
+SSPRK(5,4) of Spiteri and Ruuth (SIAM J. Numer. Anal. 40, 2002): five stages, order 4, the optimal
+four-stage-free SSP coefficient `C ≈ 1.508` (SSP-RK3 has `C = 1`, so it allows a 1.5 times larger step per
+stage, i.e. about the same cost per unit time as RK4 with the SSP guarantee). The Butcher form of the
+published Shu–Osher coefficients; the order conditions up to 4 hold to round-off.
+"""
+function RK4_SSP_Tableau(::Type{T}) where {T}
+    A = T[0.0                  0.0                  0.0                  0.0                  0.0;
+          0.39175222657189002  0.0                  0.0                  0.0                  0.0;
+          0.21766909626116876  0.36841059305037099  0.0                  0.0                  0.0;
+          0.082692086657810582 0.13995850219189535  0.25189177427169401  0.0                  0.0;
+          0.067966283637114752 0.11503469850463156  0.20703489859738566  0.54497475022852104  0.0]
+    b = T[0.14681187608478657, 0.24848290944497617, 0.10425883033198098, 0.2744389009013507, 0.226007483236906]
+    c = T[0.0, 0.39175222657189002, 0.58607968931153975, 0.47454236312139997, 0.93501063096765302]
+    return RKButcherTableau(A, b, c)
 end
 
 # =========================================================================

@@ -13,6 +13,7 @@ Every tableau is an `IMEXButcherTableau{T}` holding an explicit part $(\tilde A,
 | `RK2_Ralston_Tableau(T)` | 2 | no | Order 2, minimal truncation error |
 | `RK3_SSP_Tableau(T)` | 3 | yes | Shu–Osher SSP-RK3, order 3 |
 | `RK4_Classical_Tableau(T)` | 4 | no | Classical RK4, order 4 |
+| `RK4_SSP_Tableau(T)` | 5 | yes | Spiteri–Ruuth SSPRK(5,4), order 4, SSP coefficient 1.508 |
 | `IMEX_Euler_Tableau(T)` | 2 | yes | Forward/backward Euler, order 1 |
 | `IMEX_ARS222_Tableau(T[, γ])` | 2 | no | Ascher–Ruuth–Spiteri (2,2,2) |
 | `IMEX_ARS233_Tableau(T[, γ])` | 3 | no | Ascher–Ruuth–Spiteri (2,3,3) |
@@ -25,8 +26,8 @@ The stepper checks MOOD admissibility after every stage and treats each stage as
 
 Recommended choices:
 
-- **Explicit, with discontinuities:** `RK3_SSP_Tableau` (or `RK2_SSP_Tableau` for second-order spatial schemes).
-- **Explicit, smooth problems, convergence studies at order 4+:** `RK4_Classical_Tableau`, typically without MOOD.
+- **Explicit, with discontinuities:** `RK3_SSP_Tableau` (or `RK2_SSP_Tableau` for second-order spatial schemes); `RK4_SSP_Tableau` for fourth- and fifth-order spatial schemes with MOOD, where it keeps the SSP guarantee at order 4 (five stages, but a 1.5 times larger SSP step than RK3).
+- **Explicit, smooth problems, convergence studies at order 4+:** `RK4_Classical_Tableau` or `RK4_SSP_Tableau`.
 - **Stiff relaxation sources:** `IMEX_SSP2332_Tableau` or `IMEX_PRSSP3_Tableau`.
 
 ## Defining your own
