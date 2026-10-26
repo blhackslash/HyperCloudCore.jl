@@ -337,6 +337,7 @@ end
         ("Upwind Euler",           () -> UpwindDivergence(Float64, 1, 1, 1, :Classic, UpwindFlux()), MOOD(), RK1_Euler_Tableau(Float64), NoGridMover()),
         ("MUSCL3 moving RK2",      () -> MUSCL(Float64, 1, 1, 3, NoLimiter(), RusanovFlux()), MOOD(), RK2_SSP_Tableau(Float64), mover),
         ("MUSCL4 IMEX ARS222",     () -> MUSCL(Float64, 1, 1, 4, NoLimiter(), RusanovFlux()), MOOD(EPD1(), MOODu1(1e-6)), IMEX_ARS222_Tableau(Float64), NoGridMover()),
+        ("MUSCL4 MOODu2 SSPRK54",  () -> MUSCL(Float64, 1, 1, 4, NoLimiter(), RusanovFlux()), MOOD(EPD1(), MOODu2(1e-6)), RK4_SSP_Tableau(Float64), NoGridMover()),
         ("WENO2 RK2",              () -> WENO(Float64, 1, 1, 2), MOOD(), RK2_SSP_Tableau(Float64), NoGridMover()),
         ("Upwind1 Tiwari RK2",     () -> UpwindDivergence(Float64, 1, 1, 1, :Tiwari, UpwindFlux()), MOOD(), RK2_SSP_Tableau(Float64), NoGridMover()),
         ("MUSCL3 sinusoidal RK2",  () -> MUSCL(Float64, 1, 1, 3, NoLimiter(), RusanovFlux()), MOOD(), RK2_SSP_Tableau(Float64), sinus),
@@ -469,7 +470,7 @@ end
 end
 
 @testset "Butcher tableaus" begin
-    explicit = (RK1_Euler_Tableau, RK2_SSP_Tableau, RK2_Ralston_Tableau, RK3_SSP_Tableau, RK4_Classical_Tableau)
+    explicit = (RK1_Euler_Tableau, RK2_SSP_Tableau, RK2_Ralston_Tableau, RK3_SSP_Tableau, RK4_Classical_Tableau, RK4_SSP_Tableau)
     imex     = (IMEX_Euler_Tableau, IMEX_ARS233_Tableau, IMEX_ARS222_Tableau, IMEX_PRSSP3_Tableau, IMEX_SSP2332_Tableau)
 
     for make in (explicit..., imex...)
@@ -484,6 +485,40 @@ end
         bt = make(Float64)
         @test all(iszero, bt.a) && all(iszero, bt.b)               # zero implicit part
     end
+    # Order conditions of the explicit tableaus (the highest order p ≤ 4 whose conditions hold to round-off)
+    function rk_order(bt)
+        A, b, c = Matrix(bt.a_t), Vector(bt.b_t), Vector(bt.c_t)
+        conds = ([sum(b) - 1], [b' * c - 1/2], [b' * (c .^ 2) - 1/3, b' * (A * c) - 1/6],
+                 [b' * (c .^ 3) - 1/4, b' * (c .* (A * c)) - 1/8, b' * (A * (c .^ 2)) - 1/12, b' * (A * (A * c)) - 1/24])
+        p = 0
+        for (q, res) in enumerate(conds)
+            maximum(abs, res) < 1e-13 || break
+            p = q
+        end
+        return p
+    end
+    @test rk_order(RK1_Euler_Tableau(Float64)) == 1 && rk_order(RK2_SSP_Tableau(Float64)) == 2
+    @test rk_order(RK3_SSP_Tableau(Float64)) == 3 && rk_order(RK4_Classical_Tableau(Float64)) == 4
+    @test rk_order(RK4_SSP_Tableau(Float64)) == 4 && HyperCloudCore.num_stages(RK4_SSP_Tableau(Float64)) == 5
+    # ... and the observed order on y' = -2 t y (y = exp(-t²)) with the explicit tableau applied by hand
+    function ode_error(bt, dt)
+        A, b, c = Matrix(bt.a_t), Vector(bt.b_t), Vector(bt.c_t); s = length(b)
+        f(t, y) = -2t * y
+        y = 1.0; t = 0.0
+        while t < 1.0 - 1e-12
+            k = zeros(s)
+            for i in 1:s
+                k[i] = f(t + c[i] * dt, y + dt * sum(A[i, j] * k[j] for j in 1:i-1; init = 0.0))
+            end
+            y += dt * sum(b .* k); t += dt
+        end
+        return abs(y - exp(-1.0))
+    end
+    for (make, order) in ((RK3_SSP_Tableau, 3), (RK4_Classical_Tableau, 4), (RK4_SSP_Tableau, 4))
+        eoc = log2(ode_error(make(Float64), 0.05) / ode_error(make(Float64), 0.025))
+        @test abs(eoc - order) < 0.2
+    end
+    @test build_tableau(Dict{Symbol, Any}(:stepper => :RK4SSP), Dict{Symbol, Any}(:T => Float64)).b_t ≈ RK4_SSP_Tableau(Float64).b_t
     for make in imex
         @test sum(make(Float64).b) ≈ 1.0
     end
