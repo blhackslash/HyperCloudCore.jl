@@ -237,7 +237,7 @@ function update_size!(ts::GeneralRKTimeStepper, N::Int, M_neighbors::Int, moving
             ensure_capacity!(ts.K_X_stages[i], N)
         end
     end
-    update_size!(ts.int_buffer, M_neighbors)
+    uses_slot_buffers(ts.divergence_interpolator) && update_size!(ts.int_buffer, M_neighbors)
     update_size!(ts.work, N)
     return nothing
 end
@@ -421,7 +421,7 @@ end
 # Switch the grid to stage geometry X (frozen topology or full search)
 function _apply_stage_geometry!(ts::GeneralRKTimeStepper, pg, X)
     set_positions!(pg, X, ts.full_search_per_stage)
-    ts.full_search_per_stage && update_size!(ts.int_buffer, length(pg.neighbor.indices))
+    ts.full_search_per_stage && uses_slot_buffers(ts.divergence_interpolator) && update_size!(ts.int_buffer, length(pg.neighbor.indices))
     return nothing
 end
 

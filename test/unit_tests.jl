@@ -337,6 +337,8 @@ end
         ("Upwind Euler",           () -> UpwindDivergence(Float64, 1, 1, 1, :Classic, UpwindFlux()), MOOD(), RK1_Euler_Tableau(Float64), NoGridMover()),
         ("MUSCL3 moving RK2",      () -> MUSCL(Float64, 1, 1, 3, NoLimiter(), RusanovFlux()), MOOD(), RK2_SSP_Tableau(Float64), mover),
         ("MUSCL4 IMEX ARS222",     () -> MUSCL(Float64, 1, 1, 4, NoLimiter(), RusanovFlux()), MOOD(EPD1(), MOODu1(1e-6)), IMEX_ARS222_Tableau(Float64), NoGridMover()),
+        ("MUSCL3 MOODu2 streamed",  () -> MUSCL(Float64, 1, 1, 3, NoLimiter(), RusanovFlux(); streamed = true), MOOD(EPD1(), MOODu2(1e-6)), RK3_SSP_Tableau(Float64), NoGridMover()),
+        ("MUSCL5 aligned streamed", () -> MUSCL(Float64, 1, 1, 5, NoLimiter(), AlignedRusanovFlux(); div_order = 5, streamed = true), MOOD(EPD1(), MOODu2(1e-6)), RK3_SSP_Tableau(Float64), NoGridMover()),
         ("MUSCL4 MOODu2 SSPRK54",  () -> MUSCL(Float64, 1, 1, 4, NoLimiter(), RusanovFlux()), MOOD(EPD1(), MOODu2(1e-6)), RK4_SSP_Tableau(Float64), NoGridMover()),
         ("WENO2 RK2",              () -> WENO(Float64, 1, 1, 2), MOOD(), RK2_SSP_Tableau(Float64), NoGridMover()),
         ("Upwind1 Tiwari RK2",     () -> UpwindDivergence(Float64, 1, 1, 1, :Tiwari, UpwindFlux()), MOOD(), RK2_SSP_Tableau(Float64), NoGridMover()),
@@ -771,7 +773,7 @@ end
     a_geo     = vcat((coefficients(RusanovFlux(), i) for i in particles)...)
     @test length(a_aligned) > 300 && minimum(a_aligned) >= -1e-12
     @test minimum(a_geo) < -1e-6                                       # the geometric sorting is not monotone here
-    @test length(MUSCL(Float64, 2, 1, 5, NoLimiter(), AlignedRusanovFlux(); div_order = 5).dsigns) == 0   # filled by prepare_geometry!
+    @test length(MUSCL(Float64, 2, 1, 5, NoLimiter(), AlignedRusanovFlux(); div_order = 5).dweights) == 0   # filled by prepare_geometry!
     @test build_flux(Dict{Symbol, Any}(:name => :AlignedRusanov), Dict{Symbol, Any}()) isa AlignedRusanovFlux
 end
 
@@ -797,6 +799,37 @@ end
     end
     @test checked >= 1
     @test all(j -> abs(pg.rhos[j][1] - exp(-src.λ * dt)) < 5e-3, interior_indices(pg))     # second-order IMEX step
+end
+
+@testset "Streamed divergence" begin
+    # The streamed flux pass (cached per-slot weights, dynamic per-slot weights for dropped particles) gives the
+    # divergence of the buffered fit up to round-off, with both fluxes, and never touches the slot buffers.
+    geom = get_rectangular_domain(Float64, (0.0, 0.0), (1.0, 1.0); is_periodic = true)
+    dx   = 1 / 32
+    pg   = ParticleGrid(geom, (dx, dx), ExponentialWeightFunction(1.0, 5.5dx), 2; randomness = (0.2dx, 0.2dx), rng = MersenneTwister(21))
+    N    = pg.meta.N
+    for i in 1:N
+        x = pg.core.positions[i]
+        pg.rhos[i] = State{2, Float64}(exp(-sum(abs2, x - Space{2, Float64}(0.5, 0.5)) / 0.05), sin(2pi * x[1]) * cos(2pi * x[2]))
+    end
+    eq = LinearAdvection(SVector(SMatrix{2, 2, Float64}(1.0, 0.0, 0.0, 0.5), SMatrix{2, 2, Float64}(0.7, 0.0, 0.0, -0.3)), Float64)
+    function rhs(flux, streamed, drop)
+        m  = MUSCL(Float64, 2, 2, 5, NoLimiter(), flux; streamed = streamed)
+        ts = GeneralRKTimeStepper(eq, m, MOOD(), RK3_SSP_Tableau(Float64))
+        HyperCloudCore.update_size!(ts, N, length(pg.neighbor.indices), false); HyperCloudCore.update_size!(m, N)
+        fill!(view(pg.core.particle_orders, 1:N), 5)
+        drop && (pg.core.particle_orders[findall(i -> abs(pg.core.positions[i][1] - 0.5) < 0.1, 1:N)] .= 2)
+        HyperCloudCore.compute_explicit_rhs!(ts, eq, pg, ts.K_E_stages[1], ts.K_X_stages[1], pg.rhos, 0.0, true)
+        return copy(view(parent(ts.K_E_stages[1]), 1:N)), length(ts.int_buffer.df_flux)
+    end
+    for flux in (RusanovFlux(), AlignedRusanovFlux()), drop in (false, true)
+        Kb, nb_b = rhs(flux, false, drop)
+        Ks, nb_s = rhs(flux, true, drop)
+        scale = maximum(maximum(abs, k) for k in Kb)
+        @test maximum(maximum(abs, Kb[i] - Ks[i]) for i in 1:N) < 1e-11 * scale
+        @test nb_b >= length(pg.neighbor.indices) && nb_s == 0      # the streamed scheme never sizes the slot buffers
+    end
+    fill!(view(pg.core.particle_orders, 1:N), 0)
 end
 
 @testset "Memory budget" begin
@@ -828,6 +861,11 @@ end
         @test memory_estimate(pg, interp).per_slot == g.per_slot                 # the weight signs count only for the aligned flux
         interp_a = MUSCL(Float64, 1, 1, 3, NoLimiter(), AlignedRusanovFlux())
         @test memory_estimate(pg, interp_a).per_slot == g.per_slot + sizeof(Space{1, Float64})
+        # A streamed scheme keeps the per-slot weights and the stepper drops its per-slot flux buffers
+        interp_s = MUSCL(Float64, 1, 1, 3, NoLimiter(), RusanovFlux(); streamed = true)
+        ts_s     = GeneralRKTimeStepper(eq, interp_s, MOOD(), RK3_SSP_Tableau(Float64))
+        @test memory_estimate(pg, ts_s, interp_s).per_slot - g.per_slot == sizeof(Space{1, Float64})
+        @test !uses_slot_buffers(interp_s) && uses_slot_buffers(interp)
         # A moving grid adds x_n, x_cand and 3 stages × (X, K_X): 8 position buffers
         pgm = make_pg_1d(N; mover = LagrangianMover())
         tsm = GeneralRKTimeStepper(eq, interp, MOOD(), RK3_SSP_Tableau(Float64))

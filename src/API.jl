@@ -1,7 +1,7 @@
 export flux, max_eigenvalue, is_admissible, prim2cons, cons2prim, velocity, fluid_velocity
 export evaluate_nc_jump
 export pre_solve_update!, evaluate_source, implicit_solve
-export update_size!, update_content!, prepare_geometry!, _extract_order, _divergence_degree, _order_reach
+export update_size!, update_content!, prepare_geometry!, uses_slot_buffers, _extract_order, _divergence_degree, _order_reach
 export has_cached_gradients, cached_gradients
 
 # =========================================================================
@@ -209,6 +209,15 @@ Called by the time stepper before every right-hand-side pass. Schemes that cache
 since the last call. Defaults to a no-op.
 """
 @inline prepare_geometry!(::DivergenceInterpolator, pg) = nothing
+
+"""
+    uses_slot_buffers(interp::DivergenceInterpolator) -> Bool
+
+`true` (default) if the scheme writes to the per-slot flux buffers of the stepper (`df_flux`, `df_scratch`,
+`mask`), which are then sized to the neighbour lists; `false` for schemes that never touch them (a streamed
+`MUSCL`), so the stepper does not allocate them.
+"""
+@inline uses_slot_buffers(::DivergenceInterpolator) = true
 
 """
     _extract_order(interp::DivergenceInterpolator) -> Int
