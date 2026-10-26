@@ -77,11 +77,13 @@ Computes the divergence of the flux at particle `i`. Note that `MUSCL` relies on
 - `flux`: The associated numerical flux function (`NF`).
 - `gradients`: A pre-allocated vector storing the reconstructed, limited spatial gradients for all particles.
 - `grad_weights`, `div_weights`: cached inverse MLS moment matrices (`MLSWeights`) of the full-order reconstruction and divergence fits, refreshed by `prepare_geometry!` when the grid geometry changes.
+- `dsigns`: per-slot signs of the full-degree divergence weights, the dissipation direction of [`AlignedRusanovFlux`](@ref) (refreshed with the divergence cache; empty for the other fluxes).
 
 The per-particle caches are `Growable` buffers whose array type is the `storage` keyword of the constructor
 (`Array` by default; `ROCArray` etc. for a grid built with `device_grid`).
 """
-struct MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER, INTERPS, L, NF, VG <: AbstractVector{SVector{B_LEN, State{M, T}}}, WG, WD} <: DivergenceInterpolator
+struct MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER, INTERPS, L, NF, VG <: AbstractVector{SVector{B_LEN, State{M, T}}}, WG, WD,
+             VS <: AbstractVector{Space{D, T}}} <: DivergenceInterpolator
     interpolators::INTERPS
     limiter::L
     flux::NF
@@ -91,6 +93,9 @@ struct MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER, INTERPS, L, NF, VG <: Abstrac
     # order fall back to the direct solves.
     grad_weights::WG
     div_weights::WD
+    # Signs (±1 per axis) of the full-degree divergence weight of every neighbour slot, the dissipation
+    # direction of `AlignedRusanovFlux` (filled with the divergence cache, empty for other fluxes).
+    dsigns::VS
 end
 
 # Interpolator-table entry the divergence uses at full order (see `_resolve_div_idx`).
@@ -129,19 +134,66 @@ function MUSCL(
     div_weights  = MLSWeights{typeof(basis_length(Val(dimension), Val(div_degree))).parameters[1] + 1, div_degree, T}(AT; intercept = true)
 
     return MUSCL{dimension, M, T, B_LEN, max_order, div_order}(interps, limiter, flux, Growable{SVector{B_LEN, State{M, T}}}(AT),
-                                                              grad_weights, div_weights)
+                                                              grad_weights, div_weights, Growable{Space{dimension, T}}(AT))
 end
 
 # Infers the storage types (host vectors, or device views when adapted for a kernel).
-MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER}(interps, limiter, flux, gradients, grad_weights, div_weights) where {D, M, T, B_LEN, MAX_ORDER, DIV_ORDER} =
+MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER}(interps, limiter, flux, gradients, grad_weights, div_weights, dsigns) where {D, M, T, B_LEN, MAX_ORDER, DIV_ORDER} =
     MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER, typeof(interps), typeof(limiter), typeof(flux), typeof(gradients),
-          typeof(grad_weights), typeof(div_weights)}(interps, limiter, flux, gradients, grad_weights, div_weights)
+          typeof(grad_weights), typeof(div_weights), typeof(dsigns)}(interps, limiter, flux, gradients, grad_weights, div_weights, dsigns)
 
 function prepare_geometry!(muscl::MUSCL, pg::ParticleGrid)
     update_weights!(muscl.grad_weights, pg)
-    muscl.div_weights === muscl.grad_weights || update_weights!(muscl.div_weights, pg)
+    wd = muscl.div_weights
+    v0 = wd.version[]
+    wd === muscl.grad_weights || update_weights!(wd, pg)
+    _aligned_dissipation(muscl.flux) && (v0 != wd.version[] || length(muscl.dsigns) < length(pg.neighbor.indices)) &&
+        update_dissipation_signs!(muscl, pg)
     return nothing
 end
+
+"""
+    update_dissipation_signs!(muscl::MUSCL, pg::ParticleGrid)
+
+Signs of the full-degree divergence weights of every neighbour slot (the dissipation direction of
+[`AlignedRusanovFlux`](@ref)) from the current divergence cache; the sign of the distance where the cache
+has no factorisation for the particle. Called by `prepare_geometry!` when the cache was refreshed.
+"""
+function update_dissipation_signs!(muscl::MUSCL{D, M, T}, pg::ParticleGrid{D, M, T}) where {D, M, T}
+    wd = muscl.div_weights
+    nb = pg.neighbor
+    ensure_capacity!(muscl.dsigns, length(nb.indices))
+    foreach_particle(_sign_body!, get_backend(), pg.meta.N,
+        (muscl.dsigns, wd.inv_moment, wd.ok, nb.ranges, nb.distances, nb.weights, _cache_invL(wd),
+         _fit_degree(wd), Val(_has_intercept(wd)), Val(D)))
+    return nothing
+end
+
+@inline _fit_degree(::AbstractMLSWeights{B, IO, T}) where {B, IO, T} = Val(IO)
+
+# Kernel body (see Backend.jl): weight signs of the slots of particle `i`.
+@inline function _sign_body!(i, dsigns, inv_moment, ok, ranges, dists, wts, invL, val_io, val_c::Val{C}, ::Val{D}) where {C, D}
+    off = C ? 1 : 0
+    if ok[i]
+        inv_N = inv_moment[i]
+        @inbounds for k in ranges[i]
+            c = inv_N * (wts[k] * _fit_basis(val_c, val_io, dists[k] * invL))
+            dsigns[k] = Space{D, eltype(c)}(ntuple(d -> sign(c[d + off]), Val(D)))
+        end
+    else
+        @inbounds for k in ranges[i]
+            dsigns[k] = sign.(dists[k])
+        end
+    end
+    return nothing
+end
+
+# The direction that sorts the interface states of slot `k`: the distance for every flux but
+# `AlignedRusanovFlux`, which uses the weight signs on the pairs where either particle is below the full
+# order (`below`). The rule is symmetric in the pair, so both sides evaluate the same flux; elsewhere the
+# geometric sorting keeps the error constant of the plain Rusanov flux.
+@inline _dissipation_direction(::NumericalFluxFunction, dsigns, k, dist_k, below::Bool) = dist_k
+@inline _dissipation_direction(::AlignedRusanovFlux, dsigns, k, dist_k, below::Bool) = below ? (@inbounds dsigns[k]) : dist_k
 
 function update_size!(muscl::MUSCL{D, M, T, B_LEN, MAX_ORDER}, N_particles::Int) where {D, M, T, B_LEN, MAX_ORDER}
     ensure_capacity!(muscl.gradients, N_particles)
@@ -231,7 +283,8 @@ function (muscl::MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER})(
         F_ij = flux(eq, fij)
         F_ji = flux(eq, fji)
 
-        f_L, f_R, F_L, F_R = sort_flux(fij, fji, F_ij, F_ji, dist_k)
+        below = eff_order_i < MAX_ORDER || pg.core.particle_orders[j_idx] < MAX_ORDER
+        f_L, f_R, F_L, F_R = sort_flux(fij, fji, F_ij, F_ji, _dissipation_direction(muscl.flux, muscl.dsigns, global_idx, dist_k, below))
         F_num   = muscl.flux(f_L, f_R, F_L, F_R, eq)
         nc_jump = evaluate_nc_jump(eq, f_L, f_R, dist_k)
 

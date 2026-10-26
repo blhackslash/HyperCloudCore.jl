@@ -82,6 +82,37 @@ below).
 
 Because the flux at $i$ reads `gradients[j]` of its neighbours, all gradients of a stage must be computed before any flux; that is why the pre-gather pass is separate.
 
+## Aligned dissipation and a uniform divergence degree
+
+MOOD drops the divergence degree together with the reconstruction order, and a pair of particles with
+different divergence degrees is never conservative (its face vectors differ in magnitude, not only in sign,
+see the conservation section of the MLS page): a front of dropped particles loses mass at a rate that does
+not shrink with resolution. The degree drop is not needed for conservation, it compensates a stability
+flaw of the geometric dissipation: with the states sorted by the sign of the *distance*, the dissipation
+of neighbour `j` enters particle `i` with the coefficient `½ Σ_d s_d c_ij,d sign(d_ij,d)`, which is negative
+on the slots where a high-degree weight changes sign, so the first-order fallback is not monotone and
+high-degree weights overshoot (12 % on a box profile with `div_order = 5`).
+
+[`AlignedRusanovFlux`](@ref) sorts the states by the sign of the weight instead (`dsigns`, kept with the
+divergence cache) on every pair where one of the two particles is below the full order; the rule is
+symmetric in the pair, and elsewhere the flux is the plain one. The coefficient becomes
+`½ Σ_d s_d |c_ij,d| ≥ ½ |c_ij·f'|`, so the first-order update is local-extremum-diminishing for any zero-sum
+weights. With it the divergence degree can stay uniform (`div_order = max_order`) while MOOD lowers the
+reconstruction only: no mixed-degree pairs, and the mass error is the integrated truncation error,
+`O(h^q)` where the flux is smooth and `O(h)` across shocks on irregular clouds (exactly zero on a lattice).
+Without drops the scheme is identical to the plain flux. The price is a more diffusive fallback where MOOD
+drops (the full sum `Σ_d s_d |c_ij,d|` of a high-degree weight set is larger than that of degree 1).
+
+Measured on a 2-D cloud (`R = 5.5 Δx`, jitter 0.2, MUSCL5 with MOOD EPD1/u2, `div_order = 5`), relative mass
+drift at 50² / 100² / 200²: box advection to `t = 1` goes from `+8.0e-3 / +6.2e-3 / +2.0e-3` with the adaptive
+degree to `−1.1e-3 / −5.8e-4 / +5.9e-5` (lattice: `1e-14`), with the same extrema; 2-D Burgers to `t = 3`
+(shock) from `−6.1e-2 / −5.4e-2 / −5.0e-2` to `+7e-5 / −2.4e-4 / −2.2e-4` with no overshoot. The fixed
+degree with the geometric dissipation keeps the mass but overshoots by 11–13 % (box) and 6 % (Burgers).
+
+```@docs
+AlignedRusanovFlux
+```
+
 ## Slope limiting (*a priori*)
 
 - **Barth–Jespersen / Venkatakrishnan** (any dimension). The reconstruction is evaluated at every interface. If an interface value leaves the range $[\min_{\nu(i)} U, \max_{\nu(i)} U]$, the coefficients are scaled by $\phi = \min_j \phi(r_j)$ with $\phi_{BJ}(r) = \min(1, r)$ and the smooth Venkatakrishnan function. This is done per state component.
