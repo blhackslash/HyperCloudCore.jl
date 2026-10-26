@@ -107,6 +107,18 @@ What it costs and what it does not do:
 - The pair term remains, so the scheme is still not exactly conservative on irregular clouds. That needs
   antisymmetric face coefficients (a global correction).
 
+**Measuring the pair term.** `HyperCloudCore.conservation_defect(muscl, pg)` rebuilds the divergence
+weights every particle currently uses (its `particle_orders` entry, so MOOD drops are included) and reports
+the relative antisymmetry defect $\sum |S_{ij} + S_{ji}| / \sum |S_{ij}|$ of the face vectors
+$S_{ij} = 2 V_i c_{ij}$, per particle and split into pairs of equal degree, pairs of different degree and
+one-sided pairs. On a lattice the equal-degree defect is round-off; on a jittered cloud it grows with the
+jitter; a pair whose particles use different degrees has a defect of order one, which is why MOOD drops
+next to full-order particles cost mass.
+
+```@docs
+HyperCloudCore.conservation_defect
+```
+
 Measured on periodic Burgers with 20 % jitter (mass drift after the shock, before → after): 1-D MUSCL1
 $6.6\cdot10^{-5} \to 4.7\cdot10^{-6}$, 1-D MUSCL2 with Venkatakrishnan limiter
 $1.0\cdot10^{-3} \to 1.1\cdot10^{-4}$ ($R = 2.5\Delta x$) and $3.4\cdot10^{-4} \to 7.5\cdot10^{-5}$

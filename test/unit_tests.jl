@@ -218,6 +218,28 @@ end
         @test HyperCloudCore._mls_reg(Float64) == sqrt(eps(Float64)) && HyperCloudCore._mls_reg(Float32) == sqrt(eps(Float32))
     end
 
+    @testset "Conservation defect diagnostic" begin
+        lat = ParticleGrid(geom, (dx, dx), ExponentialWeightFunction(1.0, 2.5dx), 2)      # lattice, no jitter
+        for order in (2, 3)
+            m = MUSCL(Float64, 2, 2, order, NoLimiter(), RusanovFlux())
+            fill!(view(lat.core.particle_orders, 1:lat.meta.N), order)
+            r = HyperCloudCore.conservation_defect(m, lat)
+            @test r.onesided.pairs == 0 && r.mixed.pairs == 0 && r.equal.pairs > 0 && r.total.pairs == r.equal.pairs
+            @test r.total.rel < 1e-10 && maximum(r.particle) < 1e-10          # symmetric stencils: antisymmetric weights
+            @test all(i -> r.degree[i] == HyperCloudCore._divergence_index(Val(0), Val(2), order, length(lat.neighbor.ranges[i])) - 1, 1:lat.meta.N)
+        end
+        m = MUSCL(Float64, 2, 2, 3, NoLimiter(), RusanovFlux())
+        fill!(view(pg.core.particle_orders, 1:N), 3)
+        r = HyperCloudCore.conservation_defect(m, pg)                        # jittered cloud: a finite pair term
+        @test r.mixed.pairs == 0 && 0 < r.total.rel < 1 && length(r.particle) == N && all(x -> 0 <= x < 1, r.particle)
+        pg.core.particle_orders[N ÷ 2] = 1                                   # one MOOD-style drop: mixed pairs of order one
+        rm = HyperCloudCore.conservation_defect(m, pg)
+        # a mixed pair does not cancel at all (its defect exceeds the face magnitude), an equal pair cancels partly
+        @test rm.mixed.pairs == length(nb.ranges[N ÷ 2]) && rm.degree[N ÷ 2] == 1
+        @test rm.mixed.rel > 1 > rm.equal.rel && rm.mixed.rel > 2 * rm.equal.rel
+        fill!(view(pg.core.particle_orders, 1:N), 0)                         # as constructed
+    end
+
     @testset "Conditional regularisation of degenerate stencils" begin
         for T in (Float64, Float32)
             # Healthy stencil: the plain factorisation is used as it is (no Tikhonov term)
