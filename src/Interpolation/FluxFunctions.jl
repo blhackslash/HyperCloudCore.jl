@@ -1,4 +1,4 @@
-export UpwindFlux, RusanovFlux
+export UpwindFlux, RusanovFlux, AlignedRusanovFlux
 
 """
     max_eigenvalues(eq::HyperbolicPDE, f_L::Flux, f_R::Flux) -> SVector{D, T}
@@ -74,6 +74,32 @@ Evaluates the Rusanov (local Lax-Friedrichs) interface flux across all spatial d
         T(0.5) * (F_L[d] + F_R[d] - dissipation)
     end)
 end
+
+"""
+    AlignedRusanovFlux <: NumericalFluxFunction
+
+The Rusanov flux with its dissipation aligned with the divergence weights where an order was dropped. On
+a pair whose particles both have the full order it is the plain [`RusanovFlux`](@ref) (states sorted into
+"left" and "right" per axis by the sign of the distance). Where either particle is below the full order
+the states are sorted by the sign of the particle's own divergence weight `c_ij` for that neighbour
+instead; the rule is symmetric in the pair, so both sides evaluate the same flux. The dissipation then
+enters the divergence of particle `i` with the coefficient `½ Σ_d s_d |c_ij,d| ≥ ½ |c_ij · f'|`, so the
+first-order update (constant reconstructions, zero-sum weights) is local-extremum-diminishing for *any*
+divergence weights, including high-degree fits on one-sided stencils, whose weights change sign over the
+stencil and make the geometric dissipation anti-dissipative there. That allows a uniform divergence degree
+(`div_order`) with MOOD acting on the reconstruction only, which removes the mixed-degree pairs and their
+mass defect; the schemes that use it (`MUSCL`) keep the per-slot weight signs with their geometry caches.
+Away from drops the scheme is identical to the plain flux, so accuracy and error constant are unchanged.
+"""
+struct AlignedRusanovFlux <: NumericalFluxFunction end
+
+@inline (::AlignedRusanovFlux)(f_L::Flux{D, M, T}, f_R::Flux{D, M, T}, F_L::Flux{D, M, T}, F_R::Flux{D, M, T},
+                                eq::HyperbolicPDE{D, M, T}) where {D, M, T} = RusanovFlux()(f_L, f_R, F_L, F_R, eq)
+
+# Whether a flux sorts the interface states by the signs of the divergence weights (`AlignedRusanovFlux`) or
+# by the geometry (every other flux).
+@inline _aligned_dissipation(::NumericalFluxFunction) = false
+@inline _aligned_dissipation(::AlignedRusanovFlux) = true
 
 """
     (upwind::UpwindFlux)(f_L, f_R, F_L, F_R, eq) -> Flux{D, M, T}

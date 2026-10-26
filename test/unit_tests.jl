@@ -705,6 +705,41 @@ end
     end
 end
 
+@testset "Aligned dissipation: non-negative first-order coefficients with high-degree weights" begin
+    # Linear advection with constant reconstructions (order 1 everywhere) and a fixed degree-5 divergence:
+    # the RHS is linear, K_i = Σ_j a_ij (u_j - u_i), and a unit state at neighbour j returns a_ij directly.
+    # Sorted by the weight signs (AlignedRusanovFlux) every a_ij is non-negative, so the first-order update
+    # is local-extremum-diminishing for any zero-sum weights; sorted by the distance (RusanovFlux) the
+    # high-degree weights make some a_ij negative.
+    geom = get_rectangular_domain(Float64, (0.0, 0.0), (1.0, 1.0); is_periodic = true)
+    dx   = 1 / 24
+    pg   = ParticleGrid(geom, (dx, dx), ExponentialWeightFunction(1.0, 5.5dx), 1; randomness = (0.2dx, 0.2dx), rng = MersenneTwister(9))
+    N    = pg.meta.N
+    eq   = LinearAdvection(((1.0,), (0.7,)), Float64)
+    nb   = pg.neighbor
+    function coefficients(flux, i)
+        m  = MUSCL(Float64, 2, 1, 5, NoLimiter(), flux; div_order = 5)
+        ts = GeneralRKTimeStepper(eq, m, MOOD(), RK3_SSP_Tableau(Float64))
+        HyperCloudCore.update_size!(ts, N, length(nb.indices), false); HyperCloudCore.update_size!(m, N)
+        fill!(view(pg.core.particle_orders, 1:N), 1)
+        a = Float64[]
+        for k in nb.ranges[i]
+            j = nb.indices[k]
+            fill!(view(pg.rhos, 1:N), zero(State{1, Float64})); pg.rhos[j] = State{1, Float64}(1.0)
+            HyperCloudCore.compute_explicit_rhs!(ts, eq, pg, ts.K_E_stages[1], ts.K_X_stages[1], pg.rhos, 0.0, true)
+            push!(a, parent(ts.K_E_stages[1])[i][1])
+        end
+        return a
+    end
+    particles = (1, N ÷ 4, N ÷ 2, N)
+    a_aligned = vcat((coefficients(AlignedRusanovFlux(), i) for i in particles)...)
+    a_geo     = vcat((coefficients(RusanovFlux(), i) for i in particles)...)
+    @test length(a_aligned) > 300 && minimum(a_aligned) >= -1e-12
+    @test minimum(a_geo) < -1e-6                                       # the geometric sorting is not monotone here
+    @test length(MUSCL(Float64, 2, 1, 5, NoLimiter(), AlignedRusanovFlux(); div_order = 5).dsigns) == 0   # filled by prepare_geometry!
+    @test build_flux(Dict{Symbol, Any}(:name => :AlignedRusanov), Dict{Symbol, Any}()) isa AlignedRusanovFlux
+end
+
 @testset "Memory budget" begin
     N  = 400
     eq = make_advection_1d()
@@ -731,7 +766,9 @@ end
         # cache (degree 3 with a constant term: SMatrix{4,4} + Bool)
         @test memory_estimate(pg, interp).per_particle - g.per_particle ==
               2S + sizeof(SMatrix{2, 2, Float64, 4}) + 1 + sizeof(SMatrix{4, 4, Float64, 16}) + 1
-        @test memory_estimate(pg, interp).per_slot == g.per_slot
+        @test memory_estimate(pg, interp).per_slot == g.per_slot                 # the weight signs count only for the aligned flux
+        interp_a = MUSCL(Float64, 1, 1, 3, NoLimiter(), AlignedRusanovFlux())
+        @test memory_estimate(pg, interp_a).per_slot == g.per_slot + sizeof(Space{1, Float64})
         # A moving grid adds x_n, x_cand and 3 stages × (X, K_X): 8 position buffers
         pgm = make_pg_1d(N; mover = LagrangianMover())
         tsm = GeneralRKTimeStepper(eq, interp, MOOD(), RK3_SSP_Tableau(Float64))

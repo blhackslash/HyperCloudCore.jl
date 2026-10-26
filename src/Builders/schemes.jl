@@ -82,7 +82,7 @@ end
     build_flux(flux_conf, context) -> NumericalFluxFunction
     build_flux(::Val{name}, flux_conf, context)
 
-`Flux` namespace. Selector `:name`: `:Rusanov` ([`RusanovFlux`](@ref)) or `:Upwind` ([`UpwindFlux`](@ref)).
+`Flux` namespace. Selector `:name`: `:Rusanov` ([`RusanovFlux`](@ref)), `:AlignedRusanov` ([`AlignedRusanovFlux`](@ref)) or `:Upwind` ([`UpwindFlux`](@ref)).
 """
 function build_flux end
 
@@ -93,4 +93,5 @@ end
 
 build_flux(name::Val, conf::Dict, context::Dict) = error("Unknown Flux: $(typeof(name))")
 build_flux(::Val{:Rusanov}, conf::Dict, context::Dict) = RusanovFlux()
+build_flux(::Val{:AlignedRusanov}, conf::Dict, context::Dict) = AlignedRusanovFlux()
 build_flux(::Val{:Upwind}, conf::Dict, context::Dict)  = UpwindFlux()
