@@ -55,7 +55,7 @@ All buffers (per-stage states $Y_k$ and right-hand sides $K_{E,k}$, $K_{I,k}$, p
 
 1. Copy $U^n$ (and the positions $x^n$ on a moving grid). Reset every particle's order to the scheme's maximum.
 2. For each stage $k = 1, \dots, s$:
-   1. **Form $Y_k$:** explicit predictor, `pre_solve_update!` for each implicit source, the diagonal implicit solve if $a_{kk} \ne 0$, evaluation of $K_{I,k}$, then boundary conditions. On a moving grid, also form $X_k = x^n + \Delta t \sum_{j<k} \tilde a_{kj} K_{X,j}$.
+   1. **Form $Y_k$:** explicit predictor, `pre_solve_update!` for each implicit source, the diagonal implicit solve if $a_{kk} \ne 0$, then $K_{I,k}$, then boundary conditions. With a single implicit source $K_{I,k} = (Y_k - Y_k^{\text{pred}}) / (\Delta t\, a_{kk})$ follows from the solve itself (no second evaluation of $S_I$); with several sources, or when $a_{kk} = 0$, $S_I(Y_k)$ is evaluated. On a moving grid, also form $X_k = x^n + \Delta t \sum_{j<k} \tilde a_{kj} K_{X,j}$.
    2. **MOOD checkpoint** ($k \ge 2$): test $Y_k$ against the neighbourhood of $Y_{k-1}$. Wherever it fails, lower orders, recompute $K_{E,k-1}$ only where it changed, re-form $Y_k$, and repeat until nothing fails. Details are on the [MOOD page](@ref "Multi-Dimensional Optimal Order Detection (MOOD)").
    3. **Move** the grid to $X_k$ (moving grids only).
    4. **Explicit RHS:** pre-gather pass (`update_content!`), then flux pass, giving $K_{E,k}$ and, on a moving grid, the grid velocities $K_{X,k}$.
