@@ -589,6 +589,7 @@ include("FluxFunctions.jl")
 include("Central.jl")
 
 include("MUSCL.jl")
+include("PairConsistent.jl")
 include("Limiter.jl")
 include("Conservation.jl")
 

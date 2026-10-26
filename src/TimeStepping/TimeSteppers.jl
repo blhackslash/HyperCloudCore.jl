@@ -263,6 +263,7 @@ function compute_explicit_rhs!(ts::GeneralRKTimeStepper{D, M, T}, eq, pg, K_E, K
     backend = get_backend()
 
     prepare_geometry!(interp, pg)   # refreshes geometry caches only if the grid changed
+    face_prepass!(interp, pg, ts.work.dirty, full)   # face vectors next to MOOD drops (PairConsistent.jl)
 
     foreach_particle(_rhs_gather!, backend, N,
         (Y, pg.core.is_boundary, pg.neighbor.ranges, ts.int_buffer, interp, pg, ts.work.changed, full))

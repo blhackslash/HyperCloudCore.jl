@@ -47,7 +47,7 @@ Adapt.adapt_structure(to, w::MLSWeightsView{B, IO, T, L}) where {B, IO, T, L} =
 
 Adapt.adapt_structure(to, m::MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER}) where {D, M, T, B_LEN, MAX_ORDER, DIV_ORDER} =
     MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER}(m.interpolators, m.limiter, m.flux, adapt(to, m.gradients),
-                                                adapt(to, m.grad_weights), adapt(to, m.div_weights))
+                                                adapt(to, m.grad_weights), adapt(to, m.div_weights), adapt(to, m.faces))
 
 # The time stepper holds a static tableau (bits, concrete type): passed through unchanged. A host tableau is
 # converted with its runtime stage count, which inference cannot see; keep such tableaus out of hot launches.

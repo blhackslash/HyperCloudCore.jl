@@ -10,14 +10,20 @@ neighbour slot `(i, j)` the face vector `S_ij = 2 V_i c_ij` is the coefficient w
 those of the divergence fit each particle currently uses (its `particle_orders` entry, i.e. MOOD drops
 included, and its neighbour count, as in `_divergence_index`), rebuilt on the host with the volumes of `pg`.
 
-Returns `(; particle, degree, equal, mixed, onesided, total)`:
+The face vectors are those the scheme uses: a particle with a lower-order neighbour mirrors that neighbour's
+face vectors and restores its first-order consistency over its other slots (`PairConsistent.jl`), so mixed
+pairs are antisymmetric up to round-off unless the lower-order particle is itself corrected.
+
+Returns `(; particle, degree, equal, mixed, onesided, total, halo, consistency)`:
 - `particle[i]`: relative defect `Σ_j |S_ij + S_ji| / Σ_j |S_ij|` of particle `i`;
 - `degree[i]`: the divergence degree particle `i` uses;
 - `equal`, `mixed`: `(; pairs, rel)` over the unordered pairs whose particles use the same / different
   degrees: the number of pairs and `Σ |S_ij + S_ji| / Σ ½(|S_ij| + |S_ji|)`;
 - `onesided`: `(; pairs, rel)` over the slots whose partner does not list the particle back (`S_ji = 0`,
   the whole face vector is a defect);
-- `total`: `(; pairs, rel)` over all of them.
+- `total`: `(; pairs, rel)` over all of them;
+- `halo`: the number of particles that mirror a lower-order neighbour;
+- `consistency`: the largest first-order consistency residual of the face vectors, `(R |Σ_j S_ij| + |Σ_j S_ij d_ijᵀ - 2 V_i I|) / (2 V_i)`.
 
 A diagnostic for grids on the host (it allocates and is not a kernel); a device grid has to be copied back
 first.
@@ -43,6 +49,43 @@ function conservation_defect(muscl::MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER},
     sorted = [sort!([(indices[k], k) for k in ranges[j]]; by = first) for j in 1:N]
     slot_of(j, i) = (p = searchsortedfirst(sorted[j], (i, 0); by = first);
                      p <= length(sorted[j]) && sorted[j][p][1] == i ? sorted[j][p][2] : 0)
+
+    # Pair-consistent divergence next to MOOD drops (`PairConsistent.jl`): mirror the plain face vectors of the
+    # lower-order neighbours, then the degree-1 correction over the remaining slots.
+    orders, is_boundary = pg.core.particle_orders, pg.core.is_boundary
+    S0   = copy(S)
+    halo = 0
+    for i in 1:N
+        is_boundary[i] && continue
+        sl = ranges[i]; free = trues(length(sl)); touched = false
+        for (n, k) in enumerate(sl)
+            _mirrors(orders, ranges, is_boundary, i, indices[k], degree[i], Val(DIV_ORDER), Val(D)) || continue
+            kk = slot_of(indices[k], i); kk == 0 && continue
+            S[k] = -S0[kk]; free[n] = false; touched = true
+        end
+        touched || continue
+        halo += 1
+        r0 = zero(Space{D, T}); r1 = zero(SMatrix{D, D, T, D * D})
+        for k in sl; r0 += S[k]; r1 += S[k] * nb.distances[k]'; end
+        r1 -= 2 * vol[i] * I
+        Mc = zero(SMatrix{D + 1, D + 1, T, (D + 1) * (D + 1)})
+        for (n, k) in enumerate(sl)
+            free[n] || continue
+            ph = vcat(SVector{1, T}(one(T)), nb.distances[k]); Mc += nb.weights[k] * (ph * ph')
+        end
+        Λ = -(hcat(r0, r1) * inv(Mc))
+        for (n, k) in enumerate(sl)
+            free[n] || continue
+            S[k] += nb.weights[k] * (Λ * vcat(SVector{1, T}(one(T)), nb.distances[k]))
+        end
+    end
+    consistency = zero(T)
+    for i in 1:N
+        is_boundary[i] && continue
+        r0 = zero(Space{D, T}); r1 = zero(SMatrix{D, D, T, D * D})
+        for k in ranges[i]; r0 += S[k]; r1 += S[k] * nb.distances[k]'; end
+        consistency = max(consistency, (pg.meta.R * norm(r0) + norm(r1 - 2 * vol[i] * I)) / (2 * vol[i]))
+    end
 
     particle = zeros(T, N)
     n_eq = n_mx = n_os = 0
@@ -78,7 +121,8 @@ function conservation_defect(muscl::MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER},
             equal    = (; pairs = n_eq, rel = rel(d_eq, s_eq)),
             mixed    = (; pairs = n_mx, rel = rel(d_mx, s_mx)),
             onesided = (; pairs = n_os, rel = rel(d_os, s_os)),
-            total    = (; pairs = n_eq + n_mx + n_os, rel = rel(d_eq + d_mx + d_os, s_eq + s_mx + s_os)))
+            total    = (; pairs = n_eq + n_mx + n_os, rel = rel(d_eq + d_mx + d_os, s_eq + s_mx + s_os)),
+            halo, consistency)
 end
 
 # Face vectors `2 V_i c_ij` of one particle for the divergence fit of degree `q` (intercept basis, as in

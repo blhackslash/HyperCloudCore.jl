@@ -16,6 +16,7 @@ set_backend!(CUDABackend())                 # from CUDA.jl (likewise ROCBackend(
 |---|---|---|
 | neighbour gather + scheme caches | `_rhs_gather!` | `TimeStepping/TimeSteppers.jl` |
 | flux divergence + explicit sources | `_rhs_flux!` | `TimeStepping/TimeSteppers.jl` |
+| face vectors next to MOOD drops (pair-consistent divergence) | `_face_body!` | `Interpolation/PairConsistent.jl` |
 | stage assembly, implicit solve, implicit RHS | `_stage_predictor!`, `_stage_implicit_solve!`, `_stage_implicit_rhs!` | `TimeStepping/TimeSteppers.jl` |
 | MOOD candidate check, decrement, forcing, mask expansion | `_mood_flag!`, `_mood_drop!`, `_mood_force!`, `_expand_body!` | `TimeStepping/MOOD.jl` |
 | geometry refresh (moving grids) | `_refresh_slots!` | `TimeStepping/GridMovers.jl` |

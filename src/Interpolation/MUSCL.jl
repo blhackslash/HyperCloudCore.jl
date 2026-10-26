@@ -77,11 +77,13 @@ Computes the divergence of the flux at particle `i`. Note that `MUSCL` relies on
 - `flux`: The associated numerical flux function (`NF`).
 - `gradients`: A pre-allocated vector storing the reconstructed, limited spatial gradients for all particles.
 - `grad_weights`, `div_weights`: cached inverse MLS moment matrices (`MLSWeights`) of the full-order reconstruction and divergence fits, refreshed by `prepare_geometry!` when the grid geometry changes.
+- `faces`: per-slot face vectors of the particles at a reduced (MOOD) order, mirrored by their higher-order neighbours so that every such pair is conservative (`face_prepass!`, see `PairConsistent.jl`).
 
 The per-particle caches are `Growable` buffers whose array type is the `storage` keyword of the constructor
 (`Array` by default; `ROCArray` etc. for a grid built with `device_grid`).
 """
-struct MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER, INTERPS, L, NF, VG <: AbstractVector{SVector{B_LEN, State{M, T}}}, WG, WD} <: DivergenceInterpolator
+struct MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER, INTERPS, L, NF, VG <: AbstractVector{SVector{B_LEN, State{M, T}}}, WG, WD,
+             VF <: AbstractVector{Space{D, T}}} <: DivergenceInterpolator
     interpolators::INTERPS
     limiter::L
     flux::NF
@@ -91,6 +93,9 @@ struct MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER, INTERPS, L, NF, VG <: Abstrac
     # order fall back to the direct solves.
     grad_weights::WG
     div_weights::WD
+    # Face vectors 2 V_k c_kj (one per neighbour slot) of the particles whose divergence weights a higher-order
+    # neighbour mirrors: the pair-consistent divergence next to MOOD drops (see PairConsistent.jl).
+    faces::VF
 end
 
 # Interpolator-table entry the divergence uses at full order (see `_resolve_div_idx`).
@@ -129,13 +134,13 @@ function MUSCL(
     div_weights  = MLSWeights{typeof(basis_length(Val(dimension), Val(div_degree))).parameters[1] + 1, div_degree, T}(AT; intercept = true)
 
     return MUSCL{dimension, M, T, B_LEN, max_order, div_order}(interps, limiter, flux, Growable{SVector{B_LEN, State{M, T}}}(AT),
-                                                              grad_weights, div_weights)
+                                                              grad_weights, div_weights, Growable{Space{dimension, T}}(AT))
 end
 
 # Infers the storage types (host vectors, or device views when adapted for a kernel).
-MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER}(interps, limiter, flux, gradients, grad_weights, div_weights) where {D, M, T, B_LEN, MAX_ORDER, DIV_ORDER} =
+MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER}(interps, limiter, flux, gradients, grad_weights, div_weights, faces) where {D, M, T, B_LEN, MAX_ORDER, DIV_ORDER} =
     MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER, typeof(interps), typeof(limiter), typeof(flux), typeof(gradients),
-          typeof(grad_weights), typeof(div_weights)}(interps, limiter, flux, gradients, grad_weights, div_weights)
+          typeof(grad_weights), typeof(div_weights), typeof(faces)}(interps, limiter, flux, gradients, grad_weights, div_weights, faces)
 
 function prepare_geometry!(muscl::MUSCL, pg::ParticleGrid)
     update_weights!(muscl.grad_weights, pg)
@@ -240,7 +245,11 @@ function (muscl::MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER})(
 
     div_idx = _divergence_index(Val(DIV_ORDER), Val(D), eff_order_i, length(nb_slice))
     wd = muscl.div_weights
-    div = if div_idx == _full_div_idx(Val(MAX_ORDER), Val(DIV_ORDER), Val(D)) && is_current(wd, pg) && wd.ok[i]
+    div = if _has_lower_neighbour(pg, i, div_idx, nb_slice, Val(DIV_ORDER), Val(D))
+        # next to a MOOD drop: mirrored face vectors, first-order consistent (PairConsistent.jl)
+        _dispatch_halo(div_idx, Val(_full_div_idx(Val(MAX_ORDER), Val(DIV_ORDER), Val(D))), muscl.faces, i, nb_slice, pg,
+                       dist_all, get_weights(pg), ib.df_flux, Val(DIV_ORDER))
+    elseif div_idx == _full_div_idx(Val(MAX_ORDER), Val(DIV_ORDER), Val(D)) && is_current(wd, pg) && wd.ok[i]
         apply_weights_divergence(wd, i, nb_slice, dist_all, get_weights(pg), ib.df_flux)   # cached full-order fit
     else
         compute_dynamic_divergence(muscl.interpolators, div_idx, nb_slice, dist_all, get_weights(pg),

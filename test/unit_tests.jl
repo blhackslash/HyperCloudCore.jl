@@ -234,10 +234,39 @@ end
         @test r.mixed.pairs == 0 && 0 < r.total.rel < 1 && length(r.particle) == N && all(x -> 0 <= x < 1, r.particle)
         pg.core.particle_orders[N ÷ 2] = 1                                   # one MOOD-style drop: mixed pairs of order one
         rm = HyperCloudCore.conservation_defect(m, pg)
-        # a mixed pair does not cancel at all (its defect exceeds the face magnitude), an equal pair cancels partly
-        @test rm.mixed.pairs == length(nb.ranges[N ÷ 2]) && rm.degree[N ÷ 2] == 1
-        @test rm.mixed.rel > 1 > rm.equal.rel && rm.mixed.rel > 2 * rm.equal.rel
+        # the neighbours mirror the dropped particle's face vectors (PairConsistent.jl): mixed pairs cancel exactly,
+        # the mirroring particles stay first-order consistent, equal pairs keep their jitter defect
+        @test rm.mixed.pairs == length(nb.ranges[N ÷ 2]) && rm.degree[N ÷ 2] == 1 && rm.halo == length(nb.ranges[N ÷ 2])
+        @test rm.mixed.rel < 1e-10 && rm.consistency < 1e-9 && 0 < rm.equal.rel < 1
+        @test r.halo == 0 && r.consistency < 1e-9
         fill!(view(pg.core.particle_orders, 1:N), 0)                         # as constructed
+    end
+
+    @testset "Pair-consistent divergence: mass rate next to a front of MOOD drops" begin
+        # One explicit RHS of a Gaussian (v = (1, 1)) on a jittered cloud with a band of order-1 particles among
+        # MUSCL5 particles: the mirrored face vectors keep the mass rate at round-off level of the L1 rate (it was
+        # 4 % of it without them).
+        dxm = 1 / 48
+        pgm = ParticleGrid(geom, (dxm, dxm), ExponentialWeightFunction(1.0, 5.5dxm), 1; randomness = (0.2dxm, 0.2dxm), rng = MersenneTwister(5))
+        Nm  = pgm.meta.N
+        for i in 1:Nm; pgm.rhos[i] = State{1, Float64}(exp(-sum(abs2, pgm.core.positions[i] - Space{2, Float64}(0.5, 0.5)) / 0.25^2)); end
+        eq2 = LinearAdvection(((1.0,), (1.0,)), Float64)
+        function band_mass_rate(drop)
+            m  = MUSCL(Float64, 2, 1, 5, NoLimiter(), RusanovFlux())
+            ts = GeneralRKTimeStepper(eq2, m, MOOD(), RK3_SSP_Tableau(Float64))
+            HyperCloudCore.update_size!(ts, Nm, length(pgm.neighbor.indices), false); HyperCloudCore.update_size!(m, Nm)
+            fill!(view(pgm.core.particle_orders, 1:Nm), 5)
+            drop && (pgm.core.particle_orders[findall(i -> abs(pgm.core.positions[i][1] - 0.5) < 0.1, 1:Nm)] .= 1)
+            HyperCloudCore.compute_explicit_rhs!(ts, eq2, pgm, ts.K_E_stages[1], ts.K_X_stages[1], pgm.rhos, 0.0, true)
+            K = view(parent(ts.K_E_stages[1]), 1:Nm); V = view(pgm.core.volumes, 1:Nm)
+            r = HyperCloudCore.conservation_defect(m, pgm)
+            return sum(V[i] * K[i][1] for i in 1:Nm) / sum(V[i] * abs(K[i][1]) for i in 1:Nm), r
+        end
+        rate0, r0 = band_mass_rate(false)
+        rate1, r1 = band_mass_rate(true)
+        @test r0.halo == 0 && r1.halo > 0 && r1.mixed.pairs > 0 && r1.mixed.rel < 1e-10
+        @test abs(rate0) < 2e-3 && abs(rate1) < 2e-3                  # 4e-2 for the band without the mirrored faces
+        fill!(view(pgm.core.particle_orders, 1:Nm), 0)
     end
 
     @testset "Conditional regularisation of degenerate stencils" begin
@@ -300,6 +329,7 @@ end
     HyperCloudCore._order_reach(w::NoCacheMUSCL, s::MOODStrategy) = _order_reach(w.inner, s)
     HyperCloudCore.has_cached_gradients(w::NoCacheMUSCL) = has_cached_gradients(w.inner)
     HyperCloudCore.cached_gradients(w::NoCacheMUSCL) = HyperCloudCore.cached_gradients(w.inner)
+    HyperCloudCore.face_prepass!(w::NoCacheMUSCL, pg, mask, full) = HyperCloudCore.face_prepass!(w.inner, pg, mask, full)
 
     N1 = 60; eq = make_advection_1d(); dt = 0.4 * (2 / N1)
     pg_a = set_ic!(make_pg_1d(N1), x -> exp(-x^2 / 0.02)); pg_b = set_ic!(make_pg_1d(N1), x -> exp(-x^2 / 0.02))
@@ -451,7 +481,9 @@ end
         function run(backend, bc)
             set_backend!(backend)
             pg = set_ic!(make_pg_bc(bc), x -> exp(-(x + 0.5)^2 / 0.02))
-            ts = GeneralRKTimeStepper(eq, MUSCL(Float64, 1, 1, 3, NoLimiter(), RusanovFlux()), MOOD(EPD1(), MOODu1(1e-6)), RK3_SSP_Tableau(Float64))
+            # u1 tolerance 1e-5: with 1e-6 one MOOD decision next to the Dirichlet wall sits on a knife edge and
+            # flips under the different rounding of the OpenCL compiler (states agree to 1e-20 before the flip)
+            ts = GeneralRKTimeStepper(eq, MUSCL(Float64, 1, 1, 3, NoLimiter(), RusanovFlux()), MOOD(EPD1(), MOODu1(1e-5)), RK3_SSP_Tableau(Float64))
             for k in 0:3; ts(eq, pg, k * dt, dt); end
             return copy(view(pg.rhos, 1:pg.meta.N))
         end
@@ -731,7 +763,7 @@ end
         # cache (degree 3 with a constant term: SMatrix{4,4} + Bool)
         @test memory_estimate(pg, interp).per_particle - g.per_particle ==
               2S + sizeof(SMatrix{2, 2, Float64, 4}) + 1 + sizeof(SMatrix{4, 4, Float64, 16}) + 1
-        @test memory_estimate(pg, interp).per_slot == g.per_slot
+        @test memory_estimate(pg, interp).per_slot == g.per_slot + sizeof(Space{1, Float64})   # the face vectors (PairConsistent.jl)
         # A moving grid adds x_n, x_cand and 3 stages × (X, K_X): 8 position buffers
         pgm = make_pg_1d(N; mover = LagrangianMover())
         tsm = GeneralRKTimeStepper(eq, interp, MOOD(), RK3_SSP_Tableau(Float64))

@@ -119,6 +119,23 @@ next to full-order particles cost mass.
 HyperCloudCore.conservation_defect
 ```
 
+**Pair-consistent divergence next to MOOD drops.** A pair whose particles use different degrees never
+cancels: measured on a 2-D cloud with $R = 5.5\,\Delta x$, the defect of a degree 5 / degree 1 pair is 1.7 and
+of a degree 5 / degree 3 pair 1.2, on the lattice as on a jittered cloud, so a front of MOOD-dropped
+particles (a shock) lost about 4 % of the L1 rate per right-hand side in mass. The scheme therefore makes
+these pairs conservative by construction (`PairConsistent.jl`): the dropped particle keeps its low-degree
+fit (what MOOD relies on), and every higher-order neighbour uses the *mirrored* face vector
+$S_{ji} := -S_{ij}$ for that slot. The neighbour's weights then no longer sum to zero and no longer
+reproduce the gradient of a linear flux, so a degree-1 correction $w_{jl}(\Lambda_0 + \Lambda_1 x_{jl})$ over its
+remaining slots restores both (a $(D+1)\times(D+1)$ solve per particle). Mixed pairs are exactly antisymmetric
+and the neighbour stays first-order consistent; it gives up its higher-order consistency next to the drop,
+where the solution is not smooth anyway. The face vectors of the dropped particles are written by a kernel
+before the flux pass (`face_prepass!`, only for particles that have a higher-order neighbour), and the
+neighbour's flux pass accumulates everything in one sweep over its slots, so the per-slot cost stays that of
+a dynamic fit. Same setup, one right-hand side of a Gaussian with a band of order-1 particles: mass rate
+$4.0\cdot10^{-2} \to 3.8\cdot10^{-5}$ of the L1 rate on the jittered cloud and
+$3.7\cdot10^{-2} \to 3.5\cdot10^{-5}$ on the lattice; the equal-degree defect moves from 0.195 to 0.202.
+
 Measured on periodic Burgers with 20 % jitter (mass drift after the shock, before → after): 1-D MUSCL1
 $6.6\cdot10^{-5} \to 4.7\cdot10^{-6}$, 1-D MUSCL2 with Venkatakrishnan limiter
 $1.0\cdot10^{-3} \to 1.1\cdot10^{-4}$ ($R = 2.5\Delta x$) and $3.4\cdot10^{-4} \to 7.5\cdot10^{-5}$
