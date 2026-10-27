@@ -18,8 +18,8 @@ export ParticleAdaptivity, adapt_particles!
 # exact. All of this is the particle analogue of swept-region remapping in ALE finite volumes.
 
 """
-    ParticleAdaptivity(; max_gap = 1.6, min_gap = 0.5, clearance = 0.7,
-                         samples_per_dx = 2, exclude_reduced_order = true, max_events = typemax(Int))
+    ParticleAdaptivity(; max_gap = 1.6, min_gap = 0.5, clearance = 0.7, samples_per_dx = 2,
+                         exclude_reduced_order = true, max_events = typemax(Int), volume_estimator = nothing)
 
 Rules for keeping a moving point cloud well-spaced. Lengths are multiples of the particle spacing
 `dx = minimum(pg.meta.dx)`.
@@ -29,23 +29,34 @@ Rules for keeping a moving point cloud well-spaced. Lengths are multiples of the
 - `exclude_reduced_order`: skip events near particles whose MOOD order was lowered in the last step
   (the shock band), where interpolation of any order is unreliable.
 - `samples_per_dx`: resolution of the remap quadrature lattice.
-- At most one event per neighbourhood and per call; events are kept `4R` apart so their remaps do
-  not interact. Call once between time steps.
+- `max_events`: at most this many events per call.
+- `volume_estimator`: the estimator the time stepper re-estimates the volumes with (a moving grid). After
+  the topology change the volumes of the new cloud are estimated with it, and the change of `Σ V U` this
+  causes is put back onto the particles the remap changed (bounded by their local extrema, like the remap's
+  own repair), so the call is exact for the volumes the next steps use. `nothing` keeps the remap's own
+  volumes (right for a static grid, whose volumes are never re-estimated).
+- At most one event per neighbourhood and per call. Event centres are kept `R (2 + 2√D) + dx` apart (see
+  `_event_spacing`), so no event's remap region contains a particle that another event removes or adds:
+  the remaps are independent and the call is exactly conservative. Call once between time steps.
 """
-struct ParticleAdaptivity{T}
+struct ParticleAdaptivity{T, VE <: Union{Nothing, VolumeEstimator}}
     max_gap::T
     min_gap::T
     clearance::T
     samples_per_dx::Int
     exclude_reduced_order::Bool
     max_events::Int
+    volume_estimator::VE
 end
 
 function ParticleAdaptivity(::Type{T} = Float64; max_gap = 1.6, min_gap = 0.5, clearance = 0.7,
                             samples_per_dx::Int = 2, exclude_reduced_order::Bool = true,
-                            max_events::Int = typemax(Int)) where {T}
+                            max_events::Int = typemax(Int),
+                            volume_estimator::Union{Nothing, VolumeEstimator} = nothing) where {T}
     @assert min_gap < 1 < max_gap "need min_gap < 1 < max_gap (in units of dx)"
-    return ParticleAdaptivity{T}(T(max_gap), T(min_gap), T(clearance), samples_per_dx, exclude_reduced_order, max_events)
+    @assert max_events >= 1 "max_events must be at least 1"
+    return ParticleAdaptivity{T, typeof(volume_estimator)}(T(max_gap), T(min_gap), T(clearance), samples_per_dx,
+                                                         exclude_reduced_order, max_events, volume_estimator)
 end
 
 struct _AdaptEvent{D, T}
@@ -90,17 +101,77 @@ function adapt_particles!(pg::ParticleGrid{D, M, T}, ad::ParticleAdaptivity{T}, 
     new_pos, new_rho, new_vol = Space{D, T}[], State{M, T}[], T[]
     df = Vector{State{M, T}}(undef, length(hg.neighbor.indices))   # neighbour-slot scratch shared by all events
 
+    record = ad.volume_estimator === nothing ? nothing : Tuple{Int, State{M, T}, State{M, T}}[]
     for ev in events
-        _remap_event!(hg, ad, ev, new_pos, new_rho, new_vol, df)
+        _remap_event!(hg, ad, ev, new_pos, new_rho, new_vol, df; record = record)
         for r in ev.removed; remove_mask[r] = true; end
     end
 
     n_removed = count(view(remove_mask, 1:N))
+    changed = record === nothing ? nothing : _compacted_record(record, remove_mask, N, N - n_removed)
     _apply_topology!(hg, remove_mask, new_pos, new_rho, new_vol, max_order)
     on_host || _upload_particles!(pg, hg)
     pg.neighbor(pg)
+    changed === nothing || _reestimate_volumes!(pg, hg, ad.volume_estimator, changed)
 
     return (inserted = length(new_pos), removed = n_removed, mass_residual = total_mass(pg) - mass0)
+end
+
+# The particles the remaps wrote, with their DMP bounds, by index of the compacted cloud (survivors keep their
+# order, new particles follow): `index => (lo, hi)`. A survivor of one event that another event removes is
+# dropped; a particle written by two events gets the union of the bounds.
+function _compacted_record(record::Vector{Tuple{Int, State{M, T}, State{M, T}}}, remove_mask, N::Int, N_kept::Int) where {M, T}
+    new_index = zeros(Int, N)
+    c = 0
+    @inbounds for i in 1:N
+        remove_mask[i] || (c += 1; new_index[i] = c)
+    end
+    out = Dict{Int, Tuple{State{M, T}, State{M, T}}}()
+    for (j, lo, hi) in record
+        k = j > 0 ? new_index[j] : N_kept - j
+        k == 0 && continue
+        if haskey(out, k)
+            lo0, hi0 = out[k]
+            out[k] = (min.(lo0, lo), max.(hi0, hi))
+        else
+            out[k] = (lo, hi)
+        end
+    end
+    return out
+end
+
+"""
+    _reestimate_volumes!(pg, hg, est, changed)
+
+Replaces the remap's volumes by those of `est` (the time stepper's estimator) and puts the change of `Σ V U` this
+causes back onto the particles the remap changed (`changed`, by index with their local bounds), with the bounded,
+exactly conservative redistribution of the remap's own repair. The call is then exact for the volumes the next
+steps use, and the states stay the remap's up to that small correction. Keeping each particle's content instead
+(`U_i ← V_i^remap U_i / V_i^est`) would also be exact, but the remap's volumes (integrals of the Shepard partition)
+and an estimator's differ by several percent per particle near an event, which that would put into the states.
+`hg` is the host grid of the event work (`pg` itself on the host, its host copy for a device grid).
+"""
+function _reestimate_volumes!(pg::ParticleGrid{D, M, T}, hg::ParticleGrid{D, M, T}, est::VolumeEstimator,
+                              changed::Dict{Int, Tuple{State{M, T}, State{M, T}}}) where {D, M, T}
+    N = pg.meta.N
+    m_remap = total_mass(pg)
+    update_volumes!(pg, est)
+    ε = m_remap - total_mass(pg)
+    (isempty(changed) || iszero(ε)) && return nothing
+
+    on_host = hg === pg
+    on_host || copyto!(parent(hg.core.volumes), 1, parent(pg.core.volumes), 1, N)   # hg holds the same cloud
+    ids = collect(keys(changed))
+    V   = [hg.core.volumes[i] for i in ids]
+    Vs  = sum(V)
+    Vs > 0 || return nothing
+    U   = [hg.rhos[i] + ε / Vs for i in ids]                   # Σ V U over the set changes by exactly ε ...
+    _dmp_repair!(U, V, [changed[i][1] for i in ids], [changed[i][2] for i in ids])   # ... and stays bounded
+    for (k, i) in enumerate(ids)
+        hg.rhos[i] = U[k]
+    end
+    on_host || copyto!(parent(pg.rhos), 1, parent(hg.rhos), 1, N)
+    return nothing
 end
 
 """
@@ -170,6 +241,23 @@ end
 # -------------------------------------------------------------------------
 # Detection
 # -------------------------------------------------------------------------
+"""
+    _event_spacing(pg) -> T
+
+Radius around an accepted event centre within which no particle may start another event in the same call:
+`R (2 + 2√D) + dx`. Events are remapped one after the other on the old topology, so two remaps are only
+independent if neither sees a particle that the other removes or adds. The remap of an event at `c'` reads
+every particle within `R (1 + 2√D) + dx` of `c'` (its local set: the support of its quadrature box of
+half-width `2R`) and gives a share of its swept content to each of them; a particle that an earlier event
+removed would take that share with it when the particle set is compacted. The changed particles of an event
+lie within `R/2` of its centre, and a later event's centre lies within `R/2` of the particle that starts it,
+hence the extra `R`. Periodic axes wrap (`_collect_near!`). In 1-D this is close to the former `4R`; in 2-D and
+3-D the former `4R` let the local sets of events about `3.5R` apart overlap, which is where calls with
+several events were not exactly conservative.
+"""
+@inline _event_spacing(pg::ParticleGrid{D, M, T}) where {D, M, T} =
+    pg.meta.R * (2 + 2 * sqrt(T(D))) + minimum(pg.meta.dx)
+
 function _detect_events(pg::ParticleGrid{D, M, T}, ad::ParticleAdaptivity{T}, max_order::Int) where {D, M, T}
     N       = pg.meta.N
     nb      = pg.neighbor
@@ -194,6 +282,7 @@ function _detect_events(pg::ParticleGrid{D, M, T}, ad::ParticleAdaptivity{T}, ma
     end
 
     max_gap_sq, min_gap_sq, clear_sq = (ad.max_gap * dx)^2, (ad.min_gap * dx)^2, (ad.clearance * dx)^2
+    spacing_sq = _event_spacing(pg)^2
     events = _AdaptEvent{D, T}[]
 
     @inbounds for i in 1:N
@@ -234,7 +323,7 @@ function _detect_events(pg::ParticleGrid{D, M, T}, ad::ParticleAdaptivity{T}, ma
 
         if ev !== nothing
             push!(events, ev)
-            n = _collect_near!(pg, ev.center, (4R)^2, idx, dvec)      # keep events 4R apart
+            n = _collect_near!(pg, ev.center, spacing_sq, idx, dvec)   # independent remaps, see `_event_spacing`
             for k in 1:n; touched[idx[k]] = true; end
             length(events) >= ad.max_events && break
         end
@@ -245,9 +334,13 @@ end
 # -------------------------------------------------------------------------
 # The remap of one event (on the OLD topology)
 # -------------------------------------------------------------------------
+#
+# `record` (optional) collects `(index, lo, hi)` for every particle the remap wrote, with the local bounds of
+# its DMP repair: the old index of a survivor, `-a` for the `a`-th entry of `new_pos`.
 function _remap_event!(pg::ParticleGrid{D, M, T}, ad::ParticleAdaptivity{T}, ev::_AdaptEvent{D, T},
                        new_pos::Vector{Space{D, T}}, new_rho::Vector{State{M, T}}, new_vol::Vector{T},
-                       df::Vector{State{M, T}} = Vector{State{M, T}}(undef, length(pg.neighbor.indices))) where {D, M, T}
+                       df::Vector{State{M, T}} = Vector{State{M, T}}(undef, length(pg.neighbor.indices));
+                       record::Union{Nothing, Vector{Tuple{Int, State{M, T}, State{M, T}}}} = nothing) where {D, M, T}
     nb     = pg.neighbor
     pos    = pg.core.positions
     V      = pg.core.volumes
@@ -417,8 +510,10 @@ function _remap_event!(pg::ParticleGrid{D, M, T}, ad::ParticleAdaptivity{T}, ev:
         if l <= n_loc
             j = loc_idx[l]
             V[j] = Vn[l]; U[j] = Un[p]
+            record === nothing || push!(record, (j, lo_a[p], hi_a[p]))
         else
             push!(new_pos, ev.added[l - n_loc]); push!(new_rho, Un[p]); push!(new_vol, Vn[l])
+            record === nothing || push!(record, (-length(new_pos), lo_a[p], hi_a[p]))
         end
     end
     @inbounds for l in 1:n_loc; lmap[loc_idx[l]] = 0; end
