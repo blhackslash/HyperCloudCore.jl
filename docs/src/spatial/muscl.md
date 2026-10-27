@@ -93,8 +93,8 @@ of neighbour `j` enters particle `i` with the coefficient `½ Σ_d s_d c_ij,d si
 on the slots where a high-degree weight changes sign, so the first-order fallback is not monotone and
 high-degree weights overshoot (12 % on a box profile with `div_order = 5`).
 
-[`AlignedRusanovFlux`](@ref) sorts the states by the sign of the weight instead (`dsigns`, kept with the
-divergence cache) on every pair where one of the two particles is below the full order; the rule is
+[`AlignedRusanovFlux`](@ref) sorts the states by the sign of the weight instead (the per-slot weights
+`dweights`, kept with the divergence cache) on every pair where one of the two particles is below the full order; the rule is
 symmetric in the pair, and elsewhere the flux is the plain one. The coefficient becomes
 `½ Σ_d s_d |c_ij,d| ≥ ½ |c_ij·f'|`, so the first-order update is local-extremum-diminishing for any zero-sum
 weights. With it the divergence degree can stay uniform (`div_order = max_order`) while MOOD lowers the
@@ -108,6 +108,24 @@ drift at 50² / 100² / 200²: box advection to `t = 1` goes from `+8.0e-3 / +6.
 degree to `−1.1e-3 / −5.8e-4 / +5.9e-5` (lattice: `1e-14`), with the same extrema; 2-D Burgers to `t = 3`
 (shock) from `−6.1e-2 / −5.4e-2 / −5.0e-2` to `+7e-5 / −2.4e-4 / −2.2e-4` with no overshoot. The fixed
 degree with the geometric dissipation keeps the mass but overshoots by 11–13 % (box) and 6 % (Burgers).
+
+## Streamed divergence
+
+By default the flux pass writes the flux difference $\Delta F_{ij} = F^*_{ij} - F_i$ of every neighbour to the
+per-slot buffer `df_flux` and fits them afterwards (`apply_weights_divergence`, or the dynamic fit for a
+reduced order). Per neighbour that costs $B \cdot D \cdot M$ flops for the right-hand side of the fit and
+$D \cdot M$ numbers of buffer traffic, where $B$ is the number of fit terms (21 for degree 5 in 2-D): for
+systems with many components (kinetic models) the fit dominates the step and the buffer the memory.
+
+With `streamed = true` the scheme keeps the derivative weights $c_{ij}$ of the full-degree fit per slot
+(`dweights`, $D$ numbers, computed with the divergence cache at $D\cdot B$ flops per slot, once per geometry)
+and the flux pass accumulates $\sum_j c_{ij}\cdot\Delta F_{ij}$ directly: $D\cdot M$ flops per neighbour, no
+buffer, no static $B\times D M$ matrices. A particle whose fit is not the cached one (a MOOD drop, or no
+factorisation) assembles and factorises its own moment matrix once and solves each slot's weights inside the
+loop ($B^2$ per slot). The numbers are those of the fit up to round-off (the summation order differs). The
+stepper does not allocate `df_flux`/`df_scratch` for a streamed scheme (`uses_slot_buffers`), and the memory
+budget counts `dweights` instead. The toggle is the constructor keyword (`:streamed` in the builders'
+`Scheme` namespace); the default is off, the buffered path, so existing runs are unchanged bit for bit.
 
 ## Slope limiting (*a priori*)
 

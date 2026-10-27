@@ -37,13 +37,14 @@ particle_buffers(ts::GeneralRKTimeStepper, moving::Bool) = (
     ts.rho_n, ts.rho_cand, ts.Y_stages..., ts.K_E_stages..., ts.K_I_stages...,
     (moving ? (ts.x_n, ts.x_cand, ts.X_stages..., ts.K_X_stages...) : ())...,
     ts.work.triggered, ts.work.changed, ts.work.dirty, ts.work.scratch, ts.work.snapshot, ts.work.triggered_step)
-slot_buffers(ts::GeneralRKTimeStepper) = (ts.int_buffer.df_flux, ts.int_buffer.df_scratch, ts.int_buffer.mask)
+slot_buffers(ts::GeneralRKTimeStepper) =
+    uses_slot_buffers(ts.divergence_interpolator) ? (ts.int_buffer.df_flux, ts.int_buffer.df_scratch, ts.int_buffer.mask) : ()
 
 particle_buffers(w::MLSWeights, ::Bool) = (w.inv_moment, w.ok)
 # The two weight caches of a MUSCL scheme are the same object when the degrees coincide: count it once.
 particle_buffers(m::MUSCL, moving::Bool) = (m.gradients, particle_buffers(m.grad_weights, moving)...,
     (m.div_weights === m.grad_weights ? () : particle_buffers(m.div_weights, moving))...)
-slot_buffers(m::MUSCL) = _aligned_dissipation(m.flux) ? (m.dsigns,) : ()
+slot_buffers(m::MUSCL) = (_streamed(m) || _aligned_dissipation(m.flux)) ? (m.dweights,) : ()
 
 _array_bytes(a::AbstractArray) = length(a) * sizeof(eltype(a))
 _element_bytes(b::AbstractArray) = sizeof(eltype(b))

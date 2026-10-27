@@ -11,6 +11,7 @@
 # BENCH_STAB:   none (unlimited, no MOOD), limiter (Venkatakrishnan), mood (MOOD EPD1/u1), both (default)
 # BENCH_MOVING: 1 runs a prescribed grid motion (neighbour search every step), default 0
 # BENCH_STEPS:  timed steps (default 30), after 3 warm-up steps
+# BENCH_STREAMED: 1 accumulates the divergence in the flux pass (MUSCL keyword `streamed`), default 0
 #
 # The `gpu` device needs an environment with AMDGPU.jl (test/gpu). The printed checksum is Σ ρ₁ over the
 # particles: the same for every backend of one element type (round-off aside).
@@ -68,7 +69,7 @@ speeds  = SVector{D, SVector{M, T}}(ntuple(d -> SVector{M, T}(ntuple(m -> T(1 - 
 eq      = DiagAdvection{D, M, T}(speeds)
 limiter = stab in ("limiter", "both") ? VenkatakrishnanLimiter(:hard) : NoLimiter()
 mood    = stab in ("mood", "both") ? MOOD(EPD1(), MOODu1(T(1e-6))) : MOOD()
-interp  = MUSCL(T, D, M, 3, limiter, RusanovFlux(); storage = Storage)
+interp  = MUSCL(T, D, M, 3, limiter, RusanovFlux(); storage = Storage, streamed = get(ENV, "BENCH_STREAMED", "0") == "1")
 ts      = GeneralRKTimeStepper(eq, interp, mood, RK3_SSP_Tableau(T); storage = Storage)
 dt      = T(0.3) * get_time_step(pg, eq, interp)
 
