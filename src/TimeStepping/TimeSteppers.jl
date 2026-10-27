@@ -330,11 +330,13 @@ function form_candidate!(ts::GeneralRKTimeStepper{D, M, T}, eq, pg, i::Int, dt::
         pre_solve_updates!(ts.implicit_sources, parent(target), pg, t_i)
         a_ii = bt.a[i, i]
         if abs(a_ii) > T(1e-14)
-            foreach_particle(_stage_implicit_solve!, backend, N,
-                (target, pg.core.is_boundary, ts.implicit_sources, dt * a_ii, pg, t_i))
+            # solve and its right-hand side in one pass: S(U_out) = (U_out - U_in) / (dt a_ii)
+            foreach_particle(_stage_implicit_step!, backend, N,
+                (target, ts.K_I_stages[i], pg.core.is_boundary, ts.implicit_sources, dt * a_ii, inv(dt * a_ii), pg, t_i, zero(State{M, T})))
+        else
+            foreach_particle(_stage_implicit_rhs!, backend, N,
+                (ts.K_I_stages[i], target, pg.core.is_boundary, ts.implicit_sources, pg, t_i, zero(State{M, T})))
         end
-        foreach_particle(_stage_implicit_rhs!, backend, N,
-            (ts.K_I_stages[i], target, pg.core.is_boundary, ts.implicit_sources, pg, t_i, zero(State{M, T})))
     end
 
     apply_boundary_conditions!(pg, parent(target), ts, eq, t_i)
@@ -365,11 +367,23 @@ end
     return nothing
 end
 
-@inline function _stage_implicit_solve!(p, target, is_boundary, sources, dt_ii, pg, t_i)
-    is_boundary[p] && return nothing
-    target[p] = implicit_solve(sources, target[p], dt_ii, p, pg, t_i)
+# Implicit stage with a diagonal entry: the solve U_out - dt a_ii S(U_out) = U_in and its right-hand side
+# S(U_out) = (U_out - U_in) / (dt a_ii), which spares the second evaluation of the source (for the BGK
+# model that is a second discrete Maxwellian per stage). With several implicit sources, which are applied
+# one after another, the RHS is still evaluated at U_out, as before.
+@inline function _stage_implicit_step!(p, target, K_I_i, is_boundary, sources, dt_ii, inv_dt_ii, pg, t_i, zero_state)
+    if is_boundary[p]
+        K_I_i[p] = zero_state
+        return nothing
+    end
+    U_in  = target[p]
+    U_out = implicit_solve(sources, U_in, dt_ii, p, pg, t_i)
+    target[p] = U_out
+    K_I_i[p]  = _implicit_rhs(sources, U_out, U_in, inv_dt_ii, p, pg, t_i)
     return nothing
 end
+@inline _implicit_rhs(::Tuple{AbstractImplicitSourceTerm}, U_out, U_in, inv_dt_ii, p, pg, t) = (U_out - U_in) * inv_dt_ii
+@inline _implicit_rhs(sources::Tuple, U_out, U_in, inv_dt_ii, p, pg, t) = evaluate_sources(sources, U_out, p, pg, t)
 
 @inline function _stage_implicit_rhs!(p, K_I_i, target, is_boundary, sources, pg, t_i, zero_state)
     K_I_i[p] = is_boundary[p] ? zero_state : evaluate_sources(sources, target[p], p, pg, t_i)

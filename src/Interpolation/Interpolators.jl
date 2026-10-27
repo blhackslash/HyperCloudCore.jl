@@ -325,16 +325,29 @@ end
 
     C, ok = _cholesky_moment(N_s)
     ok || return zero(State{M, T})
-    c_s = C \ b_s
+    # Only rows 2..D+1 of inv(N) (the first derivatives, after the constant term) are needed, and N is
+    # symmetric, so they are the solutions for the unit vectors e_2..e_{D+1}: D solves of size B instead of
+    # one per flux component, then a (D × B) · (B × D·M) product.
+    E = SMatrix{B_LEN, D, T}(ntuple(n -> (n - 1) % B_LEN + 1 == (n - 1) ÷ B_LEN + 2 ? one(T) : zero(T), Val(B_LEN * D)))
+    R = (C \ E)' * b_s
+    return _divergence_from_rows(R, invL, Val(D), Val(M))
+end
 
-    # Basis term 1 is the constant, terms 2..D+1 the first derivatives in axis order (scaled by invL).
+# Σ_d R[d, (d-1)M+m] · invL for the D derivative rows R of the fit coefficients (one row block per flux
+# component): the divergence of every equation.
+@inline function _divergence_from_rows(R::SMatrix{D, DM, T}, invL::T, ::Val{D}, ::Val{M}) where {D, DM, T, M}
     return State{M, T}(ntuple(Val(M)) do m
         acc = zero(T)
         for d in 1:D
-            acc += c_s[d + 1, (d - 1) * M + m]
+            acc += R[d, (d - 1) * M + m]
         end
         acc * invL
     end)
+end
+
+# Rows OFF+1..OFF+D of a cached inverse moment matrix as a (D × B) matrix.
+@inline function _derivative_rows(inv_N::SMatrix{B, B, T}, ::Val{D}, ::Val{OFF}) where {B, T, D, OFF}
+    return SMatrix{D, B, T}(ntuple(n -> inv_N[(n - 1) % D + 1 + OFF, (n - 1) ÷ D + 1], Val(D * B)))
 end
 
 "`[1; build_basis(Val(IO), d)]`: the Taylor basis with a constant term (divergence fits)."
@@ -573,15 +586,10 @@ moment matrix (replaces the factorisation in `_mls_divergence`).
         row = SVector{D * M, T}(ntuple(q -> F[(q - 1) ÷ M + 1][(q - 1) % M + 1], Val(D * M)))
         b_s += wVec[k] * (p_s * row')
     end
-    c_s = w.inv_moment[i] * b_s
-    off = C ? 1 : 0                                    # the constant term comes first
-    return State{M, T}(ntuple(Val(M)) do m
-        acc = zero(T)
-        for d in 1:D
-            acc += c_s[d + off, (d - 1) * M + m]
-        end
-        acc * invL
-    end)
+    # Only the D derivative rows of the inverse are needed (after the constant term, if any): a
+    # (D × B) · (B × D·M) product instead of (B × B) · (B × D·M), the same numbers.
+    R = _derivative_rows(w.inv_moment[i], Val(D), Val(C ? 1 : 0)) * b_s
+    return _divergence_from_rows(R, invL, Val(D), Val(M))
 end
 
 include("FluxFunctions.jl")

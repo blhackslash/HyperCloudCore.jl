@@ -775,6 +775,30 @@ end
     @test build_flux(Dict{Symbol, Any}(:name => :AlignedRusanov), Dict{Symbol, Any}()) isa AlignedRusanovFlux
 end
 
+@testset "Implicit stage: RHS from the solve" begin
+    # One implicit source: K_I of a diagonal stage is (U_out - U_in) / (dt a_ii), which equals S(U_out) for an
+    # exact solve. Constant state, so the explicit RHS is zero and the step is the ARS222 solution of u' = -λu.
+    struct DecaySource <: AbstractImplicitSourceTerm; λ::Float64; end
+    HyperCloudCore.evaluate_source(s::DecaySource, U, i::Int, pg, t::Real) = -s.λ * U
+    HyperCloudCore.implicit_solve(s::DecaySource, U_in, γ::Real, i::Int, pg, t::Real) = U_in / (1 + γ * s.λ)
+    eq  = make_advection_1d()
+    pg  = set_ic!(make_pg_1d(40), x -> 1.0)
+    src = DecaySource(3.0)
+    ts  = GeneralRKTimeStepper(eq, MUSCL(Float64, 1, 1, 2, NoLimiter(), RusanovFlux()), MOOD(), (), (src,), IMEX_ARS222_Tableau(Float64))
+    dt  = 0.1
+    ts(eq, pg, 0.0, dt)
+    bt  = ts.tableau
+    checked = 0
+    for i in 1:HyperCloudCore.num_stages(bt)
+        abs(bt.a[i, i]) > 1e-14 || continue
+        Y = parent(ts.Y_stages[i]); K = parent(ts.K_I_stages[i])
+        @test all(j -> isapprox(K[j][1], -src.λ * Y[j][1]; rtol = 1e-12), interior_indices(pg))
+        checked += 1
+    end
+    @test checked >= 1
+    @test all(j -> abs(pg.rhos[j][1] - exp(-src.λ * dt)) < 5e-3, interior_indices(pg))     # second-order IMEX step
+end
+
 @testset "Memory budget" begin
     N  = 400
     eq = make_advection_1d()
