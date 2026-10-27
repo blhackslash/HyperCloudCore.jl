@@ -1,14 +1,16 @@
 # .forgejo/workflows/github-mirror.yml
 #
-# Pushes all branches and tags from Forgejo to GitHub WITHOUT --mirror,
-# so branches that only exist on GitHub (e.g. gh-pages from Documenter)
-# are never deleted or overwritten.
+# Mirrors `main` and every `claude/*` branch from Forgejo to GitHub,
+# including deletions: a `claude/*` branch that no longer exists on Forgejo
+# is deleted on GitHub. This is not a full --mirror: branches outside these
+# patterns (gh-pages from Documenter, anything created on GitHub) are never
+# touched, and tags are only created/updated (TagBot's tags stay).
 #
 # Setup (per repo, or once at user/org level):
 #   Secret   GH_MIRROR_TOKEN  - GitHub fine-grained PAT with
 #                               "Contents: Read and write" and
 #                               "Workflows: Read and write" on the target repo(s)
-#   Variable FORGEJO_URL      - base URL of your Forgejo instance,
+#   Variable FORGE_URL        - base URL of your Forgejo instance,
 #                               e.g. https://git.example.com
 #   Variable GH_MIRROR_OWNER  - (optional) GitHub user/org, if it differs
 #                               from your Forgejo owner name
@@ -50,11 +52,16 @@ jobs:
           git clone --mirror "$src_url" repo.git
           cd repo.git
 
-          # Explicit refspecs: update/create only, never delete on GitHub.
-          # The negative refspec keeps gh-pages untouched even if it ever
-          # shows up on Forgejo (needs git >= 2.29).
-          git push \
-            "https://x-access-token:${GH_TOKEN}@github.com/${GH_OWNER}/${REPO_NAME}.git" \
-            '+refs/heads/*:refs/heads/*' \
-            '+refs/tags/*:refs/tags/*' \
-            '^refs/heads/gh-pages'
+          dst="https://x-access-token:${GH_TOKEN}@github.com/${GH_OWNER}/${REPO_NAME}.git"
+
+          # main and claude/*, with deletions. --prune only removes GitHub
+          # branches that match a destination pattern below (main, claude/*)
+          # and have no counterpart on Forgejo; every other branch on GitHub,
+          # gh-pages included, is outside the patterns and left alone.
+          git push --prune "$dst" \
+            '+refs/heads/main:refs/heads/main' \
+            '+refs/heads/claude/*:refs/heads/claude/*'
+
+          # Tags: create/update only, never delete (TagBot creates the release
+          # tags on GitHub).
+          git push "$dst" '+refs/tags/*:refs/tags/*'
