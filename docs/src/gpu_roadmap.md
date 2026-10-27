@@ -140,7 +140,7 @@ the kernel's writes to it.
 | particle adaptivity (events) | host: detection, remap and compaction are serial per event | stays there; a kernel pre-check (`_adapt_candidate!`) skips the round trip when the cloud is well spaced, otherwise the grid is copied to the host, adapted, and copied back in place |
 | data residency | the grid (`device_grid`), the stepper and MUSCL (`storage`) live on the device; static and moving grids step entirely there, neighbour search, MOOD, boundary conditions and the reductions included (the `bc_map` loop itself is on the host, its conditions are kernels); the builders follow `context[:Storage]` | |
 | growing a device grid | every per-particle and per-slot array of the grid is a `Growable`, so `ensure_capacity!` works on the device (adaptivity relies on it) | |
-| MLS volumes | host (point queries on the cell list) | `ShepardVolumes` is on the device; `MLSVolumes` is a construction-time choice |
+| MLS volumes | host (point queries on the cell list) | `ShepardVolumes` is on the device; `update_volumes!` with `MLSVolumes` on a device grid runs on a host copy of the grid and copies the volumes back (correct, but a full grid transfer per call: a moving device grid with MLS volumes pays it every step) |
 
 ## Slot layout
 

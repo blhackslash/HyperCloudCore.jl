@@ -14,11 +14,12 @@ export VolumeEstimator, ShepardVolumes, MLSVolumes, update_volumes!, domain_volu
 #
 #   ShepardVolumes   φ_i(x) = w(|x−x_i|) / Σ_k w(|x−x_k|).   Particle-based evaluation, one
 #                    neighbour sweep, second order on quasi-uniform clouds. Default, cheap enough
-#                    to recompute after every step of a moving grid.
+#                    to recompute after every step of a moving grid, but biased (independently of
+#                    the resolution) where the spacing varies, i.e. on moving grids.
 #   MLSVolumes{P}    φ_i = reproducing-kernel (MLS) shape functions of degree P, integrated on a
 #                    throwaway background lattice. Σ V_i q(x_i) = ∫ q exactly for polynomials q of
 #                    degree ≤ P (up to the lattice error), i.e. a quadrature of order P+1. Costs a
-#                    lattice sweep; meant for initialisation and re-anchoring, not every step.
+#                    serial lattice sweep (3–20 time steps when re-estimated every step).
 
 abstract type VolumeEstimator end
 
@@ -29,6 +30,12 @@ Kernel-density volumes `V_i ∝ 1 / S_i`, `S_i = w(0) + Σ_j w_ij`, followed by 
 partition-of-unity smoothing sweeps `V_i ← Σ_j (w_ij / S_j) V_j` (which preserve Σ V exactly),
 and a final renormalisation to `Σ V = |Ω|`. Requires a kernel that is finite at zero distance
 (`ExponentialWeightFunction`; `InverseWeightFunction` is not suitable).
+
+Accurate on (quasi-)uniform clouds. On a cloud whose spacing varies smoothly (a moving grid) `S_i` is a
+lattice sum over a fixed number of neighbours, which is not proportional to the local density, so
+`Σ V_i f(x_i)` has a bias that depends on the local stretch and does **not** shrink with the resolution
+(−2e-3 for a smooth profile on a grid stretched by ±50 %, at every N); use [`MLSVolumes`](@ref) where the
+discrete mass of a moving grid matters, at a higher cost per update.
 """
 struct ShepardVolumes <: VolumeEstimator
     sweeps::Int
@@ -41,6 +48,10 @@ ShepardVolumes(; sweeps::Int = 1) = ShepardVolumes(sweeps)
 `V_i = ∫_Ω φ_i dx` with MLS shape functions reproducing polynomials of degree `P`, integrated by a
 midpoint rule on a background lattice with `samples_per_dx` points per particle spacing (the
 lattice is not stored). `P = 0` is the background-integrated Shepard partition.
+
+A consistent quadrature on any cloud (the discrete mass of a moving grid converges), but the lattice sweep
+is a serial host loop: as the re-estimation of a moving grid it costs about 3 (1-D) to 20 (2-D) explicit time
+steps of a low-order scheme. On a device grid it runs on a host copy (only the volumes are copied back).
 """
 struct MLSVolumes{P} <: VolumeEstimator
     samples_per_dx::Int
@@ -206,6 +217,7 @@ end
 function update_volumes!(pg::ParticleGrid{D, M, T}, est::MLSVolumes{P}) where {D, M, T, P}
     N    = pg.meta.N
     N == 0 && return nothing
+    parent(pg.core.positions) isa Array || return _update_volumes_on_host!(pg, est)
     V    = pg.core.volumes
     fill!(view(V, 1:N), zero(T))
     geom = pg.geometry
@@ -231,6 +243,16 @@ function update_volumes!(pg::ParticleGrid{D, M, T}, est::MLSVolumes{P}) where {D
     end
 
     _renormalise_volumes!(pg)
+    return nothing
+end
+
+# The lattice sweep of `MLSVolumes` is a host loop (point queries on the cell list). On a device grid (a moving
+# grid re-estimates every step) it runs on a host copy of the grid and only the volumes are copied back.
+function _update_volumes_on_host!(pg::ParticleGrid, est::VolumeEstimator)
+    N  = pg.meta.N
+    hg = device_grid(Array, pg)
+    update_volumes!(hg, est)
+    copyto!(parent(pg.core.volumes), 1, parent(hg.core.volumes), 1, N)
     return nothing
 end
 

@@ -1156,4 +1156,132 @@ end
         @test all(u -> 0.5 - 1e-12 <= u[1] <= 1.0 + 1e-12, U)
         @test sum(V .* getindex.(U, 1)) ≈ m0
     end
+
+    # 2-D cloud with close pairs about 4.2 R apart: the old 4R spacing accepted them in one call although
+    # the local set of each remap (radius ≈ 4.2 R in 2-D) reached the particle the other merge removes.
+    function clustered_cloud_2d(; spacing_R = 4.2, n = 40)
+        dx   = 2 / n
+        geom = get_rectangular_domain(Float64, (-1.0, -1.0), (1.0, 1.0); is_periodic = true)
+        pg   = ParticleGrid(geom, (dx, dx), ExponentialWeightFunction(1.0, 2.5dx), 1;
+                            randomness = (0.1dx, 0.1dx), rng = MersenneTwister(3))
+        R, N = pg.meta.R, pg.meta.N
+        L, Li = pg.domain.L_wrap, pg.domain.invL_wrap
+        s  = spacing_R * R
+        nc = floor(Int, 2 / s)
+        for a in 1:nc, b in 1:nc
+            c = Space{2, Float64}(-1 + (a - 0.5) * s, -1 + (b - 0.5) * s)
+            p = argmin(i -> sum(abs2, HyperCloudCore._wrapped_diff(pg.core.positions[i], c, L, Li)), 1:N)
+            q = argmin(i -> i == p ? Inf : sum(abs2, HyperCloudCore._wrapped_diff(pg.core.positions[i], pg.core.positions[p], L, Li)), 1:N)
+            pg.core.positions[p] = HyperCloudCore._wrap_point(pg, pg.core.positions[q] + Space{2, Float64}(0.2dx, 0.0))
+        end
+        pg.neighbor(pg)
+        update_volumes!(pg, ShepardVolumes())
+        for i in 1:N
+            x = pg.core.positions[i]
+            pg.rhos[i] = State{1, Float64}(1 + 0.5 * sin(π * x[1]) * cos(π * x[2]))
+        end
+        return pg, nc^2
+    end
+
+    @testset "Simultaneous events in 2-D are independent (exactly conservative)" begin
+        pg, n_pairs = clustered_cloud_2d()
+        ad2 = ParticleAdaptivity(Float64; exclude_reduced_order = false)
+        m0  = total_mass(pg)[1]
+        evs = HyperCloudCore._detect_events(pg, ad2, kmax)
+        @test length(evs) > 1                                              # several events per call
+        spacing = HyperCloudCore._event_spacing(pg)
+        L, Li = pg.domain.L_wrap, pg.domain.invL_wrap
+        @test all(norm(HyperCloudCore._wrapped_diff(e1.center, e2.center, L, Li)) > spacing - pg.meta.R
+                  for e1 in evs, e2 in evs if e1 !== e2)
+        worst, merged, calls = 0.0, 0, 0
+        while calls < 20
+            rep = adapt_particles!(pg, ad2, kmax)
+            rep.inserted + rep.removed == 0 && break
+            worst   = max(worst, abs(rep.mass_residual[1]))
+            merged += rep.removed
+            calls  += 1
+        end
+        @test merged >= 2n_pairs                                           # every close pair was merged
+        @test worst < 1e-13 * m0
+        @test abs(total_mass(pg)[1] - m0) < 1e-12 * m0
+        @test all(r -> 0.5 - 1e-12 <= r[1] <= 1.5 + 1e-12, view(pg.rhos, 1:pg.meta.N))
+    end
+
+    @testset "max_events" begin
+        pg, _ = clustered_cloud_2d()
+        @test length(HyperCloudCore._detect_events(pg, ParticleAdaptivity(Float64; exclude_reduced_order = false, max_events = 1), kmax)) == 1
+        @test_throws AssertionError ParticleAdaptivity(Float64; max_events = 0)
+    end
+
+    @testset "Re-estimated volumes: the call is exact for the stepper's volumes ($(nameof(typeof(est))))" for est in (ShepardVolumes(), MLSVolumes(2))
+        function merged_cloud()
+            dx = 2 / 40
+            pg = make_pg_1d(40)
+            pg.core.positions[21] = pg.core.positions[20] + Space{1, Float64}(0.2dx)
+            pg.neighbor(pg)
+            update_volumes!(pg, est)
+            return set_ic!(pg, ic)
+        end
+        # Without the estimator the remap's volumes stay, and the next re-estimation changes the mass
+        pg = merged_cloud(); m0 = total_mass(pg)[1]
+        rep = adapt_particles!(pg, ad, kmax)
+        @test rep.removed == 2 && abs(rep.mass_residual[1]) < 1e-12
+        U_remap = [pg.rhos[i][1] for i in 1:pg.meta.N]
+        update_volumes!(pg, est)
+        defect_plain = abs(total_mass(pg)[1] - m0)
+        @test defect_plain > 1e-8
+        # With it the call ends on the estimator's volumes: exact, and the next re-estimation changes nothing
+        pg = merged_cloud(); m0 = total_mass(pg)[1]
+        ad_v = ParticleAdaptivity(Float64; volume_estimator = est)
+        rep = adapt_particles!(pg, ad_v, kmax)
+        @test rep.removed == 2 && abs(rep.mass_residual[1]) < 1e-12
+        @test abs(total_mass(pg)[1] - m0) < 1e-12
+        V = copy(view(pg.core.volumes, 1:pg.meta.N))
+        update_volumes!(pg, est)
+        @test view(pg.core.volumes, 1:pg.meta.N) ≈ V rtol = 1e-12
+        @test abs(total_mass(pg)[1] - m0) < 1e-12
+        @test all(r -> 0.5 - 1e-12 <= r[1] <= 1.5 + 1e-12, view(pg.rhos, 1:pg.meta.N))
+        # The states stay the remap's up to a correction of the size of the volume defect (spread over the remap's
+        # region, whose volume is O(1) here): measured 3.2e-4 for a defect of 2.7e-4. Keeping each particle's
+        # content instead changed states by up to 18 %.
+        δU = maximum(abs, [pg.rhos[i][1] for i in 1:pg.meta.N] .- U_remap)
+        @test δU < 5 * defect_plain
+    end
+
+    @testset "Builders: the grid's volume estimator reaches the stepper and the adaptivity" begin
+        eq  = make_advection_1d()
+        ctx = Dict{Symbol, Any}(:T => Float64, :D => 1, :M => 1, :Equation => eq,
+                                :ExplicitSources => (), :ImplicitSources => ())
+        ctx[:Domain]     = build_domain(Dict{Symbol, Any}(:domain => :rectangular, :mins => (-1.0,), :maxs => (1.0,), :periodic => true), ctx)
+        ctx[:WeightConf] = Dict{Symbol, Any}(:name => :exponential, :range => 2.5, :alpha => 1.0)
+        pg = build_particle_grid(Dict{Symbol, Any}(:Ns => (40,), :mover => :sinusoidal, :mover_amplitude => 0.5,
+                                                   :volumes => :mls, :volumes_degree => 2), ctx)
+        @test ctx[:VolumeEstimator] isa MLSVolumes{2}
+        ctx[:Flux]    = build_flux(Dict{Symbol, Any}(:name => :Rusanov), ctx)
+        ctx[:Limiter] = build_limiter(Dict{Symbol, Any}(:name => :none), ctx)
+        ctx[:MOOD]    = build_mood(Dict{Symbol, Any}(:criterion => :none), ctx)
+        ctx[:Scheme]  = build_scheme(Dict{Symbol, Any}(:name => :MUSCL, :order => 2), ctx)
+        ctx[:Tableau] = build_tableau(Dict{Symbol, Any}(:stepper => :RK2), ctx)
+        @test build_timestepper(ctx).volume_estimator isa MLSVolumes{2}
+
+        ad_b = build_adaptivity(Dict{Symbol, Any}(:enabled => true, :max_events => 3), ctx)
+        @test ad_b.max_events == 3
+        @test ad_b.volume_estimator isa MLSVolumes{2}                     # moving grid: the stepper's estimator
+        @test build_adaptivity(Dict{Symbol, Any}(:enabled => true), ctx).max_events == typemax(Int)
+        @test build_adaptivity(Dict{Symbol, Any}(), ctx) === nothing
+        ctx_static = merge(ctx, Dict{Symbol, Any}(:Grid => make_pg_1d(20)))
+        @test build_adaptivity(Dict{Symbol, Any}(:enabled => true), ctx_static).volume_estimator === nothing
+    end
+
+    @testset "MLS volumes through a host copy (device-grid path)" begin
+        geom = get_rectangular_domain(Float64, (-1.0,), (1.0,); is_periodic = true)
+        dx   = 2 / 60
+        pg   = ParticleGrid(geom, (dx,), ExponentialWeightFunction(1.0, 2.5dx), 1;
+                            randomness = (0.3dx,), rng = MersenneTwister(5))
+        update_volumes!(pg, MLSVolumes(2))
+        V = copy(view(pg.core.volumes, 1:pg.meta.N))
+        update_volumes!(pg, ShepardVolumes())
+        HyperCloudCore._update_volumes_on_host!(pg, MLSVolumes(2))
+        @test view(pg.core.volumes, 1:pg.meta.N) ≈ V rtol = 1e-13
+    end
 end

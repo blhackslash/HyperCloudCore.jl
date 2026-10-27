@@ -13,7 +13,9 @@
 | `:volumes`, `:volumes_*` | Volume estimator, see [`build_volume_estimator`](@ref) |
 
 Stores the largest spacing in `context[:max_dx]`, builds the weight function with
-[`build_weights`](@ref)`(context[:WeightConf], context)` and sets `context[:Grid]`. The grid is built on
+[`build_weights`](@ref)`(context[:WeightConf], context)` and sets `context[:Grid]` and
+`context[:VolumeEstimator]` (the estimator of the initial volumes, which [`build_timestepper`](@ref) and
+[`build_adaptivity`](@ref) then use for every re-estimation on a moving grid). The grid is built on
 the host and moved to [`storage_type`](@ref)`(context)` with [`device_grid`](@ref) if that is not `Array`.
 """
 function build_particle_grid end
@@ -37,6 +39,7 @@ function build_particle_grid(grid_conf::Dict, context::Dict)
 
     pg = ParticleGrid(geom, dxs, weight_func, M;
                       randomness = randomness, rng = rng, mover = mover, volume_estimator = vol)
+    context[:VolumeEstimator] = vol      # the time stepper and the adaptivity re-estimate with the same estimator
     storage = storage_type(context)
     storage === Array || (pg = device_grid(storage, pg))
     context[:Grid] = pg
