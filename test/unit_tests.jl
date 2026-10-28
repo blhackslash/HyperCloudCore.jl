@@ -888,6 +888,98 @@ end
     @test build_flux(Dict{Symbol, Any}(:name => :AlignedRusanov), Dict{Symbol, Any}()) isa AlignedRusanovFlux
 end
 
+@testset "Aligned dissipation also for a first-order scheme (K = 1)" begin
+    # MUSCL order 1 has no particle below the full order, so the aligned orientation used to be inactive and the
+    # degree-1 divergence weights of a jittered cloud with κ = 2.5 gave some negative first-order coefficients.
+    geom = get_rectangular_domain(Float64, (0.0, 0.0), (1.0, 1.0); is_periodic = true)
+    dx   = 1 / 24
+    pg   = ParticleGrid(geom, (dx, dx), ExponentialWeightFunction(1.0, 2.5dx), 1; randomness = (0.2dx, 0.2dx), rng = MersenneTwister(9))
+    N    = pg.meta.N
+    eq   = LinearAdvection(((1.0,), (0.7,)), Float64)
+    nb   = pg.neighbor
+    function coefficients(flux, i)
+        m  = MUSCL(Float64, 2, 1, 1, NoLimiter(), flux)
+        ts = GeneralRKTimeStepper(eq, m, MOOD(), RK2_SSP_Tableau(Float64))
+        HyperCloudCore.update_size!(ts, N, length(nb.indices), false); HyperCloudCore.update_size!(m, N)
+        fill!(view(pg.core.particle_orders, 1:N), 1)
+        a = Float64[]
+        for k in nb.ranges[i]
+            j = nb.indices[k]
+            fill!(view(pg.rhos, 1:N), zero(State{1, Float64})); pg.rhos[j] = State{1, Float64}(1.0)
+            HyperCloudCore.compute_explicit_rhs!(ts, eq, pg, ts.K_E_stages[1], ts.K_X_stages[1], pg.rhos, 0.0, true)
+            push!(a, parent(ts.K_E_stages[1])[i][1])
+        end
+        return a
+    end
+    a_aligned = vcat((coefficients(AlignedRusanovFlux(), i) for i in 1:N)...)
+    a_geo     = vcat((coefficients(RusanovFlux(), i) for i in 1:N)...)
+    @test minimum(a_aligned) >= -1e-12
+    @test count(<(-1e-12), a_geo) > 0                                  # geometric sorting: some negative coefficients
+end
+
+@testset "SSP coefficients and the canonical Shu–Osher form" begin
+    @test ssp_coefficient(RK1_Euler_Tableau(Float64)) ≈ 1 atol = 1e-9
+    @test ssp_coefficient(RK2_SSP_Tableau(Float64)) ≈ 1 atol = 1e-9
+    @test ssp_coefficient(RK2_Ralston_Tableau(Float64)) ≈ 0.5 atol = 1e-9
+    @test ssp_coefficient(RK3_SSP_Tableau(Float64)) ≈ 1 atol = 1e-9
+    @test ssp_coefficient(RK4_SSP_Tableau(Float64)) ≈ 1.50818004918983 atol = 1e-8   # Spiteri & Ruuth
+    @test ssp_coefficient(RK4_Classical_Tableau(Float64)) == 0
+    @test ssp_coefficient(IMEX_ARS222_Tableau(Float64)) == 0
+    # At C the canonical coefficients are non-negative, above C some are negative
+    bt = RK4_SSP_Tableau(Float64); C = ssp_coefficient(bt); s = num_stages(bt)
+    K = zeros(s + 1, s + 1); K[1:s, 1:s] .= bt.a_t; K[s + 1, 1:s] .= bt.b_t
+    canon(r) = (α = r * K / (I + r * K); (α, (I - α) * ones(s + 1)))
+    α, v = canon(C)
+    @test minimum(α) >= -1e-10 && minimum(v) >= -1e-10
+    α2, v2 = canon(1.01C)
+    @test min(minimum(α2), minimum(v2)) < 0
+    # The final update reuses the substeps of stages 2 and 4: why checking the stage candidates is not enough
+    @test α[s + 1, 2] > 0.1 && α[s + 1, 4] > 0.1
+end
+
+# A criterion that records the candidate it is shown for one particle and never flags
+struct RecordCriterion <: MOODCriterion end
+const RECORDED = Tuple{Float64, Float64}[]                              # (U_prev, candidate) of particle 7
+function (m::MOOD{<:MOODStrategy, RecordCriterion})(g, p, rho_i, nb_slice, cand, pg, U_prev)
+    p == 7 && push!(RECORDED, (rho_i[1], cand[1]))
+    return false
+end
+
+@testset "MOOD checks the Euler substeps of SSP tableaus" begin
+    for (bt, C) in ((RK3_SSP_Tableau(Float64), 1.0), (RK4_SSP_Tableau(Float64), 1.50818004918983))
+        s = num_stages(bt)
+        for substeps in (true, false)
+            pg = set_ic!(make_pg_1d(40), x -> 1 + 0.5 * sin(π * x))
+            eq = make_advection_1d()
+            ts = GeneralRKTimeStepper(eq, MUSCL(Float64, 1, 1, 3, NoLimiter(), RusanovFlux()), MOOD(EPD1(), RecordCriterion()), bt;
+                                      mood_substeps = substeps)
+            @test ts.substep_ratio ≈ (substeps ? 1 / C : 0.0) atol = 1e-9
+            empty!(RECORDED)
+            dt = 0.01
+            u_n = pg.rhos[7][1]
+            ts(eq, pg, 0.0, dt)
+            @test length(RECORDED) == s                                  # one check per checkpoint 2 … s+1
+            for i in 2:(s + 1)
+                Yp, cand = RECORDED[i - 1]
+                @test Yp ≈ ts.Y_stages[i - 1][7][1]
+                if substeps
+                    @test cand ≈ Yp + dt / C * ts.K_E_stages[i - 1][7][1]
+                else
+                    @test cand ≈ (i <= s ? ts.Y_stages[i][7][1] : pg.rhos[7][1])
+                end
+            end
+        end
+    end
+    # IMEX and non-SSP tableaus keep checking the stage candidates
+    eq = make_advection_1d()
+    @test GeneralRKTimeStepper(eq, MUSCL(Float64, 1, 1, 3, NoLimiter(), RusanovFlux()), MOOD(EPD1(), MOODu1(1e-6)), RK4_Classical_Tableau(Float64)).substep_ratio == 0
+    ctx = Dict{Symbol, Any}(:T => Float64, :Equation => eq, :Scheme => MUSCL(Float64, 1, 1, 3, NoLimiter(), RusanovFlux()),
+                            :MOOD => MOOD(EPD1(), MOODu1(1e-6)), :Tableau => RK3_SSP_Tableau(Float64),
+                            :ExplicitSources => (), :ImplicitSources => ())
+    @test build_timestepper(ctx).substep_ratio ≈ 1 atol = 1e-9
+    @test build_timestepper(ctx; time_conf = Dict{Symbol, Any}(:mood_substeps => false)).substep_ratio == 0
+end
+
 @testset "Implicit stage: RHS from the solve" begin
     # One implicit source: K_I of a diagonal stage is (U_out - U_in) / (dt a_ii), which equals S(U_out) for an
     # exact solve. Constant state, so the explicit RHS is zero and the step is the ARS222 solution of u' = -λu.
@@ -961,9 +1053,11 @@ end
         @test est.fixed == sizeof(Int) * (length(pg.bins.cell_start) + length(pg.bins.cell_count)) +
                            sizeof(eltype(pg.bins.bin_neighbors)) * length(pg.bins.bin_neighbors) + sizeof(UnitRange{Int})
         g = memory_estimate(pg)
-        # Stepper: rho_n, rho_cand, 3 stages × (Y, K_E, K_I) = 11 states, 5 Bool masks, 1 Int snapshot; per slot
-        # df_flux, df_scratch, mask. No position buffers on a static grid.
-        @test memory_estimate(pg, ts).per_particle - g.per_particle == 11S + 5 + sizeof(Int)
+        # Stepper: rho_n, rho_cand, 3 stages × (Y, K_E, K_I) = 11 states, plus the Euler substep MOOD checks with an SSP
+        # tableau (rho_sub) if MOOD is on; 5 Bool masks, 1 Int snapshot; per slot df_flux, df_scratch, mask. No position
+        # buffers on a static grid.
+        @test memory_estimate(pg, ts).per_particle - g.per_particle ==
+              (11 + HyperCloudCore._checks_substeps(ts)) * S + 5 + sizeof(Int)
         @test memory_estimate(pg, ts).per_slot - g.per_slot == F + S + 1
         # MUSCL3: gradients SVector{2, State} + the reconstruction cache (SMatrix{2,2} + Bool) + the divergence
         # cache (degree 3 with a constant term: SMatrix{4,4} + Bool)

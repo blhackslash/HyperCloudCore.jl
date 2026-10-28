@@ -205,7 +205,7 @@ end
 
 # The direction that sorts the interface states of slot `k`: the distance for every flux but
 # `AlignedRusanovFlux`, which uses the signs of the divergence weights on the pairs where either particle is
-# below the full order and the weights are available (`below`). The rule is symmetric in the pair, so both
+# below the full order, on every pair of a first-order scheme (K = 1), and where the weights are available (`below`). The rule is symmetric in the pair, so both
 # sides evaluate the same flux; elsewhere the geometric sorting keeps the error constant of the plain flux.
 @inline _dissipation_direction(::NumericalFluxFunction, dweights, k, dist_k, below::Bool) = dist_k
 @inline _dissipation_direction(::AlignedRusanovFlux, dweights, k, dist_k, below::Bool) = below ? sign.(@inbounds dweights[k]) : dist_k
@@ -358,7 +358,7 @@ end
         F_ij = flux(eq, fij)
         F_ji = flux(eq, fji)
 
-        below = okw && (eff_order_i < MAX_ORDER || orders[j_idx] < MAX_ORDER)
+        below = okw && (MAX_ORDER == 1 || eff_order_i < MAX_ORDER || orders[j_idx] < MAX_ORDER)   # K = 1: every edge
         f_L, f_R, F_L, F_R = sort_flux(fij, fji, F_ij, F_ji, _dissipation_direction(muscl.flux, muscl.dweights, global_idx, dist_k, below))
         F_num   = muscl.flux(f_L, f_R, F_L, F_R, eq)
         nc_jump = evaluate_nc_jump(eq, f_L, f_R, dist_k)
