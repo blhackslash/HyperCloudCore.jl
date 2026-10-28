@@ -634,6 +634,117 @@ end
     end
 end
 
+@testset "MOODu2: smooth extrema, plateaus and jumps (2-D)" begin
+    # A 2-D periodic lattice with hand-set states and curvature coefficients: the criterion is tested on its own.
+    n    = 20
+    dx   = 1 / n
+    geom = get_rectangular_domain(Float64, (0.0, 0.0), (1.0, 1.0); is_periodic = true)
+    pg   = ParticleGrid(geom, (dx, dx), ExponentialWeightFunction(1.0, 2.5dx), 2)
+    N    = pg.meta.N
+    muscl = MUSCL(Float64, 2, 2, 3, NoLimiter(), RusanovFlux())
+    update_size!(muscl, N)
+    fill!(pg.core.particle_orders, 3)
+    pos(i) = pg.core.positions[i]
+    nearest(c) = argmin(i -> sum(abs2, pos(i) - Space{2, Float64}(c)), 1:N)
+
+    # Component fields with their second derivatives (∂xx, ∂yy); the cached coefficients D+1, D+2 are curvatures
+    function set_fields!(f1, d1, f2, d2)
+        for i in 1:N
+            x = pos(i)
+            pg.rhos[i] = State{2, Float64}(f1(x), f2(x))
+            c1, c2 = d1(x), d2(x)
+            muscl.gradients[i] = SVector{5, State{2, Float64}}(zero(State{2, Float64}), zero(State{2, Float64}),
+                State{2, Float64}(c1[1], c2[1]), State{2, Float64}(c1[2], c2[2]), zero(State{2, Float64}))
+        end
+    end
+    U = pg.rhos
+    function flags(crit, p, cand)
+        mood  = MOOD(EPD2(), crit)
+        range = HyperCloudCore._global_range(crit, U, N)
+        return HyperCloudCore._criterion_flags(mood, muscl, p, U[p], pg.neighbor.ranges[p], cand, pg, U, range)
+    end
+    local_extrema(p, m) = extrema(U[k][m] for k in (p, (pg.neighbor.indices[s] for s in pg.neighbor.ranges[p])...))
+
+    δ = 1e-8
+    w = 0.1                                                     # Gaussian width²: the stencil (2.5 dx) is well inside it
+    c0 = (0.5, 0.5)
+    gauss(x)   = exp(-((x[1] - c0[1])^2 + (x[2] - c0[2])^2) / w)
+    f1(x)      = 1 - 0.5 * gauss(x)
+    d1(x)      = (-0.5 * gauss(x) * (4 * (x[1] - c0[1])^2 / w^2 - 2 / w), -0.5 * gauss(x) * (4 * (x[2] - c0[2])^2 / w^2 - 2 / w))
+    f2(x)      = sin(2π * x[1])                                 # inflection line x = 1/2 through the minimum of f1
+    d2(x)      = (-(2π)^2 * sin(2π * x[1]), 0.0)
+
+    @testset "Smooth minimum next to another component's inflection line" begin
+        set_fields!(f1, d1, f2, d2)
+        p = nearest(c0)
+        lo1, _ = local_extrema(p, 1)
+        cand = State{2, Float64}(lo1 - 10δ, U[p][2])           # the discrete minimum is undershot, component 2 fine
+        @test flags(MOODu2(δ), p, cand) == false                # accepted: only component 1 is tested
+        # The curvature test is still there: the same undershoot of component 2 at its inflection line is rejected
+        lo2, _ = local_extrema(p, 2)
+        @test flags(MOODu2(δ), p, State{2, Float64}(U[p][1], lo2 - 10δ)) == true
+        # Below order 3 there are no curvature coefficients: plain DMP
+        pg.core.particle_orders[p] = 2
+        @test flags(MOODu2(δ), p, cand) == true
+        pg.core.particle_orders[p] = 3
+    end
+
+    @testset "Plateau: a component that barely varies across the stencil" begin
+        # Component 1: a large bump elsewhere (global range 0.5) and a ripple of amplitude 1e-6 around p, whose
+        # curvature changes sign across the stencil; the candidate overshoots the ripple by 5δ.
+        q = (0.1, 0.1)
+        narrow(x) = exp(-((x[1] - c0[1])^2 + (x[2] - c0[2])^2) / 0.01)   # e^-32 at q: the bump does not reach it
+        ripple(x) = 1e-6 * sin(20π * x[1] + 0.7)                 # phase: not zero on the lattice
+        g1(x)  = 1 - 0.5 * narrow(x) + ripple(x)
+        dg1(x) = (-1e-6 * (20π)^2 * sin(20π * x[1] + 0.7), 0.0)
+        set_fields!(g1, dg1, x -> 0.0, x -> (0.0, 0.0))
+        p = nearest(q)
+        lo, hi = local_extrema(p, 1)
+        @test hi - lo < 1e-5                                    # the stencil sees the ripple only
+        cand = State{2, Float64}(hi + 5δ, 0.0)
+        @test flags(MOODu2(δ; plateau = 0), p, cand) == true    # no plateau test: the ripple's curvature changes sign
+        @test flags(MOODu2(δ; plateau = 1e-3), p, cand) == false   # local range 2e-6 < 1e-3 × global range 0.5
+        pg.core.particle_orders[p] = 1                          # a plateau needs no curvature: also below order 3
+        @test flags(MOODu2(δ; plateau = 1e-3), p, cand) == false
+        pg.core.particle_orders[p] = 3
+    end
+
+    @testset "A jump is still flagged with the plateau test on" begin
+        step(x)  = x[1] < 0.5 ? 0.0 : 1.0
+        dstep(x) = (abs(x[1] - 0.5) < 2.5dx ? (x[1] < 0.5 ? 1 / dx^2 : -1 / dx^2) : 0.0, 0.0)   # Gibbs-like curvature
+        set_fields!(step, dstep, x -> 0.0, x -> (0.0, 0.0))
+        p = nearest((0.5 - dx / 2, 0.5))
+        _, hi = local_extrema(p, 1)
+        cand = State{2, Float64}(hi + 1e-3, 0.0)
+        for crit in (MOODu2(δ; plateau = 0), MOODu2(δ), MOODu2(δ; plateau = 1e-2))
+            @test flags(crit, p, cand) == true
+        end
+        # The corner of a jump on a lattice: the plateau next to it has exactly zero curvature, so the sign test
+        # passes (c_min c_max = 0); only the magnitude test among the nearest neighbours sees the collapse.
+        corner(x) = (0.5 <= x[1] < 0.5 + dx / 2 ? -1 / dx^2 : 0.0, 0.0)
+        set_fields!(step, corner, x -> 0.0, x -> (0.0, 0.0))
+        p = nearest((0.5 + dx, 0.5))
+        _, hi = local_extrema(p, 1)
+        cand = State{2, Float64}(hi + 1e-3, 0.0)
+        @test flags(MOODu2(δ), p, cand) == true
+        @test flags(MOODu2(δ; ratio = 0), p, cand) == false    # without it a 1-D box rings by 10 %
+    end
+
+    @testset "Public functor and builder" begin
+        set_fields!(f1, d1, f2, d2)
+        p = nearest(c0)
+        lo1, _ = local_extrema(p, 1)
+        cand = State{2, Float64}(lo1 - 10δ, U[p][2])
+        @test MOOD(EPD2(), MOODu2(δ))(muscl, p, U[p], pg.neighbor.ranges[p], cand, pg, U) == false
+        ctx = Dict{Symbol, Any}(:T => Float64, :Grid => pg)
+        c = build_mood_criterion(Val(:U2), Dict{Symbol, Any}(:delta_relax => 1e-4, :plateau => 1e-3, :curvature_ratio => 0.25), ctx)
+        @test c isa MOODu2{Float64} && c.d ≈ 1e-4 * dx^2 && c.plateau == 1e-3 && c.ratio == 0.25
+        c0_ = build_mood_criterion(Val(:U2), Dict{Symbol, Any}(:delta_relax => 1e-4), ctx)
+        @test c0_.plateau == HyperCloudCore.U2_PLATEAU_DEFAULT == MOODu2(δ).plateau && c0_.ratio == 0.5 == MOODu2(δ).ratio
+        @test HyperCloudCore._global_range(MOODu2(δ; plateau = 0), U, N) === nothing   # plateau off: no reduction
+    end
+end
+
 @testset "Time stepper (static grid)" begin
     N  = 60
     eq = make_advection_1d()

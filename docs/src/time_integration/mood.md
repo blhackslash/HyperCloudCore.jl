@@ -26,12 +26,22 @@ U^\ast_{i,m} \notin \left[\min_j U_{j,m} - \delta,\; \max_j U_{j,m} + \delta\rig
 
 The first condition ignores flat regions, where round-off would otherwise trigger. The relaxation $\delta$ absorbs small, harmless overshoots. Scale $\delta$ with the resolution (e.g. $\delta = 10^{-4} \cdot \Delta x^D$).
 
-**`MOODu2(δ)`: DMP with a smooth-extremum override.** First the `MOODu1` test. If it fails, and the scheme exposes cached reconstruction coefficients (`has_cached_gradients`, true for MUSCL) of degree ≥ 2 (both $k_{\max} \ge 3$ and $k_i \ge 3$), the pure second derivatives $\partial_{dd} U$ of $i$ and its neighbours are inspected. The particle is accepted as a smooth extremum if, in every direction $d$ and for every component,
+**`MOODu2(δ; plateau = 1e-3, ratio = 1/2)`: DMP with plateau and smooth-extremum overrides.** First the `MOODu1` test. A component that violates it is then accepted if
 
-- the curvature does not change sign across the neighbourhood: $\min_j \partial_{dd} U_j \cdot \max_j \partial_{dd} U_j > -\delta$, and
-- the curvatures are comparable: $\min_j |\partial_{dd} U_j| / \max_j |\partial_{dd} U_j| \ge \tfrac12$, or they are all below $\delta$.
+- it is a **plateau**: it varies across the stencil by less than `plateau` times its global range ($\max_j U_{j,m} - \min_j U_{j,m}$ over the whole cloud at the previous stage). Such a component carries no structure the DMP could protect at the scale of the stencil; what violates it there is the truncation error of the update. The typical case is the density in the tail of a vortex, which is nearly constant but is updated with the divergence of the momentum, which is not. (The guard $\max - \min \ge \delta^3$ of the DMP is meant for exactly constant states; with $\delta \propto \Delta x^D$ it is far below any such variation.) This test needs no curvature, so it also applies at order ≤ 2; or
+- it is a **smooth extremum**: the scheme exposes cached reconstruction coefficients (`has_cached_gradients`, true for MUSCL) of degree ≥ 2 (both $k_{\max} \ge 3$ and $k_i \ge 3$), and in every direction $d$ the pure second derivatives $c_j = \partial_{dd} U_j$ of $i$ and its neighbours
+  - do not change sign: $(\min_j c_j\,h^2)(\max_j c_j\,h^2) > -\delta^2$, and
+  - have comparable magnitudes among the nearest neighbours (distance ≤ $1.5h$): $\min_j |c_j| \ge \texttt{ratio}\,\max_j |c_j|$ (Diot's test; `ratio = 0` disables it),
 
-Without cached coefficients, or at order ≤ 2, `MOODu2` behaves like `MOODu1`. At order 2 a smooth peak is therefore always clipped, which costs some accuracy at extrema.
+  or are negligible, $\max_j |c_j|\,h^2 < \delta$. Here $h$ is the particle spacing, so curvatures are compared as the variation they cause over one spacing, in the units of $\delta$.
+
+Only the components that violate the DMP are tested; a particle is flagged if one of them is neither a plateau nor a smooth extremum.
+
+The magnitude test compares the nearest neighbours only. Over a whole meshfree stencil (radius $2.5h$ and more), the curvature of a smooth solution changes by more than a factor 2 wherever it decays on a few spacings. Next to a jump, the curvature collapses from large to zero between neighbours. That collapse is what the magnitude test is for; the sign test does not see it, because the product with zero passes. Without it, a box advected on a 1-D lattice rings by 10 %.
+
+The design comes from the isentropic vortex ($\beta = 5$, jittered clouds, $\kappa = 2.5$, $\delta = 10^{-4}\Delta x^2$, MUSCL3). The former criterion tested the curvature of every component, had no effective flat-region test, compared curvatures with $\delta$ in mismatched units, and applied the magnitude test to the whole stencil. It flagged the vortex's far field and dropped the flow to first order: density error $1.2$ instead of $4.6\cdot 10^{-2}$ at $200^2$. With the defaults the vortex runs as without MOOD from about $200^2$ on; at $100^2$ it takes `plateau = 1e-2`. Discontinuities stay bounded to about $10^{-3}$ of the jump (box advection in 1-D and 2-D, Sod) instead of $10^{-7}$. `plateau = 0` drops the plateau test.
+
+Without cached coefficients, or at order ≤ 2, the smooth-extremum test is not available: there `MOODu2` accepts plateaus only, and a smooth peak is clipped, which costs some accuracy at extrema.
 
 **`OnlyMOOD()`** flags every particle (useful for testing: one step drives everything to order 1). **`NoMOOD`** (via `MOOD()`) never flags.
 
