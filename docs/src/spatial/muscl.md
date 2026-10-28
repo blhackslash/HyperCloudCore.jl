@@ -97,9 +97,12 @@ high-degree weights overshoot (12 % on a box profile with `div_order = 5`).
 `dweights`, kept with the divergence cache) on every pair where one of the two particles is below the full order, and on
 every pair of a first-order scheme (order 1, where no particle can be below the full order: with the geometric sorting its
 degree-1 weights on a jittered cloud with `R = 2.5Δx` give about 2 % negative first-order coefficients, down to −0.57). The
-rule is symmetric in the pair, and elsewhere the flux is the plain one. The signs are those of the divergence fit in use:
-degree `q(div_order)` with a fixed `div_order` (degree 1 for `div_order = 2`); with `div_order = 0` the cache, and so the
-signs, belong to the full-order fit while lowered particles fit with a lower degree, and the guarantee below does not apply. The coefficient becomes
+rule is symmetric in the pair, and elsewhere the flux is the plain one. The signs are those of the weights the particle
+multiplies the slot's flux difference with: `dweights` on the cached full-degree fit, and the weights of the dynamic fit
+for a particle off the cached path (a degree lowered by the neighbour-count safeguard, e.g. in 1-D with `R = 2.5Δx` and
+`div_order = 3`, a lower particle order with `div_order = 0`, or no cached factorisation). With the aligned flux such a
+particle always takes the per-slot path of the streamed divergence below, also with `streamed = false`, so each slot's
+weight is solved once and used for both the sorting and the divergence. The coefficient becomes
 `½ Σ_d s_d |c_ij,d| ≥ ½ |c_ij·f'|`, so the first-order update is local-extremum-diminishing for any zero-sum
 weights. With it the divergence degree can stay uniform (`div_order = max_order`) while MOOD lowers the
 reconstruction only: no mixed-degree pairs, and the mass error is the integrated truncation error,
@@ -129,7 +132,8 @@ factorisation) assembles and factorises its own moment matrix once and solves ea
 loop ($B^2$ per slot). The numbers are those of the fit up to round-off (the summation order differs). The
 stepper does not allocate `df_flux`/`df_scratch` for a streamed scheme (`uses_slot_buffers`), and the memory
 budget counts `dweights` instead. The toggle is the constructor keyword (`:streamed` in the builders'
-`Scheme` namespace); the default is off, the buffered path, so existing runs are unchanged bit for bit.
+`Scheme` namespace); the default is off, the buffered path, so existing runs are unchanged bit for bit (with
+[`AlignedRusanovFlux`](@ref), particles off the cached path take the per-slot path in either mode, see above).
 
 ## Slope limiting (*a priori*)
 

@@ -83,7 +83,9 @@ a pair whose particles both have the full order it is the plain [`RusanovFlux`](
 "left" and "right" per axis by the sign of the distance). Where either particle is below the full order,
 and on every pair of a first-order scheme (`MUSCL` order 1, where no particle can be below the full order),
 the states are sorted by the sign of the particle's own divergence weight `c_ij` for that neighbour
-instead (the weights of the divergence fit in use, i.e. of degree `q(k_div)` with a fixed `div_order`); the rule is symmetric in the pair, so both sides evaluate the same flux. The dissipation then
+instead: the weight the slot's flux difference is multiplied with, from the cached full-degree fit or, for a
+particle off the cached path (a degree lowered by the neighbour-count safeguard or by `div_order = 0`, no
+cached factorisation), from its dynamic fit, solved per slot; the rule is symmetric in the pair, so both sides evaluate the same flux. The dissipation then
 enters the divergence of particle `i` with the coefficient `½ Σ_d s_d |c_ij,d| ≥ ½ |c_ij · f'|`, so the
 first-order update (constant reconstructions, zero-sum weights) is local-extremum-diminishing for *any*
 divergence weights, including high-degree fits on one-sided stencils, whose weights change sign over the

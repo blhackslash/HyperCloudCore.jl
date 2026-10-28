@@ -813,10 +813,11 @@ end
     # (closure/task set-up), nothing may be allocated per particle. Compared against a grid 10x smaller.
     # The warm-up steps until MOOD has triggered once, so the trigger path (first reached at the third
     # step of this profile) is compiled before the measurement; the minimum over a few steps leaves out
-    # the extra launches of a step with a trigger.
-    function step_alloc(n)
+    # the extra launches of a step with a trigger. The aligned flux with `div_order = 3` takes the per-slot
+    # dynamic fit for every particle (the safeguard lowers the degree at R = 2.5Δx).
+    function step_alloc(n, flux = RusanovFlux(); kw...)
         pgn = set_ic!(make_pg_1d(n), x -> exp(-x^2 / 0.02))
-        interp = MUSCL(Float64, 1, 1, 3, VenkatakrishnanLimiter(:hard), RusanovFlux())
+        interp = MUSCL(Float64, 1, 1, 3, VenkatakrishnanLimiter(:hard), flux; kw...)
         ts = GeneralRKTimeStepper(eq, interp, MOOD(EPD1(), MOODu1(1e-6)), RK3_SSP_Tableau(Float64))
         h = 0.4 * (2 / n)
         k = 0
@@ -832,6 +833,8 @@ end
         small, large = step_alloc(N ÷ 10), step_alloc(N)
         @test large <= small + 8192
         @test large < (tasks ? 256 * 1024 : 16 * 1024)
+        small, large = step_alloc(N ÷ 10, AlignedRusanovFlux(); div_order = 3), step_alloc(N, AlignedRusanovFlux(); div_order = 3)
+        @test large <= small + 8192
         interp = MUSCL(Float64, 1, 1, 3, VenkatakrishnanLimiter(:hard), RusanovFlux())
         get_time_step(pg, eq, interp); update_volumes!(pg, ShepardVolumes())   # compile first
         @test (@allocated get_time_step(pg, eq, interp)) < (tasks ? 32_768 : 8192)
@@ -915,6 +918,64 @@ end
     a_geo     = vcat((coefficients(RusanovFlux(), i) for i in 1:N)...)
     @test minimum(a_aligned) >= -1e-12
     @test count(<(-1e-12), a_geo) > 0                                  # geometric sorting: some negative coefficients
+end
+
+@testset "Aligned dissipation uses the signs of the weights in use" begin
+    # Particles off the cached path multiply their flux differences with a dynamic fit; the orientation used to
+    # come from the cached full-degree weights anyway (G1: the safeguard lowers the degree; G3: coupled mode), or
+    # was geometric without a cached factorisation (G2). First-order coefficients a_ij as above, with every
+    # particle lowered to order 1 so that the aligned orientation is active on every edge.
+    function coefficients(pg, eq, make_muscl, i; prepare = identity)
+        N, nb = pg.meta.N, pg.neighbor
+        m  = make_muscl()
+        ts = GeneralRKTimeStepper(eq, m, MOOD(), RK3_SSP_Tableau(Float64))
+        HyperCloudCore.update_size!(ts, N, length(nb.indices), false); HyperCloudCore.update_size!(m, N)
+        fill!(view(pg.core.particle_orders, 1:N), 1)
+        HyperCloudCore.prepare_geometry!(m, pg); prepare(m)
+        a = Float64[]
+        for k in nb.ranges[i]
+            j = nb.indices[k]
+            fill!(view(pg.rhos, 1:N), zero(State{1, Float64})); pg.rhos[j] = State{1, Float64}(1.0)
+            HyperCloudCore.compute_explicit_rhs!(ts, eq, pg, ts.K_E_stages[1], ts.K_X_stages[1], pg.rhos, 0.0, true)
+            push!(a, parent(ts.K_E_stages[1])[i][1])
+        end
+        return a
+    end
+    eq1 = make_advection_1d()
+
+    @testset "G1: safeguard-lowered degree (1-D, R = 2.5Δx, div_order = 3), $(jit ? "jittered" : "lattice"), streamed = $streamed" for
+            jit in (false, true), streamed in (false, true)
+        dx = 2 / 40
+        geom = get_rectangular_domain(Float64, (-1.0,), (1.0,); is_periodic = true)
+        pg = ParticleGrid(geom, (dx,), ExponentialWeightFunction(1.0, 2.5dx), 1; randomness = (jit ? 0.2dx : 0.0,), rng = MersenneTwister(4))
+        N = pg.meta.N
+        mk = () -> MUSCL(Float64, 1, 1, 3, NoLimiter(), AlignedRusanovFlux(); div_order = 3, streamed = streamed)
+        a = vcat((coefficients(pg, eq1, mk, i) for i in 1:N)...)
+        @test minimum(a) >= -1e-12
+    end
+
+    @testset "G2: no cached factorisation (2-D jittered, K = 1), streamed = $streamed" for streamed in (false, true)
+        dx = 1 / 24
+        geom = get_rectangular_domain(Float64, (0.0, 0.0), (1.0, 1.0); is_periodic = true)
+        pg = ParticleGrid(geom, (dx, dx), ExponentialWeightFunction(1.0, 2.5dx), 1; randomness = (0.2dx, 0.2dx), rng = MersenneTwister(9))
+        eq2 = LinearAdvection(((1.0,), (0.7,)), Float64)
+        mk = () -> MUSCL(Float64, 2, 1, 1, NoLimiter(), AlignedRusanovFlux(); streamed = streamed)
+        idx = 1:3:pg.meta.N
+        a_cached  = vcat((coefficients(pg, eq2, mk, i) for i in idx)...)
+        a_dynamic = vcat((coefficients(pg, eq2, mk, i; prepare = m -> fill!(m.div_weights.ok, false)) for i in idx)...)
+        @test minimum(a_dynamic) >= -1e-12
+        @test a_dynamic ≈ a_cached rtol = 1e-10                  # the dynamic fit of the same degree, solved per slot
+    end
+
+    @testset "G3: coupled mode (div_order = 0), lowered particles fit a lower degree (2-D jittered)" begin
+        dx = 1 / 20
+        geom = get_rectangular_domain(Float64, (0.0, 0.0), (1.0, 1.0); is_periodic = true)
+        pg = ParticleGrid(geom, (dx, dx), ExponentialWeightFunction(1.0, 2.5dx), 1; randomness = (0.2dx, 0.2dx), rng = MersenneTwister(5))
+        eq2 = LinearAdvection(((1.0,), (0.7,)), Float64)
+        mk = () -> MUSCL(Float64, 2, 1, 4, NoLimiter(), AlignedRusanovFlux())
+        a = vcat((coefficients(pg, eq2, mk, i) for i in 1:5:pg.meta.N)...)
+        @test minimum(a) >= -1e-12
+    end
 end
 
 @testset "SSP coefficients and the canonical Shu–Osher form" begin
