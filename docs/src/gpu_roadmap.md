@@ -23,6 +23,7 @@ set_backend!(CUDABackend())                 # from CUDA.jl (likewise ROCBackend(
 | Shepard volumes | `_shepard_sums!`, `_shepard_sweep!` | `Grid/Volumes.jl` |
 | CFL estimate | `_cfl_body!` | `Grid/ParticleGrids.jl` |
 | per-slot divergence weights (streamed divergence, `AlignedRusanovFlux`; with the divergence cache) | `_weights_body!` | `Interpolation/MUSCL.jl` |
+| per-slot moment-correction weights (first-order `moment_correction`; with the divergence cache) | `_mweights_body!` | `Interpolation/MUSCL.jl` |
 | cell list (bin histogram, scatter, per-bin sort) | `_bin_count!`, `_bin_scatter!`, `_bin_sort!` | `Grid/NeighborLogic.jl` |
 | periodic wrap, neighbour counting, slot ranges, writing | `_wrap_position!`, `_count_neighbours!`, `_neighbour_ranges!`, `_write_neighbours!` | `Grid/NeighborLogic.jl` |
 | boundary conditions (Dirichlet; outflow donor search, one pass per hop) | `_dirichlet_body!`, `_outflow_init!`, `_outflow_pass!`, `_outflow_fallback!` | `Grid/BoundaryConditions.jl` |

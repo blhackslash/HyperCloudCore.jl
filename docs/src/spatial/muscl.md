@@ -116,6 +116,49 @@ degree to `−1.1e-3 / −5.8e-4 / +5.9e-5` (lattice: `1e-14`), with the same ex
 (shock) from `−6.1e-2 / −5.4e-2 / −5.0e-2` to `+7e-5 / −2.4e-4 / −2.2e-4` with no overshoot. The fixed
 degree with the geometric dissipation keeps the mass but overshoots by 11–13 % (box) and 6 % (Burgers).
 
+## Moment-corrected first-order dissipation
+
+With constant reconstructions the Rusanov dissipation enters particle `i` as
+``\sum_j \sum_d s_{ij,d}\, g^d_{ij} (U_j - U_i)``, with ``g^d_{ij} = |c^d_{ij}|`` for
+[`AlignedRusanovFlux`](@ref) (``\pm c^d_{ij}`` by the sign of the distance for the geometric sorting). For a
+smooth state that is ``\sum_d s_d\, \beta^d_i \cdot \nabla U + O(h)`` with the first moment
+``\beta^d_i = \sum_j g^d_{ij} x_{ij}``. Since ``|c| \sim 1/h`` and ``x \sim h`` the moment is ``O(1)``; it vanishes
+only on symmetric stencils, so on an irregular cloud the first-order scheme is not consistent. For linear
+advection the effective local speed ``-\sum_j a_{ij} x_{ij}`` scatters by 7–13 % (1-D) and 5–8 % (2-D) around the
+exact one at jitter 0.2–0.4, independently of ``h``, and waves lag by a constant fraction: ``-4.6 \cdot 10^{-3}``
+at jitter 0.4 and ``-9 \cdot 10^{-4}`` at 0.2 in 1-D (`R = 2.5Δx`), so the error stops converging.
+
+With `moment_correction = true` (builder key `:moment_correction` in the `Scheme` namespace) a first-order
+`MUSCL` adds the dissipation ``\sum_d s_{ij,d}\, e^d_{ij} (U_j - U_i)`` with static weights ``e^d_{ij} \ge 0`` that
+cancel the moment, ``\sum_j e^d_{ij} x_{ij} = -\beta^d_i`` (`mweights`, computed with `dweights` once per geometry,
+`update_moment_weights!`). Per particle and axis, ``e^d_{ij} = (\tilde x_{ij} \cdot \mu)_+`` with the minimiser
+``\mu`` of the convex ``\tfrac12 \sum_j (\tilde x_{ij}\cdot\mu)_+^2 + \beta^d_i \cdot \mu`` (semismooth Newton in
+`D` unknowns). It exists whenever ``-\beta^d_i`` lies in the cone of the offsets, i.e. for every particle
+surrounded by its neighbours, and favours the far neighbours, which keeps the added dissipation small.
+
+- The coefficients only grow (``s(g + e) \ge s g``), so the positivity argument of the aligned flux, the
+  maximum principle and the LED property are kept, under the time-step bound with the larger sum
+  ``\tau \sum_{j,d} s_{ij,d}(g^d_{ij} + e^d_{ij}) \le 1``. On periodic clouds with `R = 2.5Δx` the correction adds on
+  average 6 % (jitter 0.2) and 11 % (jitter 0.4) to ``\sum_j \sum_d g^d_{ij}``; the largest sum over the cloud,
+  which sets that bound, grows by a factor 1.13 / 1.12 (1-D / 2-D, jitter 0.2) and 1.28 / 1.44 (jitter 0.4).
+- The weights use the pair speeds ``s_{ij,d}`` of the flux, so the moment left is
+  ``\sum_{j,d} (s_{ij,d} - s_{i,d}) (g + e)\, x_{ij} = O(h)`` where the speeds are smooth (exactly zero for linear
+  advection), without the extra dissipation of a common speed ``s_{i,d} = \max_j s_{ij,d}``.
+- Near a non-periodic boundary the stencil is one-sided and ``-\beta`` can lie on or near the edge of the
+  cone: the weights of a particle are scaled down to at most its dissipation sum (`_MOMENT_CAP`), and a
+  particle without a solution (or without a cached factorisation) keeps the uncorrected dissipation.
+- Higher orders are unchanged (the keyword is ignored for `max_order > 1`): with reconstructions the
+  dissipation acts on jumps of size ``O(h^k)``, and a particle that MOOD drops to order 1 sits next to a
+  discontinuity, where the ``O(1)`` consistency error is of the size the fallback accepts anyway.
+
+Measured (1-D periodic sine, linear advection, MUSCL1/RK2, AlignedRusanov, CFL 0.4, `t = 10`), L1 error for
+`N = 400 / 1600 / 6400 / 25600` at jitter 0.4: `0.375 / 0.203 / 0.181 / 0.180` without and
+`0.386 / 0.133 / 0.036 / 0.0092` with the correction (first order); the phase lag drops from `0.046` periods to
+`1.2e-3 / 7.7e-5 / 4.9e-6 / 3.0e-7`. The gain needs the diffusion error to fall below the lag: at
+`N = 400`, and in 2-D up to `200²` (sine, `t = 2`, jitter 0.2), the first-order diffusion dominates and the
+added dissipation raises the error by 1–4 %. On a lattice the weights vanish to round-off and the scheme is
+unchanged.
+
 ## Streamed divergence
 
 By default the flux pass writes the flux difference $\Delta F_{ij} = F^*_{ij} - F_i$ of every neighbour to the

@@ -236,7 +236,7 @@ stay below the cap). Called by `prepare_geometry!` with the divergence weights.
 function update_moment_weights!(muscl::MUSCL{D, M, T}, pg::ParticleGrid{D, M, T}) where {D, M, T}
     nb = pg.neighbor
     ensure_capacity!(muscl.mweights, length(nb.indices))
-    foreach_particle(_moment_body!, get_backend(), pg.meta.N,
+    foreach_particle(_mweights_body!, get_backend(), pg.meta.N,
         (muscl.mweights, muscl.dweights, nb.ranges, nb.distances, _cache_invL(muscl.div_weights), muscl.flux, Val(D)))
     return nothing
 end
@@ -251,7 +251,7 @@ end
 const _MOMENT_CAP = 1
 
 # Kernel body (see Backend.jl): moment-correction weights of particle `i`, one `D`-dimensional solve per axis.
-@inline function _moment_body!(i, mweights, dweights, ranges, dists, invL, flux, ::Val{D}) where {D}
+@inline function _mweights_body!(i, mweights, dweights, ranges, dists, invL, flux, ::Val{D}) where {D}
     T  = eltype(eltype(mweights))
     rg = ranges[i]
     mus = ntuple(Val(D)) do d
