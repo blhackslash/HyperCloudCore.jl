@@ -22,7 +22,7 @@ Every tableau is an `IMEXButcherTableau{T}` holding an explicit part $(\tilde A,
 
 ## Choosing a tableau with MOOD
 
-The stepper checks MOOD admissibility after every stage and treats each stage as a forward-Euler substep. For SSP tableaus this is backed by theory: every stage is a convex combination of Euler steps, so admissible substeps give an admissible step (under the scheme's own CFL condition). For the non-SSP tableaus (Ralston, RK4, the ARS pairs) the stepper still runs, and the per-stage checks still catch oscillations in practice, but there is no such guarantee.
+For explicit SSP tableaus (positive [`ssp_coefficient`](@ref): Euler, SSP-RK2, Ralston with $C = 1/2$, SSP-RK3, SSPRK(5,4)) the stepper checks MOOD admissibility on the forward Euler substeps $Y_{k-1} + (\Delta t/C) K_{k-1}$ of the canonical Shu–Osher form. Every stage is a convex combination of these substeps and $U^n$, so admissible substeps give an admissible step (under the scheme's own CFL condition, scaled by $C$) for every SSP method (see [The stage-wise fixed point](@ref)). For the non-SSP tableaus (RK4, the ARS pairs) the stepper checks the stage candidates; the checks still catch oscillations in practice, but there is no such guarantee.
 
 Recommended choices:
 

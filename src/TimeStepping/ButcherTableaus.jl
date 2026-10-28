@@ -1,4 +1,4 @@
-export IMEXButcherTableau, RKButcherTableau, num_stages
+export IMEXButcherTableau, RKButcherTableau, num_stages, ssp_coefficient
 export RK1_Euler_Tableau, RK2_SSP_Tableau, RK2_Ralston_Tableau, RK3_SSP_Tableau, RK4_Classical_Tableau, RK4_SSP_Tableau
 export IMEX_Euler_Tableau, IMEX_ARS233_Tableau, IMEX_ARS222_Tableau, IMEX_PRSSP3_Tableau, IMEX_SSP2332_Tableau
 
@@ -14,11 +14,11 @@ special case `a == 0`, `b == 0` (see `RKButcherTableau`).
 - `a_t`, `c_t`, `b_t`: explicit weights (strictly lower triangular), nodes and final weights.
 
 # MOOD note
-The time stepper applies MOOD per stage, treating every stage as a forward-Euler substep. That is
-rigorous for SSP tableaus (every stage is a convex combination of Euler steps): `RK1_Euler`,
-`RK2_SSP`, `RK3_SSP`, `IMEX_PRSSP3`, `IMEX_SSP2332`. The non-SSP tableaus (`RK2_Ralston`,
-`RK4_Classical`, `IMEX_ARS222`, `IMEX_ARS233`) still run, but the per-stage DMP has no theoretical
-backing there.
+For an explicit tableau with a positive SSP coefficient ([`ssp_coefficient`](@ref): `RK1_Euler`, `RK2_SSP`,
+`RK2_Ralston` (`C = 1/2`), `RK3_SSP`, `RK4_SSP`) the time stepper checks the forward Euler substeps of the
+canonical Shu–Osher form, of which every stage is a convex combination; that is rigorous for any SSP method.
+For the others (`RK4_Classical`, the IMEX tableaus) it checks the stage candidates, which has no theoretical
+backing.
 """
 struct IMEXButcherTableau{T, MA <: AbstractMatrix{T}, VA <: AbstractVector{T}}
     a::MA
@@ -68,6 +68,35 @@ Wraps an explicit tableau `(a, b, c)` into an `IMEXButcherTableau` with a zero i
 function RKButcherTableau(a::Matrix{T}, b::Vector{T}, c::Vector{T}) where {T}
     s = length(b)
     return IMEXButcherTableau(zeros(T, s, s), a, c, c, zeros(T, s), b)
+end
+
+"""
+    ssp_coefficient(bt::IMEXButcherTableau) -> Float64
+
+The SSP coefficient `C` of an explicit tableau: the largest `r` for which the canonical Shu–Osher form
+(Ketcheson 2008) `α_r = r K (I + r K)⁻¹`, `v_r = (I − α_r) e` (`K` the Butcher matrix with the weights `b` as
+last row) has no negative coefficient. Then every stage and the final update are
+`Y_i = v_i Uⁿ + Σ_j α_ij (Y_j + (Δt/C) F(Y_j))`, convex combinations of `Uⁿ` and the forward Euler substeps
+`Y_j + (Δt/C) F(Y_j)`. `0` for tableaus that are not SSP (classical RK4) and for IMEX tableaus (non-zero
+implicit part). Computed by bisection on the host (accurate to about 1e-10).
+"""
+function ssp_coefficient(bt::IMEXButcherTableau)
+    any(!iszero, bt.a) && return 0.0
+    s = num_stages(bt)
+    K = zeros(s + 1, s + 1)
+    K[1:s, 1:s] .= Float64.(Matrix(bt.a_t)); K[s + 1, 1:s] .= Float64.(Vector(bt.b_t))
+    ok(r) = (α = r * K / (I + r * K); minimum(α) >= -1e-13 && minimum((I - α) * ones(s + 1)) >= -1e-13)
+    r_lo, r_hi = 1e-3, 1e-3
+    ok(r_lo) || return 0.0                      # below 1e-3 the method is not usefully SSP (classical RK4: C = 0)
+    while ok(r_hi) && r_hi < 1e3
+        r_hi *= 2
+    end
+    r_lo = r_hi / 2
+    for _ in 1:60
+        mid = (r_lo + r_hi) / 2
+        ok(mid) ? (r_lo = mid) : (r_hi = mid)
+    end
+    return r_lo
 end
 
 # =========================================================================

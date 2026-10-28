@@ -117,8 +117,16 @@ Orders start at the interpolator's maximum consistency order. For each stage `i`
 3. Switch the grid geometry to `X_i`, then compute `K_E[i]` (and `K_X[i] = w`) for all interior
    particles.
 The final combination is checked the same way against `Y_s`; the final positions are written back
-and a full neighbour search is run. Every stage is treated as a forward-Euler substep, which is
-exact for SSP tableaus.
+and a full neighbour search is run.
+
+What MOOD checks at checkpoint `i`: for an explicit SSP tableau (SSP coefficient `C > 0`, see
+`ssp_coefficient`) the forward Euler substep `W_{i-1} = Y_{i-1} + (Δt/C) K_E[i-1]` of the canonical
+Shu–Osher form, in which every stage and the final update are convex combinations of `Uⁿ` and these
+substeps. A checked (DMP, PAD) substep of every stage therefore makes every stage and the result a
+convex combination of checked states, for any SSP method; checking `Y_i` instead only does so when
+every substep enters a single stage (Euler, SSP-RK2, SSP-RK3), not for SSPRK(5,4), whose final update
+reuses the substeps of stages 2 and 4. For other tableaus (`C = 0`, IMEX) the candidate `Y_i` itself
+is checked (no theoretical backing). `mood_substeps = false` restores that everywhere.
 
 # Keyword options
 - `reset_orders_per_stage = false`: restore the maximum order before each stage's full RHS pass.
@@ -128,9 +136,13 @@ exact for SSP tableaus.
   moving grid (`nothing` leaves the volumes untouched).
 - `storage = Array`: array type of the stage buffers, e.g. `ROCArray` for a stepper that advances a
   grid built with `device_grid` (the interpolator needs the same `storage`).
+- `mood_substeps = true`: check the forward Euler substeps of an SSP tableau (see above) instead of
+  the stage candidates.
 
 # Fields
 - `rho_n`, `rho_cand`, `Y_stages`, `K_E_stages`, `K_I_stages`: states and RHS (`K_E = -div(F − w_i ρ) + S_expl`).
+- `rho_sub`, `substep_ratio`: the Euler substep MOOD checks and its step `Δt/C` per `Δt` (`0`: the
+  stage candidates are checked; `rho_sub` is then never sized).
 - `x_n`, `x_cand`, `X_stages`, `K_X_stages`: positions and grid velocities (sized only when moving).
 - `int_buffer`, `work`: neighbour gather buffer and MOOD scratch.
 All of them are `Growable` buffers, sized by `update_size!` at the start of every step.
@@ -151,9 +163,11 @@ struct GeneralRKTimeStepper{D, M, T, PDE <: HyperbolicPDE, G <: DivergenceInterp
     reset_orders_per_stage::Bool
     full_search_per_stage::Bool
     volume_estimator::VE
+    substep_ratio::T     # Δt/C per Δt of the Euler substeps MOOD checks; 0: check the stage candidates
 
     rho_n::GS
     rho_cand::GS
+    rho_sub::GS
     # Stage arrays as tuples (one entry per stage): indexable inside kernels, unlike a Vector of Vectors.
     Y_stages::NTuple{S, GS}
     K_E_stages::NTuple{S, GS}
@@ -172,7 +186,7 @@ struct GeneralRKTimeStepper{D, M, T, PDE <: HyperbolicPDE, G <: DivergenceInterp
         pde::HyperbolicPDE{D, M, T}, div_interp::G, mood::MO,
         explicit_sources::EST, implicit_sources::IST, tableau::IMEXButcherTableau{T};
         reset_orders_per_stage::Bool = false, full_search_per_stage::Bool = false,
-        volume_estimator::VE = ShepardVolumes(), storage::Type{AT} = Array
+        volume_estimator::VE = ShepardVolumes(), storage::Type{AT} = Array, mood_substeps::Bool = true
     ) where {D, M, T, G, MO <: MOOD, EST <: Tuple{Vararg{AbstractExplicitSourceTerm}}, IST <: Tuple{Vararg{AbstractImplicitSourceTerm}},
              VE <: Union{Nothing, VolumeEstimator}, AT <: AbstractArray}
         s  = num_stages(tableau)
@@ -181,10 +195,12 @@ struct GeneralRKTimeStepper{D, M, T, PDE <: HyperbolicPDE, G <: DivergenceInterp
         positions = () -> Growable{Space{D, T}}(AT)
         ib   = InteractionBuffer{D, M, T}(AT)
         work = MOODWork(AT)
+        C = ssp_coefficient(tableau)
+        ratio = (mood_substeps && C > 0) ? T(1 / C) : zero(T)
         new{D, M, T, typeof(pde), G, MO, EST, IST, VE, s, typeof(states()), typeof(positions()), typeof(ib), typeof(work), typeof(bt)}(
             pde, div_interp, mood, explicit_sources, implicit_sources, bt,
-            reset_orders_per_stage, full_search_per_stage, volume_estimator,
-            states(), states(),
+            reset_orders_per_stage, full_search_per_stage, volume_estimator, ratio,
+            states(), states(), states(),
             ntuple(_ -> states(), s), ntuple(_ -> states(), s), ntuple(_ -> states(), s),
             positions(), positions(),
             ntuple(_ -> positions(), s), ntuple(_ -> positions(), s),
@@ -224,6 +240,7 @@ mood_flags(ts::GeneralRKTimeStepper) = view(parent(ts.work.triggered_step), 1:ts
 function update_size!(ts::GeneralRKTimeStepper, N::Int, M_neighbors::Int, moving::Bool)
     ensure_capacity!(ts.rho_n, N)
     ensure_capacity!(ts.rho_cand, N)
+    _checks_substeps(ts) && ensure_capacity!(ts.rho_sub, N)
     for i in 1:ts.num_stages
         ensure_capacity!(ts.Y_stages[i], N)
         ensure_capacity!(ts.K_E_stages[i], N)
@@ -409,13 +426,35 @@ function mood_checkpoint!(ts::GeneralRKTimeStepper{D, M, T}, eq, pg, i::Int, dt:
     full = true
     while true
         target, _ = form_candidate!(ts, eq, pg, i, dt, time)
-        detect_and_drop!(ts.mood, work, interp, pg, Y_prev, target, full; eq = eq) || return nothing
+        cand = _checks_substeps(ts) ? form_substep!(ts, pg, i, dt) : target
+        detect_and_drop!(ts.mood, work, interp, pg, Y_prev, cand, full; eq = eq) || return nothing
 
         copyto!(parent(work.dirty), 1, parent(work.changed), 1, N)
         expand_mask!(parent(work.dirty), parent(work.scratch), pg, reach)
         compute_explicit_rhs!(ts, eq, pg, ts.K_E_stages[i - 1], ts.K_X_stages[i - 1], Y_prev, t_prev, false)
         full = false
     end
+end
+
+# MOOD checks the Euler substeps (an SSP tableau, a criterion that flags anything)
+@inline _checks_substeps(ts::GeneralRKTimeStepper) = ts.substep_ratio > zero(ts.substep_ratio) && !(ts.mood.criterion isa NoMOOD)
+
+"""
+    form_substep!(ts, pg, i, dt) -> rho_sub
+
+The forward Euler substep `W_{i-1} = Y_{i-1} + (Δt/C) K_E[i-1]` that MOOD checks at checkpoint `i` (interior
+particles; boundary particles keep `Y_{i-1}`, they are not checked).
+"""
+function form_substep!(ts::GeneralRKTimeStepper{D, M, T}, pg, i::Int, dt::T) where {D, M, T}
+    foreach_particle(_substep_body!, get_backend(), pg.meta.N,
+        (ts.rho_sub, ts.Y_stages[i - 1], ts.K_E_stages[i - 1], pg.core.is_boundary, ts.substep_ratio * dt))
+    return ts.rho_sub
+end
+
+# Kernel body (see Backend.jl) of the Euler substep.
+@inline function _substep_body!(p, W, Y, K, is_boundary, h)
+    @inbounds W[p] = is_boundary[p] ? Y[p] : Y[p] + h * K[p]
+    return nothing
 end
 
 # Switch the grid to stage geometry X (frozen topology or full search)

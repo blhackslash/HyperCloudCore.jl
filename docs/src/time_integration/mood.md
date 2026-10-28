@@ -67,11 +67,17 @@ A strategy answers two questions:
 
 ## The stage-wise fixed point
 
-The stepper runs MOOD once per stage, treating every stage as a forward-Euler substep. This is the standard construction for SSP Runge–Kutta methods (see [Butcher Tableaus](@ref)). At checkpoint $k$ (stage $k \ge 2$, or the final combination as $k = s + 1$):
+The stepper runs MOOD once per stage. What it checks at checkpoint $k$ (stage $k \ge 2$, or the final combination as $k = s + 1$) depends on the tableau:
+
+- **Explicit SSP tableaus** (SSP coefficient $C > 0$, [`ssp_coefficient`](@ref)): the forward Euler substep $W_{k-1} = Y_{k-1} + (\Delta t / C)\,K_{E,k-1}$ of the canonical Shu–Osher form, against the neighbourhood of $Y_{k-1}$. In that form every stage and the final update are convex combinations $Y_k = v_k U^n + \sum_j \alpha_{kj} W_j$ with $v, \alpha \ge 0$, so if every substep is admissible (and within the local bounds), so is every stage and the result, for any SSP method.
+- **Other tableaus** (classical RK4, the IMEX pairs): the stage candidate $Y_k$ itself, which has no such backing.
+
+Checking the candidates $Y_k$ of an SSP tableau, as the stepper did before, is only equivalent when every substep enters a single stage (Euler, SSP-RK2, SSP-RK3). The final update of SSPRK(5,4) reuses the substeps of stages 2 and 4 ($U^{n+1} = 0.238\,U^n + 0.287\,W_2 + 0.134\,W_4 + 0.341\,W_5$), which are only checked through $Y_3 = 0.444\,U^n + 0.556\,W_2$ and $Y_5 = 0.178\,U^n + 0.822\,W_4$; an admissible $Y_3$ does not make $W_2$ admissible. Also for SSP-RK3 the substep is the more natural object of a DMP check against $Y_{k-1}$: $Y_3 = \tfrac34 U^n + \tfrac14 W_2$ mixes in the old state. `GeneralRKTimeStepper(…; mood_substeps = false)` (builder key `:Time_mood_substeps`) restores the candidate check.
 
 ```
 form Y_k                                             # predictor, implicit solve, BCs
 loop
+    form W_{k-1} (SSP tableaus)                      # the state that is checked
     C ← particles failing the criterion              # first pass: all interior particles
                                                      # later passes: only the dirty set
     if C is empty: done

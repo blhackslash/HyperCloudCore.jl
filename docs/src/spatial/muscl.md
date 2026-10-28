@@ -94,8 +94,12 @@ on the slots where a high-degree weight changes sign, so the first-order fallbac
 high-degree weights overshoot (12 % on a box profile with `div_order = 5`).
 
 [`AlignedRusanovFlux`](@ref) sorts the states by the sign of the weight instead (the per-slot weights
-`dweights`, kept with the divergence cache) on every pair where one of the two particles is below the full order; the rule is
-symmetric in the pair, and elsewhere the flux is the plain one. The coefficient becomes
+`dweights`, kept with the divergence cache) on every pair where one of the two particles is below the full order, and on
+every pair of a first-order scheme (order 1, where no particle can be below the full order: with the geometric sorting its
+degree-1 weights on a jittered cloud with `R = 2.5Δx` give about 2 % negative first-order coefficients, down to −0.57). The
+rule is symmetric in the pair, and elsewhere the flux is the plain one. The signs are those of the divergence fit in use:
+degree `q(div_order)` with a fixed `div_order` (degree 1 for `div_order = 2`); with `div_order = 0` the cache, and so the
+signs, belong to the full-order fit while lowered particles fit with a lower degree, and the guarantee below does not apply. The coefficient becomes
 `½ Σ_d s_d |c_ij,d| ≥ ½ |c_ij·f'|`, so the first-order update is local-extremum-diminishing for any zero-sum
 weights. With it the divergence degree can stay uniform (`div_order = max_order`) while MOOD lowers the
 reconstruction only: no mixed-degree pairs, and the mass error is the integrated truncation error,
