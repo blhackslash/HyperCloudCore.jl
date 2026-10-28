@@ -1,6 +1,6 @@
 name = "HyperCloudCore"
 uuid = "61b85536-db47-4754-9d50-4ccb1001a5ed"
-version = "0.7.6"
+version = "0.7.7"
 authors = ["Pascal Jung <dev@blackslash.win>"]
 
 [deps]
