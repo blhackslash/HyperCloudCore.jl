@@ -172,7 +172,7 @@ end
 
 The derivative weights of the full-degree divergence fit for every neighbour slot (`dweights`), from the
 current divergence cache: rows 2..D+1 of `inv(N) w_j p̃_j`, scaled to physical units. Zero where the cache
-has no factorisation for the particle (such a particle takes the dynamic fit and the geometric dissipation).
+has no factorisation for the particle (such a particle takes a dynamic fit, whose weights are solved per slot).
 Called by `prepare_geometry!` when the cache was refreshed, for streamed schemes and the aligned flux.
 """
 function update_divergence_weights!(muscl::MUSCL{D, M, T}, pg::ParticleGrid{D, M, T}) where {D, M, T}
@@ -204,11 +204,12 @@ end
 end
 
 # The direction that sorts the interface states of slot `k`: the distance for every flux but
-# `AlignedRusanovFlux`, which uses the signs of the divergence weights on the pairs where either particle is
-# below the full order, on every pair of a first-order scheme (K = 1), and where the weights are available (`below`). The rule is symmetric in the pair, so both
-# sides evaluate the same flux; elsewhere the geometric sorting keeps the error constant of the plain flux.
-@inline _dissipation_direction(::NumericalFluxFunction, dweights, k, dist_k, below::Bool) = dist_k
-@inline _dissipation_direction(::AlignedRusanovFlux, dweights, k, dist_k, below::Bool) = below ? sign.(@inbounds dweights[k]) : dist_k
+# `AlignedRusanovFlux`, which uses the signs of `w_k`, the divergence weights the slot's flux difference is
+# multiplied with, on the pairs where either particle is below the full order and on every pair of a
+# first-order scheme (K = 1) (`below`). The rule is symmetric in the pair, so both sides evaluate the same
+# flux; elsewhere the geometric sorting keeps the error constant of the plain flux.
+@inline _dissipation_direction(::NumericalFluxFunction, w_k, dist_k, below::Bool) = dist_k
+@inline _dissipation_direction(::AlignedRusanovFlux, w_k, dist_k, below::Bool) = below ? sign.(w_k) : dist_k
 
 function update_size!(muscl::MUSCL{D, M, T, B_LEN, MAX_ORDER}, N_particles::Int) where {D, M, T, B_LEN, MAX_ORDER}
     ensure_capacity!(muscl.gradients, N_particles)
@@ -272,18 +273,17 @@ function (muscl::MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER})(
     eff_order_i = pg.core.particle_orders[i]
     div_idx = _divergence_index(Val(DIV_ORDER), Val(D), eff_order_i, length(nb_slice))
     wd      = muscl.div_weights
-    okw     = is_current(wd, pg) && wd.ok[i]                                   # cache (and weights) usable here
-    cached  = okw && div_idx == _full_div_idx(Val(MAX_ORDER), Val(DIV_ORDER), Val(D))
+    cached  = is_current(wd, pg) && wd.ok[i] && div_idx == _full_div_idx(Val(MAX_ORDER), Val(DIV_ORDER), Val(D))
 
-    div = if _streamed(muscl)
-        if cached
-            _flux_loop(muscl, eq, i, f_i, nb_slice, pg, U, ib, strategy, eff_order_i, okw, CachedWeights())
-        else
-            _dispatch_streamed_dynamic(div_idx, Val(_full_div_idx(Val(MAX_ORDER), Val(DIV_ORDER), Val(D))),
-                                       muscl, eq, i, f_i, nb_slice, pg, U, ib, strategy, eff_order_i, okw)
-        end
+    # Without the cached fit the aligned flux needs the weights of the dynamic fit in every slot, so it takes the
+    # per-slot path also when the scheme is buffered (same fit as `compute_dynamic_divergence`).
+    div = if _streamed(muscl) && cached
+        _flux_loop(muscl, eq, i, f_i, nb_slice, pg, U, ib, strategy, eff_order_i, CachedWeights())
+    elseif (_streamed(muscl) || _aligned_dissipation(muscl.flux)) && !cached
+        _dispatch_streamed_dynamic(div_idx, Val(_full_div_idx(Val(MAX_ORDER), Val(DIV_ORDER), Val(D))),
+                                   muscl, eq, i, f_i, nb_slice, pg, U, ib, strategy, eff_order_i)
     else
-        _flux_loop(muscl, eq, i, f_i, nb_slice, pg, U, ib, strategy, eff_order_i, okw, BufferedFlux())
+        _flux_loop(muscl, eq, i, f_i, nb_slice, pg, U, ib, strategy, eff_order_i, BufferedFlux())
         if cached
             apply_weights_divergence(wd, i, nb_slice, get_distances(pg), get_weights(pg), ib.df_flux)   # cached full-order fit
         else
@@ -297,7 +297,9 @@ end
 
 # What the flux loop does with the flux difference ΔF_ij = F*_ij - F_i + jump of a slot: write it to the
 # per-slot buffer for the fit afterwards, or accumulate the divergence Σ_j c_ij · ΔF_ij with per-slot weights
-# (cached, or solved from the Cholesky factor of the particle's own moment matrix of degree q).
+# c_ij (cached, or solved from the Cholesky factor of the particle's own moment matrix of degree q).
+# `_slot_weight` gives c_ij once per slot, for the contraction and the aligned orientation. A buffered slot
+# is only aligned on the cached fit (the dynamic one takes the per-slot path), whose weights are `dweights`.
 struct BufferedFlux end
 struct CachedWeights end
 struct DynamicWeights{q, C, T}
@@ -306,16 +308,19 @@ struct DynamicWeights{q, C, T}
 end
 DynamicWeights{q}(chol::C, invL::T) where {q, C, T} = DynamicWeights{q, C, T}(chol, invL)
 
-@inline function _consume(::BufferedFlux, muscl, ib, k, dist_k, pg, dF::Flux{D, M, T}) where {D, M, T}
+@inline _slot_weight(::BufferedFlux, muscl::MUSCL{D, M, T}, k, dist_k, pg) where {D, M, T} =
+    _aligned_dissipation(muscl.flux) ? (@inbounds muscl.dweights[k]) : zero(Space{D, T})
+@inline _slot_weight(::CachedWeights, muscl, k, dist_k, pg) = @inbounds muscl.dweights[k]
+@inline function _slot_weight(dw::DynamicWeights{q}, muscl::MUSCL{D, M, T}, k, dist_k, pg) where {q, D, M, T}
+    c = dw.chol \ ((@inbounds get_weights(pg)[k]) * _intercept_basis(Val(q), dist_k * dw.invL))
+    return Space{D, T}(ntuple(d -> c[d + 1], Val(D))) * dw.invL
+end
+
+@inline function _consume(::BufferedFlux, ib, k, w_k, dF::Flux{D, M, T}) where {D, M, T}
     @inbounds ib.df_flux[k] = dF
     return zero(State{M, T})
 end
-@inline _consume(::CachedWeights, muscl, ib, k, dist_k, pg, dF::Flux) = _contract((@inbounds muscl.dweights[k]), dF)
-@inline function _consume(dw::DynamicWeights{q}, muscl, ib, k, dist_k, pg, dF::Flux{D, M, T}) where {q, D, M, T}
-    c = dw.chol \ ((@inbounds get_weights(pg)[k]) * _intercept_basis(Val(q), dist_k * dw.invL))
-    w = Space{D, T}(ntuple(d -> c[d + 1], Val(D))) * dw.invL
-    return _contract(w, dF)
-end
+@inline _consume(::Union{CachedWeights, DynamicWeights}, ib, k, w_k, dF::Flux) = _contract(w_k, dF)
 @inline function _contract(w::Space{D, T}, F::Flux{D, M, T}) where {D, M, T}
     acc = zero(State{M, T})
     for d in 1:D
@@ -328,7 +333,7 @@ end
 # jump per slot, then `_consume` for the flux difference. Returns the accumulated divergence (zero when the
 # flux differences are buffered).
 @inline function _flux_loop(muscl::MUSCL{D, M, T, B_LEN, MAX_ORDER}, eq, i, f_i::State{M, T}, nb_slice, pg, U, ib, strategy,
-                            eff_order_i, okw::Bool, how) where {D, M, T, B_LEN, MAX_ORDER}
+                            eff_order_i, how) where {D, M, T, B_LEN, MAX_ORDER}
     grad_i     = muscl.gradients[i]
     F_i        = flux(eq, f_i)
     dist_all   = get_distances(pg)
@@ -358,23 +363,25 @@ end
         F_ij = flux(eq, fij)
         F_ji = flux(eq, fji)
 
-        below = okw && (MAX_ORDER == 1 || eff_order_i < MAX_ORDER || orders[j_idx] < MAX_ORDER)   # K = 1: every edge
-        f_L, f_R, F_L, F_R = sort_flux(fij, fji, F_ij, F_ji, _dissipation_direction(muscl.flux, muscl.dweights, global_idx, dist_k, below))
+        w_k   = _slot_weight(how, muscl, global_idx, dist_k, pg)
+        below = MAX_ORDER == 1 || eff_order_i < MAX_ORDER || orders[j_idx] < MAX_ORDER   # K = 1: every edge
+        f_L, f_R, F_L, F_R = sort_flux(fij, fji, F_ij, F_ji, _dissipation_direction(muscl.flux, w_k, dist_k, below))
         F_num   = muscl.flux(f_L, f_R, F_L, F_R, eq)
         nc_jump = evaluate_nc_jump(eq, f_L, f_R, dist_k)
 
-        acc += _consume(how, muscl, ib, global_idx, dist_k, pg, F_num - F_i + nc_jump)
+        acc += _consume(how, ib, global_idx, w_k, F_num - F_i + nc_jump)
     end
     return acc
 end
 
 # Streamed divergence of a particle whose fit is not the cached full-degree one (a reduced order, or no
-# factorisation in the cache): the moment matrix of its degree is assembled and factorised once, and every
-# slot's weights are solved inside the flux loop. The per-slot buffer is never used.
-@generated function _dispatch_streamed_dynamic(div_idx::Int, ::Val{IMAX}, muscl, eq, i, f_i, nb_slice, pg, U, ib, strategy, eff_order_i, okw) where {IMAX}
-    expr = :(_streamed_dynamic(Val($(IMAX - 1)), muscl, eq, i, f_i, nb_slice, pg, U, ib, strategy, eff_order_i, okw))
+# factorisation in the cache), for streamed schemes and the aligned flux: the moment matrix of its degree is
+# assembled and factorised once, and every slot's weights are solved inside the flux loop. The per-slot buffer
+# is never used. A singular moment matrix gives a zero divergence, as in `compute_dynamic_divergence`.
+@generated function _dispatch_streamed_dynamic(div_idx::Int, ::Val{IMAX}, muscl, eq, i, f_i, nb_slice, pg, U, ib, strategy, eff_order_i) where {IMAX}
+    expr = :(_streamed_dynamic(Val($(IMAX - 1)), muscl, eq, i, f_i, nb_slice, pg, U, ib, strategy, eff_order_i))
     for idx in (IMAX - 1):-1:2
-        expr = :(div_idx == $idx ? _streamed_dynamic(Val($(idx - 1)), muscl, eq, i, f_i, nb_slice, pg, U, ib, strategy, eff_order_i, okw) : $expr)
+        expr = :(div_idx == $idx ? _streamed_dynamic(Val($(idx - 1)), muscl, eq, i, f_i, nb_slice, pg, U, ib, strategy, eff_order_i) : $expr)
     end
     return expr
 end
@@ -383,7 +390,7 @@ end
     _streamed_dynamic_b(basis_length(Val(D), Val(q)), Val(q), muscl, args...)
 
 @inline function _streamed_dynamic_b(::Val{B0}, ::Val{q}, muscl::MUSCL{D, M, T}, eq, i, f_i, nb_slice, pg, U, ib, strategy,
-                                     eff_order_i, okw) where {B0, q, D, M, T}
+                                     eff_order_i) where {B0, q, D, M, T}
     B    = B0 + 1
     invL = one(T) / minimum(pg.meta.dx)
     dists, wts = get_distances(pg), get_weights(pg)
@@ -394,7 +401,7 @@ end
     end
     C, ok = _cholesky_moment(N_s)
     ok || return zero(State{M, T})
-    return _flux_loop(muscl, eq, i, f_i, nb_slice, pg, U, ib, strategy, eff_order_i, okw, DynamicWeights{q}(C, invL))
+    return _flux_loop(muscl, eq, i, f_i, nb_slice, pg, U, ib, strategy, eff_order_i, DynamicWeights{q}(C, invL))
 end
 
 include("MUSCL_hooks.jl")
