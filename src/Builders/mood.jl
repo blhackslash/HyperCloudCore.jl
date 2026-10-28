@@ -1,10 +1,14 @@
 # --- MOOD Criteria & Strategies ---
+"Default `:plateau` of the `:U2` criterion (fraction of the global range below which a component is a plateau)."
+const U2_PLATEAU_DEFAULT = 1e-3
+
 """
     build_mood_criterion(::Val{name}, mood_conf, context) -> MOODCriterion
 
 The criterion of [`build_mood`](@ref) for `:criterion = name`: `:none` ([`NoMOOD`](@ref)), `:only`
 ([`OnlyMOOD`](@ref)), `:U1` ([`MOODu1`](@ref)) or `:U2` ([`MOODu2`](@ref)). `:U1` and `:U2` require
 `:delta_relax`, which is multiplied by the cell volume `prod(context[:Grid].meta.dx)`, so they need the grid.
+`:U2` also reads `:plateau` (default `1e-3`) and `:curvature_ratio` (default `0.5`), see [`MOODu2`](@ref).
 """
 function build_mood_criterion end
 
@@ -31,7 +35,8 @@ function build_mood_criterion(::Val{:U2}, conf::Dict, context::Dict)
     vol_dx = prod(pg.meta.dx)
     delta_relax = vol_dx * T(conf[:delta_relax]) 
     
-    return MOODu2(delta_relax)
+    return MOODu2(delta_relax; plateau = T(get(conf, :plateau, U2_PLATEAU_DEFAULT)),
+                  ratio = T(get(conf, :curvature_ratio, 0.5)))
 end
 
 """

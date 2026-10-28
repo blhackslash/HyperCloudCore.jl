@@ -104,14 +104,31 @@ struct MOODu1{T} <: MOODCriterion
 end
 
 """
-    MOODu2{T} <: MOODCriterion
+    MOODu2(d; plateau = 1e-3, ratio = 1/2) <: MOODCriterion
 
-`MOODu1` plus a smooth-extremum override based on the curvature coefficients cached by MUSCL
-(consistency order ≥ 3). Falls back to `MOODu1` for interpolators without gradients.
+`MOODu1` plus a smooth-extremum override (Diot, Loubère, Clain) for the components that violate the DMP:
+- **plateau**: a component that varies across the stencil by less than `plateau` times its global range
+  (`max − min` over the cloud at the previous stage) is accepted. Such a component carries no structure the DMP
+  could protect at the scale of the stencil; what violates it there is the truncation error of the update
+  (e.g. the density in the tail of a vortex, driven by the momentum flux). Needs no curvature, so it also holds
+  below order 3. `0` disables it. The default `1e-3` keeps a smooth vortex at full order from about 20 particles
+  per core radius on, and bounds discontinuities to about `1e-3` of the jump.
+- **smooth extremum** (curvature coefficients cached by MUSCL, consistency order ≥ 3): in every direction the
+  curvature has one sign over the stencil (`(c_min h²)(c_max h²) > −d²`) and comparable magnitudes among the
+  nearest neighbours, within `1.5h` (`|c|_min ≥ ratio |c|_max`, Diot's test; `ratio = 0` disables it), or it is
+  negligible (`|c|_max h² < d`). The magnitudes are compared over the nearest neighbours only because over a
+  whole meshfree stencil (radius `2.5h` and more) the curvature of a smooth solution changes by more than a factor
+  2 wherever it decays on a few spacings; the test is still needed: next to a jump the curvature collapses from
+  large to zero between neighbours, which the sign test does not see. Curvatures are compared as the
+  variation `c h²` they cause over one particle spacing `h`, so `d` keeps the units of the state.
+Falls back to `MOODu1` for interpolators without gradients.
 """
 struct MOODu2{T} <: MOODCriterion
     d::T
+    plateau::T
+    ratio::T
 end
+MOODu2(d::T; plateau::Real = T(1e-3), ratio::Real = T(0.5)) where {T <: Real} = MOODu2{T}(d, T(plateau), T(ratio))
 
 "Criterion that flags every particle (testing: one step drives all orders to 1)."
 struct OnlyMOOD <: MOODCriterion end
@@ -162,12 +179,44 @@ function (m::MOOD{<:MOODStrategy, MOODu1{T}})(
     return _dmp_fails(m.criterion.d, rho_i, nb_slice, newRho, neighbour_states(U_prev, pg))
 end
 
-function (m::MOOD{<:MOODStrategy, MOODu2{T}})(
+(m::MOOD{<:MOODStrategy, MOODu2{T}})(
     g::DivergenceInterpolator, p_idx::Int, rho_i::State{M, T}, nb_slice::OrdinalRange{Int, Int},
     newRho::State{M, T}, pg::ParticleGrid{D, M, T}, U_prev::AbstractVector{State{M, T}}
-) where {D, M, T}
-    δ = m.criterion.d
-    _dmp_fails(δ, rho_i, nb_slice, newRho, neighbour_states(U_prev, pg)) || return false
+) where {D, M, T} = _u2_fails(m.criterion, g, p_idx, rho_i, nb_slice, newRho, pg, U_prev, nothing)
+
+"""
+    _criterion_flags(mood, interp, p, rho_i, nb_slice, cand, pg, U_prev, range) -> Bool
+
+What the MOOD check calls: the criterion functor, except that `MOODu2` also receives `range`, the global range
+`max − min` per component of `U_prev` (`nothing` if its plateau test is off), see `_global_range`.
+"""
+@inline _criterion_flags(mood::MOOD, interp, p, rho_i, nb_slice, cand, pg, U_prev, range) =
+    mood(interp, p, rho_i, nb_slice, cand, pg, U_prev)
+@inline _criterion_flags(mood::MOOD{<:MOODStrategy, <:MOODu2}, interp, p, rho_i, nb_slice, cand, pg, U_prev, range) =
+    _u2_fails(mood.criterion, interp, p, rho_i, nb_slice, cand, pg, U_prev, range)
+
+"Global range `max − min` per component of `U[1:N]` for the plateau test of `MOODu2` (a reduction; `nothing` if off)."
+_global_range(::MOODCriterion, U, N) = nothing
+function _global_range(c::MOODu2, U::AbstractVector{State{M, T}}, N::Int) where {M, T}
+    c.plateau > zero(c.plateau) || return nothing
+    V = view(U, 1:N)
+    lo = mapreduce(identity, (a, b) -> min.(a, b), V)
+    hi = mapreduce(identity, (a, b) -> max.(a, b), V)
+    return hi - lo
+end
+
+@inline function _u2_fails(c::MOODu2{T}, g::DivergenceInterpolator, p_idx::Int, rho_i::State{M, T},
+                           nb_slice::OrdinalRange{Int, Int}, newRho::State{M, T}, pg::ParticleGrid{D, M, T},
+                           U_prev::AbstractVector{State{M, T}}, range) where {D, M, T}
+    δ = c.d
+    nbs = neighbour_states(U_prev, pg)
+    minU, maxU = findLocalExtrema(rho_i, nb_slice, nbs)
+    # Components that violate the DMP (as in `_dmp_fails`) and are not a plateau
+    violating = ntuple(Val(M)) do mm
+        abs(maxU[mm] - minU[mm]) >= δ^3 && (newRho[mm] < minU[mm] - δ || newRho[mm] > maxU[mm] + δ) &&
+            !(range !== nothing && maxU[mm] - minU[mm] < c.plateau * range[mm])
+    end
+    any(violating) || return false
 
     # The curvature override needs cached gradients with a degree-2 reconstruction, i.e. a scheme
     # that caches them (trait) at consistency order ≥ 3. Otherwise behave like MOODu1.
@@ -178,18 +227,38 @@ function (m::MOOD{<:MOODStrategy, MOODu2{T}})(
 
     grad_vec  = cached_gradients(g)
     neighbors = pg.neighbor.indices
+    dists     = get_distances(pg)
+    h  = minimum(pg.meta.dx)
+    h2 = h^2
+    near_sq = (_U2_RATIO_RADIUS * h)^2
     for d in 1:D
         curve_idx = D + d
         c_i = grad_vec[p_idx][curve_idx]
-        mini, maxi, minAbs, maxAbs = findLocalExtremaAbs(c_i, curve_idx, nb_slice, neighbors, grad_vec)
+        # Sign over the whole stencil; magnitudes over the nearest neighbours only (see `_U2_RATIO_RADIUS`)
+        mini, maxi = c_i, c_i
+        minAbs = abs.(c_i); maxAbs = minAbs
+        @inbounds for k in nb_slice
+            c_j = grad_vec[neighbors[k]][curve_idx]
+            mini = math_min.(mini, c_j); maxi = math_max.(maxi, c_j)
+            if sum(abs2, dists[k]) <= near_sq
+                minAbs = math_min.(minAbs, abs.(c_j)); maxAbs = math_max.(maxAbs, abs.(c_j))
+            end
+        end
         for mm in 1:M
-            ratio = maxAbs[mm] < T(1e-12) ? one(T) : minAbs[mm] / maxAbs[mm]
-            valid = (mini[mm] * maxi[mm] > -δ) && (ratio >= T(0.5) || maxAbs[mm] < δ)
-            valid || return true
+            violating[mm] || continue                       # only the components that violate the DMP
+            max(abs(mini[mm]), abs(maxi[mm])) * h2 < δ && continue   # negligible curvature: variation below δ per spacing
+            same_sign  = (mini[mm] * h2) * (maxi[mm] * h2) > -δ^2
+            comparable = c.ratio <= zero(T) || minAbs[mm] >= c.ratio * maxAbs[mm]
+            (same_sign && comparable) || return true
         end
     end
     return false
 end
+
+# Radius (in particle spacings) of the neighbours whose curvature magnitudes `MOODu2` compares: the face neighbours of a
+# lattice, for which Diot's ratio test was designed. Over a whole meshfree stencil (radius 2.5h and more) the
+# curvature of a smooth solution changes by more than a factor 2 wherever it decays on a few spacings.
+const _U2_RATIO_RADIUS = 1.5
 
 # =========================================================================
 # WORK BUFFERS + DETECTION
@@ -202,10 +271,11 @@ end
 
 # Kernel body of the candidate check (see Backend.jl): a candidate is flagged if it is not admissible
 # (PAD) or fails the criterion.
-@inline function _mood_flag!(p, mood, interp, pg, rho_prev, rho_cand, nb_slices, is_boundary, dirty, triggered, full, eq)
+@inline function _mood_flag!(p, mood, interp, pg, rho_prev, rho_cand, nb_slices, is_boundary, dirty, triggered, full, eq, range)
     (is_boundary[p] || !(full || dirty[p])) && return nothing
     cand = rho_cand[p]
-    (!_admissible(eq, cand) || mood(interp, p, rho_prev[p], nb_slices[p], cand, pg, rho_prev)) && (triggered[p] = true)
+    (!_admissible(eq, cand) || _criterion_flags(mood, interp, p, rho_prev[p], nb_slices[p], cand, pg, rho_prev, range)) &&
+        (triggered[p] = true)
     return nothing
 end
 
@@ -303,9 +373,10 @@ function detect_and_drop!(
     fill!(view(triggered, 1:N), false)
     fill!(view(changed, 1:N), false)
 
-    # 1. Candidate check (per-particle writes only)
+    # 1. Candidate check (per-particle writes only); the global range feeds the plateau test of MOODu2
+    range = _global_range(mood.criterion, rho_prev, N)
     foreach_particle(_mood_flag!, get_backend(), N,
-        (mood, interp, pg, rho_prev, rho_cand, nb_slices, is_boundary, dirty, triggered, full, eq))
+        (mood, interp, pg, rho_prev, rho_cand, nb_slices, is_boundary, dirty, triggered, full, eq, range))
 
     # 2. Decrement. Particles already at order 1 are un-flagged so they don't force.
     foreach_particle(_mood_drop!, get_backend(), N, (orders, triggered, changed, triggered_step))
