@@ -277,9 +277,9 @@ function (muscl::MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER})(
 
     # Without the cached fit the aligned flux needs the weights of the dynamic fit in every slot, so it takes the
     # per-slot path also when the scheme is buffered (same fit as `compute_dynamic_divergence`).
-    div = if cached && _streamed(muscl)
+    div = if _streamed(muscl) && cached
         _flux_loop(muscl, eq, i, f_i, nb_slice, pg, U, ib, strategy, eff_order_i, CachedWeights())
-    elseif !cached && (_streamed(muscl) || _aligned_dissipation(muscl.flux))
+    elseif (_streamed(muscl) || _aligned_dissipation(muscl.flux)) && !cached
         _dispatch_streamed_dynamic(div_idx, Val(_full_div_idx(Val(MAX_ORDER), Val(DIV_ORDER), Val(D))),
                                    muscl, eq, i, f_i, nb_slice, pg, U, ib, strategy, eff_order_i)
     else
