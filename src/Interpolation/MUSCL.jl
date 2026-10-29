@@ -60,6 +60,7 @@ A divergence interpolator executing MUSCL-type interface reconstruction and flux
 - `flux`: The numerical flux function used to resolve interface states.
 - `div_order`: Target order for the final divergence calculation (defaults to `0`, adapting to the maximum available order). The divergence is fitted with degree `order - 1` for even and degree `order` for odd orders (see `_div_idx`), with a constant term so that its weights sum to zero.
 - `streamed` (keyword, default `false`): accumulate the divergence in the flux pass with cached per-slot weights instead of buffering the flux differences and fitting them afterwards; same numbers up to round-off, no per-slot flux buffer, and the per-neighbour cost no longer grows with the number of fit terms (see [Streamed divergence](@ref)).
+- `moment_correction` (keyword, default `false`): first-order schemes (`max_order = 1`) only. Adds the non-negative dissipation `Σ_d s_ij,d e^d_ij (U_j - U_i)` whose weights cancel the first moment of the Rusanov dissipation, so that the first-order scheme is consistent on irregular clouds (see [Moment-corrected first-order dissipation](@ref)). Ignored for higher orders.
 
 # Callable / Functor
 
@@ -79,13 +80,15 @@ Computes the divergence of the flux at particle `i`. Note that `MUSCL` relies on
 - `gradients`: A pre-allocated vector storing the reconstructed, limited spatial gradients for all particles.
 - `grad_weights`, `div_weights`: cached inverse MLS moment matrices (`MLSWeights`) of the full-order reconstruction and divergence fits, refreshed by `prepare_geometry!` when the grid geometry changes.
 - `dweights`: per-slot derivative weights of the full-degree divergence fit, used by the streamed divergence and, through their signs, by [`AlignedRusanovFlux`](@ref) (refreshed with the divergence cache; empty if neither is used).
+- `mweights`: per-slot moment-correction weights `e^d_ij ≥ 0` of a first-order scheme with `moment_correction` (refreshed with `dweights`; empty otherwise).
 - `streamed`: `Val(true)` if the flux pass accumulates the divergence with `dweights` instead of writing the flux differences to the per-slot buffer and fitting them afterwards (keyword `streamed` of the constructor, see [Streamed divergence](@ref)).
+- `moment`: `Val(true)` for `moment_correction`.
 
 The per-particle caches are `Growable` buffers whose array type is the `storage` keyword of the constructor
 (`Array` by default; `ROCArray` etc. for a grid built with `device_grid`).
 """
 struct MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER, INTERPS, L, NF, VG <: AbstractVector{SVector{B_LEN, State{M, T}}}, WG, WD,
-             VS <: AbstractVector{Space{D, T}}, SF <: Val} <: DivergenceInterpolator
+             VS <: AbstractVector{Space{D, T}}, SF <: Val, MC <: Val} <: DivergenceInterpolator
     interpolators::INTERPS
     limiter::L
     flux::NF
@@ -100,9 +103,14 @@ struct MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER, INTERPS, L, NF, VG <: Abstrac
     # `AlignedRusanovFlux` sorts by their signs. Filled with the divergence cache (`update_divergence_weights!`),
     # empty when neither is used.
     dweights::VS
+    # Moment-correction weights e^d_ij ≥ 0 per slot and axis (first-order schemes with `moment_correction`):
+    # Σ_j e^d_ij x_ij = -Σ_j g^d_ij x_ij for the dissipation coefficients g^d_ij of the flux, so the
+    # dissipation Σ_j Σ_d s_ij,d (g^d_ij + e^d_ij)(U_j - U_i) has no first moment. Empty otherwise.
+    mweights::VS
     # `Val(true)`: the flux pass accumulates the divergence with the per-slot weights (no per-slot flux
     # buffer, no fit after the loop); `Val(false)`: the flux differences are written per slot and fitted.
     streamed::SF
+    moment::MC
 end
 
 # Interpolator-table entry the divergence uses at full order (see `_resolve_div_idx`).
@@ -114,7 +122,7 @@ end
 function MUSCL(
     ::Type{T}, dimension::Int, M::Int, max_order::Int,
     limiter, flux;
-    div_order::Int=0, storage::Type{AT} = Array, streamed::Bool = false
+    div_order::Int=0, storage::Type{AT} = Array, streamed::Bool = false, moment_correction::Bool = false
 ) where {T, AT <: AbstractArray}
     @assert max_order >= 1 "MUSCL must have a maximum order of at least 1."
     @assert div_order >= 0 "Divergence order only supports 0 (adaptive) or positive values!"
@@ -141,16 +149,22 @@ function MUSCL(
     div_weights  = MLSWeights{typeof(basis_length(Val(dimension), Val(div_degree))).parameters[1] + 1, div_degree, T}(AT; intercept = true)
 
     return MUSCL{dimension, M, T, B_LEN, max_order, div_order}(interps, limiter, flux, Growable{SVector{B_LEN, State{M, T}}}(AT),
-                                                              grad_weights, div_weights, Growable{Space{dimension, T}}(AT), Val(streamed))
+                                                              grad_weights, div_weights, Growable{Space{dimension, T}}(AT),
+                                                              Growable{Space{dimension, T}}(AT), Val(streamed), Val(moment_correction))
 end
 
 # Infers the storage types (host vectors, or device views when adapted for a kernel).
-MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER}(interps, limiter, flux, gradients, grad_weights, div_weights, dweights, streamed) where {D, M, T, B_LEN, MAX_ORDER, DIV_ORDER} =
+MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER}(interps, limiter, flux, gradients, grad_weights, div_weights, dweights, mweights, streamed, moment) where {D, M, T, B_LEN, MAX_ORDER, DIV_ORDER} =
     MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER, typeof(interps), typeof(limiter), typeof(flux), typeof(gradients),
-          typeof(grad_weights), typeof(div_weights), typeof(dweights), typeof(streamed)}(interps, limiter, flux, gradients, grad_weights, div_weights, dweights, streamed)
+          typeof(grad_weights), typeof(div_weights), typeof(dweights), typeof(streamed), typeof(moment)}(
+        interps, limiter, flux, gradients, grad_weights, div_weights, dweights, mweights, streamed, moment)
 
 "`true` if the scheme accumulates its divergence in the flux pass (keyword `streamed`)."
 @inline _streamed(m::MUSCL) = m.streamed isa Val{true}
+
+# `true` for a first-order scheme with `moment_correction` (the correction is not applied at higher orders).
+@inline _moment_active(m::MUSCL{D, M, T, B_LEN, MAX_ORDER}) where {D, M, T, B_LEN, MAX_ORDER} =
+    MAX_ORDER == 1 && m.moment isa Val{true}
 
 # A streamed scheme never touches the per-slot flux buffers of the stepper.
 @inline uses_slot_buffers(m::MUSCL) = !_streamed(m)
@@ -160,9 +174,10 @@ function prepare_geometry!(muscl::MUSCL, pg::ParticleGrid)
     wd = muscl.div_weights
     v0 = wd.version[]
     wd === muscl.grad_weights || update_weights!(wd, pg)
-    if (_streamed(muscl) || _aligned_dissipation(muscl.flux)) &&
+    if (_streamed(muscl) || _aligned_dissipation(muscl.flux) || _moment_active(muscl)) &&
        (v0 != wd.version[] || length(muscl.dweights) < length(pg.neighbor.indices))
         update_divergence_weights!(muscl, pg)
+        _moment_active(muscl) && update_moment_weights!(muscl, pg)
     end
     return nothing
 end
@@ -201,6 +216,112 @@ end
         end
     end
     return nothing
+end
+
+"""
+    update_moment_weights!(muscl::MUSCL, pg::ParticleGrid)
+
+The moment-correction weights `e^d_ij ≥ 0` of a first-order scheme with `moment_correction` (`mweights`),
+from `dweights` and the geometry. The Rusanov dissipation of axis `d` enters particle `i` with the coefficient
+`s_ij,d g^d_ij`, `g^d_ij = |c^d_ij|` for [`AlignedRusanovFlux`](@ref) (`c^d_ij sign(x^d_ij)` for the geometric
+sorting), whose first moment `β^d_i = Σ_j g^d_ij x_ij` does not vanish on an irregular cloud. Per axis,
+`e^d_ij = (x̃_ij · μ)₊` with the `μ` that solves `Σ_j e^d_ij x_ij = -β^d_i` (a convex problem in `D`
+unknowns, semismooth Newton; it has a solution whenever `-β^d_i` lies in the cone of the offsets, e.g. for
+every particle surrounded by its neighbours). Zero for a particle where it has none or without a cached
+factorisation. The weights of a particle are scaled down so that `Σ_j Σ_d e^d_ij ≤ Σ_j Σ_d |c^d_ij|`
+(`_MOMENT_CAP`): at most twice the dissipation, so near-degenerate one-sided stencils at boundaries are only
+partly corrected instead of getting a huge dissipation (interior particles of clouds with jitter up to 0.4
+stay below the cap). Called by `prepare_geometry!` with the divergence weights.
+"""
+function update_moment_weights!(muscl::MUSCL{D, M, T}, pg::ParticleGrid{D, M, T}) where {D, M, T}
+    nb = pg.neighbor
+    ensure_capacity!(muscl.mweights, length(nb.indices))
+    foreach_particle(_mweights_body!, get_backend(), pg.meta.N,
+        (muscl.mweights, muscl.dweights, nb.ranges, nb.distances, _cache_invL(muscl.div_weights), muscl.flux, Val(D)))
+    return nothing
+end
+
+# The dissipation coefficient of axis `d` for divergence weight `c` (without the speed): `sort_flux` puts `i`
+# on the left where the sorting direction is positive, so the Rusanov dissipation enters with `c_d` there and
+# with `-c_d` elsewhere.
+@inline _dissipation_coefficient(flux, c::Space{D, T}, dist::Space{D, T}) where {D, T} =
+    Space{D, T}(ntuple(d -> (_dissipation_direction(flux, c, dist, true)[d] > zero(T) ? c[d] : -c[d]), Val(D)))
+
+# Upper bound of Σ_j Σ_d e^d_ij relative to the dissipation Σ_j Σ_d |c^d_ij| of a particle.
+const _MOMENT_CAP = 1
+
+# Kernel body (see Backend.jl): moment-correction weights of particle `i`, one `D`-dimensional solve per axis.
+@inline function _mweights_body!(i, mweights, dweights, ranges, dists, invL, flux, ::Val{D}) where {D}
+    T  = eltype(eltype(mweights))
+    rg = ranges[i]
+    mus = ntuple(Val(D)) do d
+        b = zero(SVector{D, T})
+        @inbounds for k in rg
+            b += _dissipation_coefficient(flux, dweights[k], dists[k])[d] * (dists[k] * invL)
+        end
+        _moment_mu(-b, rg, dists, invL)
+    end
+    sum_e, sum_g = zero(T), zero(T)
+    @inbounds for k in rg
+        x = dists[k] * invL
+        sum_e += sum(d -> max(zero(T), dot(x, mus[d])), 1:D)
+        sum_g += sum(abs, dweights[k])
+    end
+    scale = sum_e > T(_MOMENT_CAP) * sum_g ? T(_MOMENT_CAP) * sum_g / sum_e : one(T)
+    @inbounds for k in rg
+        x = dists[k] * invL
+        mweights[k] = Space{D, T}(ntuple(d -> scale * max(zero(T), dot(x, mus[d])), Val(D)))
+    end
+    return nothing
+end
+
+# `μ` with Σ_k (x̃_k · μ)₊ x̃_k = b over the scaled offsets of the slots `rg`: the minimiser of the convex
+# Φ(μ) = ½ Σ_k (x̃_k · μ)₊² - b · μ, by Newton steps on the active slots (x̃_k · μ > 0) with backtracking. Φ is
+# bounded below iff b lies in the cone of the offsets; zero (no correction) if no solution is found.
+@inline function _moment_mu(b::SVector{D, T}, rg, dists, invL) where {D, T}
+    nb2 = sum(abs2, b)
+    nb2 > zero(T) || return zero(SVector{D, T})
+    H = zero(SMatrix{D, D, T, D * D})
+    @inbounds for k in rg
+        x = dists[k] * invL
+        H += x * x'
+    end
+    C = cholesky(Symmetric(H), check = false)
+    _pivots_ok(C, H) || return zero(SVector{D, T})
+    μ   = T(2) * (C \ b)                       # about half of the offsets are active
+    tol = sqrt(eps(T))
+    for _ in 1:30
+        H = zero(SMatrix{D, D, T, D * D})
+        g = -b
+        φ = -dot(b, μ)
+        @inbounds for k in rg
+            x = dists[k] * invL
+            t = dot(x, μ)
+            if t > zero(T)
+                H += x * x'
+                g += t * x
+                φ += t * t / 2
+            end
+        end
+        sum(abs2, g) <= tol * tol * nb2 && return μ
+        C = cholesky(Symmetric(H), check = false)
+        _pivots_ok(C, H) || return zero(SVector{D, T})   # no active slot spans the space: no solution here
+        Δ  = C \ g
+        gΔ = dot(g, Δ)
+        λ  = one(T)
+        for _ in 1:40                           # Armijo backtracking on Φ
+            μn = μ - λ * Δ
+            φn = -dot(b, μn)
+            @inbounds for k in rg
+                t = dot(dists[k] * invL, μn)
+                t > zero(T) && (φn += t * t / 2)
+            end
+            φn <= φ - λ * gΔ / 4 && break
+            λ /= 2
+        end
+        μ = μ - λ * Δ
+    end
+    return zero(SVector{D, T})
 end
 
 # The direction that sorts the interface states of slot `k`: the distance for every flux but
@@ -283,13 +404,14 @@ function (muscl::MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER})(
         _dispatch_streamed_dynamic(div_idx, Val(_full_div_idx(Val(MAX_ORDER), Val(DIV_ORDER), Val(D))),
                                    muscl, eq, i, f_i, nb_slice, pg, U, ib, strategy, eff_order_i)
     else
-        _flux_loop(muscl, eq, i, f_i, nb_slice, pg, U, ib, strategy, eff_order_i, BufferedFlux())
-        if cached
+        extra = _flux_loop(muscl, eq, i, f_i, nb_slice, pg, U, ib, strategy, eff_order_i, BufferedFlux())
+        fit = if cached
             apply_weights_divergence(wd, i, nb_slice, get_distances(pg), get_weights(pg), ib.df_flux)   # cached full-order fit
         else
             compute_dynamic_divergence(muscl.interpolators, div_idx, nb_slice, get_distances(pg), get_weights(pg),
                                        ib.df_flux, ib.df_scratch, pg.meta.dx)
         end
+        _moment_active(muscl) ? fit + extra : fit
     end
 
     return T(2.0) * div
@@ -331,7 +453,7 @@ end
 
 # The pass over the neighbours of particle `i`: interface reconstructions, numerical flux and non-conservative
 # jump per slot, then `_consume` for the flux difference. Returns the accumulated divergence (zero when the
-# flux differences are buffered).
+# flux differences are buffered) plus the moment correction of a first-order scheme.
 @inline function _flux_loop(muscl::MUSCL{D, M, T, B_LEN, MAX_ORDER}, eq, i, f_i::State{M, T}, nb_slice, pg, U, ib, strategy,
                             eff_order_i, how) where {D, M, T, B_LEN, MAX_ORDER}
     grad_i     = muscl.gradients[i]
@@ -370,6 +492,11 @@ end
         nc_jump = evaluate_nc_jump(eq, f_L, f_R, dist_k)
 
         acc += _consume(how, ib, global_idx, w_k, F_num - F_i + nc_jump)
+        if _moment_active(muscl)          # first order: -½ Σ_d s_ij,d e^d_ij (U_j - U_i), doubled by the caller
+            e_k  = muscl.mweights[global_idx]
+            s_ij = max_eigenvalues(eq, f_L, f_R)
+            acc -= (T(0.5) * sum(s_ij .* e_k)) * (fji - fij)
+        end
     end
     return acc
 end

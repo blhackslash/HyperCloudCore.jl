@@ -38,8 +38,10 @@ function build_scheme(::Val{:MUSCL}, conf::Dict, context::Dict)
     order = conf[:order]::Int
     div_order = get(conf,:MLS_order,0)::Int
     streamed = get(conf, :streamed, false)::Bool
+    moment_correction = get(conf, :moment_correction, false)::Bool
 
-    return MUSCL(T, D, M, order, limiter, flux; div_order = div_order, storage = storage_type(context), streamed = streamed)
+    return MUSCL(T, D, M, order, limiter, flux; div_order = div_order, storage = storage_type(context), streamed = streamed,
+                 moment_correction = moment_correction)
 end
 
 function build_scheme(::Val{:Upwind}, conf::Dict, context::Dict)

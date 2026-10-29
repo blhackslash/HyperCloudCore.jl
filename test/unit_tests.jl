@@ -343,6 +343,8 @@ end
         ("WENO2 RK2",              () -> WENO(Float64, 1, 1, 2), MOOD(), RK2_SSP_Tableau(Float64), NoGridMover()),
         ("Upwind1 Tiwari RK2",     () -> UpwindDivergence(Float64, 1, 1, 1, :Tiwari, UpwindFlux()), MOOD(), RK2_SSP_Tableau(Float64), NoGridMover()),
         ("MUSCL3 sinusoidal RK2",  () -> MUSCL(Float64, 1, 1, 3, NoLimiter(), RusanovFlux()), MOOD(), RK2_SSP_Tableau(Float64), sinus),
+        ("MUSCL1 moment RK2",      () -> MUSCL(Float64, 1, 1, 1, NoLimiter(), AlignedRusanovFlux(); moment_correction = true), MOOD(), RK2_SSP_Tableau(Float64), NoGridMover()),
+        ("MUSCL1 moment moving",   () -> MUSCL(Float64, 1, 1, 1, NoLimiter(), AlignedRusanovFlux(); moment_correction = true), MOOD(), RK2_SSP_Tableau(Float64), mover),
     ]
     function run_case(backend, make_interp, mood, tab, mv)
         set_backend!(backend)
@@ -975,6 +977,81 @@ end
         mk = () -> MUSCL(Float64, 2, 1, 4, NoLimiter(), AlignedRusanovFlux())
         a = vcat((coefficients(pg, eq2, mk, i) for i in 1:5:pg.meta.N)...)
         @test minimum(a) >= -1e-12
+    end
+end
+
+@testset "Moment-corrected first-order dissipation" begin
+    # The first-order RHS of linear advection is Σ_j a_ij (u_j - u_i) ≈ (Σ_j a_ij x_ij) · ∇u: consistency needs
+    # Σ_j a_ij x_ij = -a for every particle. The Rusanov dissipation adds Σ_d s |c^d_ij| x_ij, which only vanishes
+    # by symmetry; the correction cancels it.
+    function velocity_errors(D, jit, flux; moment, n = D == 1 ? 60 : 16)
+        dx   = 1 / n
+        geom = get_rectangular_domain(Float64, ntuple(_ -> 0.0, D), ntuple(_ -> 1.0, D); is_periodic = true)
+        pg   = ParticleGrid(geom, ntuple(_ -> dx, D), ExponentialWeightFunction(1.0, 2.5dx), 1; randomness = ntuple(_ -> jit * dx, D), rng = MersenneTwister(4))
+        N, nb = pg.meta.N, pg.neighbor
+        a    = D == 1 ? (1.0,) : (1.0, -0.6)
+        eq   = LinearAdvection(ntuple(d -> (a[d],), D), Float64)
+        m    = MUSCL(Float64, D, 1, 1, NoLimiter(), flux; moment_correction = moment)
+        ts   = GeneralRKTimeStepper(eq, m, MOOD(), RK2_SSP_Tableau(Float64))
+        HyperCloudCore.update_size!(ts, N, length(nb.indices), false); HyperCloudCore.update_size!(m, N)
+        fill!(view(pg.core.particle_orders, 1:N), 1)
+        errs, amin = Float64[], Inf
+        for i in 1:(D == 1 ? 1 : 3):N
+            v = zero(Space{D, Float64})
+            for k in nb.ranges[i]
+                j = nb.indices[k]
+                fill!(view(pg.rhos, 1:N), zero(State{1, Float64})); pg.rhos[j] = State{1, Float64}(1.0)
+                HyperCloudCore.compute_explicit_rhs!(ts, eq, pg, ts.K_E_stages[1], ts.K_X_stages[1], pg.rhos, 0.0, true)
+                a_ij = parent(ts.K_E_stages[1])[i][1]
+                v   += a_ij * nb.distances[k]
+                amin = min(amin, a_ij)
+            end
+            push!(errs, maximum(abs, v + Space{D, Float64}(a)))
+        end
+        return errs, amin, m, nb, N
+    end
+    # the slots in use (the neighbour arrays keep spare capacity after the last range)
+    slots(nb, N) = (k for i in 1:N for k in nb.ranges[i])
+    @testset "$(D)-D, jitter $jit, $(nameof(typeof(flux)))" for D in (1, 2), jit in (0.2, 0.4), flux in (AlignedRusanovFlux(), RusanovFlux())
+        e0, _, _, _, _      = velocity_errors(D, jit, flux; moment = false)
+        e1, amin, m, nb, N  = velocity_errors(D, jit, flux; moment = true)
+        @test maximum(e0) > 1e-2                                  # O(1) local inconsistency without the correction
+        @test maximum(e1) < 1e-10                                 # exact first moment with it
+        flux isa AlignedRusanovFlux && @test amin >= -1e-12       # coefficients stay non-negative
+        @test all(k -> all(>=(0), m.mweights[k]), slots(nb, N))
+    end
+
+    @testset "boundaries: capped, finite; Float32" begin
+        for (T, D) in ((Float64, 2), (Float32, 2), (Float64, 1))
+            dx   = T(1 / 20)
+            geom = get_rectangular_domain(T, ntuple(_ -> zero(T), D), ntuple(_ -> one(T), D); is_periodic = false)
+            pg   = ParticleGrid(geom, ntuple(_ -> dx, D), ExponentialWeightFunction(one(T), T(2.5) * dx), 1; randomness = ntuple(_ -> T(0.3) * dx, D), rng = MersenneTwister(3))
+            m    = MUSCL(T, D, 1, 1, NoLimiter(), AlignedRusanovFlux(); moment_correction = true)
+            HyperCloudCore.update_size!(m, pg.meta.N); HyperCloudCore.prepare_geometry!(m, pg)
+            nb   = pg.neighbor
+            @test all(k -> all(isfinite, m.mweights[k]) && all(>=(0), m.mweights[k]), slots(nb, pg.meta.N))
+            @test all(i -> sum(k -> sum(m.mweights[k]), nb.ranges[i]; init = zero(T)) <=
+                           (1 + 10eps(T)) * sum(k -> sum(abs, m.dweights[k]), nb.ranges[i]; init = zero(T)) + 100floatmin(T), 1:pg.meta.N)
+        end
+    end
+
+    @testset "off, higher orders and the builder key" begin
+        pg = make_pg_1d(30); set_ic!(pg, x -> sin(π * x))
+        eq = make_advection_1d()
+        @test length(MUSCL(Float64, 1, 1, 1, NoLimiter(), AlignedRusanovFlux()).mweights) == 0
+        function rhs(m)
+            ts = GeneralRKTimeStepper(eq, m, MOOD(), RK2_SSP_Tableau(Float64))
+            HyperCloudCore.update_size!(ts, pg.meta.N, length(pg.neighbor.indices), false); HyperCloudCore.update_size!(m, pg.meta.N)
+            fill!(view(pg.core.particle_orders, 1:pg.meta.N), 2)
+            HyperCloudCore.compute_explicit_rhs!(ts, eq, pg, ts.K_E_stages[1], ts.K_X_stages[1], pg.rhos, 0.0, true)
+            return copy(view(parent(ts.K_E_stages[1]), 1:pg.meta.N))
+        end
+        # ignored above order 1 (bitwise)
+        @test rhs(MUSCL(Float64, 1, 1, 2, NoLimiter(), AlignedRusanovFlux(); moment_correction = true)) ==
+              rhs(MUSCL(Float64, 1, 1, 2, NoLimiter(), AlignedRusanovFlux()))
+        ctx = Dict{Symbol, Any}(:T => Float64, :D => 1, :M => 1, :Flux => AlignedRusanovFlux(), :Limiter => NoLimiter())
+        @test build_scheme(Dict{Symbol, Any}(:name => :MUSCL, :order => 1, :moment_correction => true), ctx).moment === Val(true)
+        @test build_scheme(Dict{Symbol, Any}(:name => :MUSCL, :order => 1), ctx).moment === Val(false)
     end
 end
 

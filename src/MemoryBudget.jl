@@ -44,7 +44,8 @@ particle_buffers(w::MLSWeights, ::Bool) = (w.inv_moment, w.ok)
 # The two weight caches of a MUSCL scheme are the same object when the degrees coincide: count it once.
 particle_buffers(m::MUSCL, moving::Bool) = (m.gradients, particle_buffers(m.grad_weights, moving)...,
     (m.div_weights === m.grad_weights ? () : particle_buffers(m.div_weights, moving))...)
-slot_buffers(m::MUSCL) = (_streamed(m) || _aligned_dissipation(m.flux)) ? (m.dweights,) : ()
+slot_buffers(m::MUSCL) = _moment_active(m) ? (m.dweights, m.mweights) :
+                         (_streamed(m) || _aligned_dissipation(m.flux)) ? (m.dweights,) : ()
 
 _array_bytes(a::AbstractArray) = length(a) * sizeof(eltype(a))
 _element_bytes(b::AbstractArray) = sizeof(eltype(b))
