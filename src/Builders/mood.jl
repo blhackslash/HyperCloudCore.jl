@@ -6,7 +6,7 @@ const U2_PLATEAU_DEFAULT = 1e-3
     build_mood_criterion(::Val{name}, mood_conf, context) -> MOODCriterion
 
 The criterion of [`build_mood`](@ref) for `:criterion = name`: `:none` ([`NoMOOD`](@ref)), `:only`
-([`OnlyMOOD`](@ref)), `:U1` ([`MOODu1`](@ref)) or `:U2` ([`MOODu2`](@ref)). `:U1` and `:U2` require
+([`OnlyMOOD`](@ref)), `:PAD` ([`MOODPAD`](@ref), admissibility only), `:U1` ([`MOODu1`](@ref)) or `:U2` ([`MOODu2`](@ref)). `:U1` and `:U2` require
 `:delta_relax`, which is multiplied by the cell volume `prod(context[:Grid].meta.dx)`, so they need the grid.
 `:U2` also reads `:plateau` (default `1e-3`) and `:curvature_ratio` (default `0.5`), see [`MOODu2`](@ref).
 """
@@ -15,6 +15,7 @@ function build_mood_criterion end
 build_mood_criterion(name::Val, conf::Dict, context::Dict) = error("Unknown MOOD criterion: $(typeof(name))")
 build_mood_criterion(::Val{:none}, conf::Dict, context::Dict) = NoMOOD()
 build_mood_criterion(::Val{:only}, conf::Dict, context::Dict) = OnlyMOOD()
+build_mood_criterion(::Val{:PAD}, conf::Dict, context::Dict)  = MOODPAD()
 
 function build_mood_criterion(::Val{:U1}, conf::Dict, context::Dict)
     T = real_type(context)

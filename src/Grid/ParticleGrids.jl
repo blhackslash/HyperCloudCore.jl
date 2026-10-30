@@ -285,37 +285,43 @@ end
 
 @inline _get_Lambda(eq, U_i, ::Val{D}) where {D} = Space{D}(ntuple(d -> max_eigenvalue(eq, U_i, d), Val(D)))
 
-@generated function _compute_cfl_coeffs(::Val{D}, ::Val{IO}, ::Val{B_LEN}, nb_slice, dist_vec, w_vec, invL, ::Type{T}) where {D, IO, B_LEN, T}
+@generated function _compute_cfl_coeffs(::Val{D}, ::Val{IO}, ::Val{B_LEN}, nb_slice, dist_vec, w_vec, invL, ::Type{T},
+                                        rhos, indices, eq, Lambda_i) where {D, IO, B_LEN, T}
     quote
         N_s = zero(SMatrix{B_LEN, B_LEN, T, B_LEN * B_LEN})
-        
+
         @inbounds for idx in 1:length(nb_slice)
             k = nb_slice[idx]
             p_s = build_basis(Val(IO), dist_vec[k] * invL)
             N_s += w_vec[k] * (p_s * p_s')
         end
-        
+
         # 1. Cholesky factorisation, regularised only if the stencil is degenerate (`_cholesky_moment`)
         C, ok = _cholesky_moment(N_s)
         if !ok
-            return zero(SVector{D, T})
+            return zero(T)
         end
 
         # 2. Safely invert the moment matrix
         inv_N_s = inv(C)
-        sum_c_local = zero(SVector{D, T})
-        
+        sum_c = zero(T)
+
         @inbounds for idx in 1:length(nb_slice)
             k = nb_slice[idx]
             w = w_vec[k]
             p_s = build_basis(Val(IO), dist_vec[k] * invL)
-            
-            # Accumulate the effective geometric coefficient for the linear spatial derivatives
-            sum_c_local += abs.(_linear_coeffs(inv_N_s, p_s, Val(D)) * w * invL)
+
+            # |c_ij| per axis times the pair speed max(λ_i, λ_j): the coefficient of neighbour j in the
+            # first-order update, so a fast neighbour (a boundary particle of an inflow included) limits dt
+            c = abs.(_linear_coeffs(inv_N_s, p_s, Val(D)) * w * invL)
+            sum_c += dot(c, _pair_speed(Lambda_i, _get_Lambda(eq, rhos[indices[k]], Val(D))))
         end
-        return sum_c_local
+        return sum_c
     end
 end
+
+# The wave speed a pair shares: the larger of the two particles' maximum eigenvalues, per axis.
+@inline _pair_speed(a::SVector{D, T}, b::SVector{D, T}) where {D, T} = max.(a, b)
 
 # MLS coefficients of the D linear basis terms for one neighbour (rows 1:D of inv_N_s times p_s).
 # Static on purpose: it runs inside the CFL kernel (`_cfl_body!`), where an `MVector` accumulator does
@@ -332,13 +338,13 @@ end
 
 # Dispatch on the polynomial DEGREE of the divergence MLS (1..4, 1..3 in 3-D; higher degrees clamp,
 # which slightly over-estimates dt for such schemes).
-@generated function dispatch_cfl(degree::Int, ::Val{D}, nb_slice, dist_vec, w_vec, invL, ::Type{T}) where {D, T}
+@generated function dispatch_cfl(degree::Int, ::Val{D}, nb_slice, dist_vec, w_vec, invL, ::Type{T}, rhos, indices, eq, Lambda) where {D, T}
     MAX_DEG = D == 3 ? 3 : 4          # keep the basis small enough for the inline Cholesky (35 terms at degree 4 in 3-D would not be)
     B = typeof(basis_length(Val(D), Val(MAX_DEG))).parameters[1]
-    expr = :(_compute_cfl_coeffs(Val($D), Val($MAX_DEG), Val($B), nb_slice, dist_vec, w_vec, invL, T))
+    expr = :(_compute_cfl_coeffs(Val($D), Val($MAX_DEG), Val($B), nb_slice, dist_vec, w_vec, invL, T, rhos, indices, eq, Lambda))
     for deg in (MAX_DEG - 1):-1:1
         B = typeof(basis_length(Val(D), Val(deg))).parameters[1]
-        expr = :(degree <= $deg ? _compute_cfl_coeffs(Val($D), Val($deg), Val($B), nb_slice, dist_vec, w_vec, invL, T) : $expr)
+        expr = :(degree <= $deg ? _compute_cfl_coeffs(Val($D), Val($deg), Val($B), nb_slice, dist_vec, w_vec, invL, T, rhos, indices, eq, Lambda) : $expr)
     end
     return expr
 end
@@ -346,44 +352,80 @@ end
 """
     get_time_step(pg::ParticleGrid, eq::HyperbolicPDE, main_grad)
 
-Computes the exact geometric CFL-restricted time step dynamically across the active particle grid.
+The CFL-restricted time step (CFL number 1) over the active particle grid:
+`Δt = min_i 1 / (D Σ_j Σ_d |c_ij,d| max(λ_d(U_i), λ_d(U_j)))`, with `λ_d` from `max_eigenvalue` and `c_ij` the
+first-derivative weights of the divergence fit at particle `i` (degree `_divergence_degree(main_grad)`).
 
 # Details
-- Safely returns infinite time steps for completely empty grids or completely orphaned particles.
-- Evaluates the maximum eigenvalues from the equation system (`_get_Lambda`) against the localized geometric coefficients of the moving least squares (MLS) formulation.
-- Employs a Cholesky factorization of the localized MLS moment matrix to safely invert and extract the effective spatial derivative scales.
+- Every neighbour enters with the pair speed `max(λ_i, λ_j)`, boundary particles included: a fast inflow state
+  limits the step of its interior neighbours before it is inside (the first-order coefficients of a particle
+  are `|c_ij| λ_pair`, so this is the local-extremum-diminishing bound).
+- If the interpolator keeps the per-slot weights of its divergence fit for the current geometry
+  (`_cfl_slot_weights`, a `MUSCL` after its first right-hand side), they are used and no moment matrix is
+  factorised (50–100× cheaper); `cached_weights = false` always assembles and factorises the Taylor fit of
+  degree `_divergence_degree(main_grad)` per particle (`_cfl_body!`), as every call did before. The two differ
+  where the fits differ: for degree-5 (odd-order) divergence fits the weights in use sum to about 1.8× the
+  Taylor fit's, i.e. the cached estimate is that much smaller; for degrees ≤ 3 they agree.
+- Returns `Inf` for an empty grid or for particles without neighbours / without a solvable fit.
 """
-@inline function get_time_step(pg::ParticleGrid{D, M, T}, eq::HyperbolicPDE, main_grad) where {D, M, T}
+@inline function get_time_step(pg::ParticleGrid{D, M, T}, eq::HyperbolicPDE, main_grad; cached_weights::Bool = true) where {D, M, T}
     # 1. Graceful exit for empty grids
     if pg.meta.N == 0
         return T(Inf)
     end
-    
+
     dt_buffer = pg.shared.float_buffer
-    
+
     # Only fill the active view to avoid touching dead memory
     fill!(view(dt_buffer, 1:pg.meta.N), T(Inf))
 
-    w_vec = get_weights(pg)
-    dist_vec = get_distances(pg)
-
-    degree = _divergence_degree(main_grad)
-    invL   = one(T) / minimum(pg.meta.dx)
-    foreach_particle(_cfl_body!, get_backend(), pg.meta.N,
-        (dt_buffer, pg.core.is_boundary, pg.neighbor.ranges, pg.rhos, eq, degree, Val(D), dist_vec, w_vec, invL,
-         T(1e-14), one(T) / D))
+    nb = pg.neighbor
+    sw = cached_weights ? _cfl_slot_weights(main_grad, pg) : nothing
+    if sw === nothing
+        degree = _divergence_degree(main_grad)
+        invL   = one(T) / minimum(pg.meta.dx)
+        foreach_particle(_cfl_body!, get_backend(), pg.meta.N,
+            (dt_buffer, pg.core.is_boundary, nb.ranges, nb.indices, pg.rhos, eq, degree, Val(D), get_distances(pg), get_weights(pg),
+             invL, T(1e-14), one(T) / D))
+    else
+        foreach_particle(_cfl_weights_body!, get_backend(), pg.meta.N,
+            (dt_buffer, pg.core.is_boundary, nb.ranges, nb.indices, pg.rhos, eq, sw, Val(D), T(1e-14), one(T) / D))
+    end
 
     # 2. Provide init=T(Inf) to prevent any future reduction errors
     return minimum(view(dt_buffer, 1:pg.meta.N); init=T(Inf))
 end
-# Kernel body of the CFL estimate (see Backend.jl): geometric coefficient of particle `i`.
-@inline function _cfl_body!(i, dt_buffer, is_boundary, ranges, rhos, eq, degree, valD, dist_vec, w_vec, invL, tol, inv_dim)
+
+"""
+    _cfl_slot_weights(interp, pg) -> AbstractVector{Space} or nothing
+
+The per-slot first-derivative weights of the divergence operator of `interp`, if it keeps them for the
+current geometry of `pg` (a `MUSCL` after `prepare_geometry!`); `nothing` lets `get_time_step` assemble and
+factorise the moment matrices itself.
+"""
+@inline _cfl_slot_weights(interp, pg) = nothing
+
+# Kernel body of the CFL estimate (see Backend.jl): fit and sum of particle `i`.
+@inline function _cfl_body!(i, dt_buffer, is_boundary, ranges, indices, rhos, eq, degree, valD, dist_vec, w_vec, invL, tol, inv_dim)
     is_boundary[i] && return nothing
     nb_slice = ranges[i]
     isempty(nb_slice) && return nothing
-    Lambda    = _get_Lambda(eq, rhos[i], valD)
-    sum_c_vec = dispatch_cfl(degree, valD, nb_slice, dist_vec, w_vec, invL, typeof(invL))
-    sum_c     = dot(Lambda, sum_c_vec)
+    Lambda = _get_Lambda(eq, rhos[i], valD)
+    sum_c  = dispatch_cfl(degree, valD, nb_slice, dist_vec, w_vec, invL, typeof(invL), rhos, indices, eq, Lambda)
+    sum_c > tol && (dt_buffer[i] = inv_dim / sum_c)
+    return nothing
+end
+
+# Kernel body of the CFL estimate with cached per-slot weights: no factorisation, one eigenvalue per slot.
+@inline function _cfl_weights_body!(i, dt_buffer, is_boundary, ranges, indices, rhos, eq, dweights, valD, tol, inv_dim)
+    is_boundary[i] && return nothing
+    nb_slice = ranges[i]
+    isempty(nb_slice) && return nothing
+    Lambda = _get_Lambda(eq, rhos[i], valD)
+    sum_c  = zero(tol)
+    @inbounds for k in nb_slice
+        sum_c += dot(abs.(dweights[k]), _pair_speed(Lambda, _get_Lambda(eq, rhos[indices[k]], valD)))
+    end
     sum_c > tol && (dt_buffer[i] = inv_dim / sum_c)
     return nothing
 end

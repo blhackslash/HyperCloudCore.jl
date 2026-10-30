@@ -10,9 +10,12 @@
 @inline _order_reach(::MUSCL, ::MOODStrategy) = 1
 @inline _order_reach(::MUSCL, ::EPD2) = 2
 
-# --- CFL: the degree of the full-order divergence fit (`_div_idx`) ---
+# --- CFL: the degree of the full-order divergence fit (`_div_idx`), and its per-slot weights when they are
+# current, so that `get_time_step` factorises nothing ---
 @inline _divergence_degree(::MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER}) where {D, M, T, B_LEN, MAX_ORDER, DIV_ORDER} =
     _full_div_idx(Val(MAX_ORDER), Val(DIV_ORDER), Val(D)) - 1
+@inline _cfl_slot_weights(m::MUSCL, pg::ParticleGrid) =
+    (is_current(m.div_weights, pg) && length(m.dweights) >= length(pg.neighbor.indices)) ? m.dweights : nothing
 
 # --- MOODu2: curvature coefficients come from the cached limited gradients ---
 @inline has_cached_gradients(::MUSCL) = true

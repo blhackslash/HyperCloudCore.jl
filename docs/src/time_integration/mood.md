@@ -43,7 +43,7 @@ The design comes from the isentropic vortex ($\beta = 5$, jittered clouds, $\kap
 
 Without cached coefficients, or at order ≤ 2, the smooth-extremum test is not available: there `MOODu2` accepts plateaus only, and a smooth peak is clipped, which costs some accuracy at extrema.
 
-**`OnlyMOOD()`** flags every particle (useful for testing: one step drives everything to order 1). **`NoMOOD`** (via `MOOD()`) never flags.
+**`OnlyMOOD()`** flags every particle (useful for testing: one step drives everything to order 1). **`NoMOOD`** (via `MOOD()`) never flags, and switches the checks off altogether. **`MOODPAD()`** never flags on the solution either, but keeps the admissibility check below active: the choice for schemes with an a priori limiter (e.g. `VenkatakrishnanLimiter`, which is not positivity preserving) that only need the positivity safeguard.
 
 ## Physical admissibility detection (PAD)
 

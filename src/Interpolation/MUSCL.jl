@@ -79,7 +79,7 @@ Computes the divergence of the flux at particle `i`. Note that `MUSCL` relies on
 - `flux`: The associated numerical flux function (`NF`).
 - `gradients`: A pre-allocated vector storing the reconstructed, limited spatial gradients for all particles.
 - `grad_weights`, `div_weights`: cached inverse MLS moment matrices (`MLSWeights`) of the full-order reconstruction and divergence fits, refreshed by `prepare_geometry!` when the grid geometry changes.
-- `dweights`: per-slot derivative weights of the full-degree divergence fit, used by the streamed divergence and, through their signs, by [`AlignedRusanovFlux`](@ref) (refreshed with the divergence cache; empty if neither is used).
+- `dweights`: per-slot derivative weights of the full-degree divergence fit, used by the streamed divergence and, through their signs, by [`AlignedRusanovFlux`](@ref) (refreshed with the divergence cache; `get_time_step` uses them too, so every scheme keeps them).
 - `mweights`: per-slot moment-correction weights `e^d_ij ≥ 0` of a first-order scheme with `moment_correction` (refreshed with `dweights`; empty otherwise).
 - `streamed`: `Val(true)` if the flux pass accumulates the divergence with `dweights` instead of writing the flux differences to the per-slot buffer and fitting them afterwards (keyword `streamed` of the constructor, see [Streamed divergence](@ref)).
 - `moment`: `Val(true)` for `moment_correction`.
@@ -174,8 +174,9 @@ function prepare_geometry!(muscl::MUSCL, pg::ParticleGrid)
     wd = muscl.div_weights
     v0 = wd.version[]
     wd === muscl.grad_weights || update_weights!(wd, pg)
-    if (_streamed(muscl) || _aligned_dissipation(muscl.flux) || _moment_active(muscl)) &&
-       (v0 != wd.version[] || length(muscl.dweights) < length(pg.neighbor.indices))
+    # the per-slot weights serve the streamed divergence, the aligned flux, the moment correction and the
+    # CFL estimate (`_cfl_slot_weights`): kept for every scheme
+    if v0 != wd.version[] || length(muscl.dweights) < length(pg.neighbor.indices)
         update_divergence_weights!(muscl, pg)
         _moment_active(muscl) && update_moment_weights!(muscl, pg)
     end
