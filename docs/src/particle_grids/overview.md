@@ -61,10 +61,10 @@ A particle is never its own neighbour. For moving grids, `refresh_geometry!` rec
 `get_time_step(pg, eq, interp)` returns the time step for CFL number 1:
 
 ```math
-\Delta t = \min_i \frac{1}{D \sum_d \lambda_d(U_i)\, \sum_{j} \lvert c^{(d)}_{ij} \rvert },
+\Delta t = \min_i \frac{1}{D \sum_{j} \sum_d \lvert c^{(d)}_{ij} \rvert\, \max\big(\lambda_d(U_i), \lambda_d(U_j)\big) },
 ```
 
-where $\lambda_d$ is `max_eigenvalue(eq, U_i, d)` and $c^{(d)}_{ij}$ are the weights of the first-derivative operator of the MLS fit at particle $i$. The fit degree is `_divergence_degree(interp)`: the consistency order for Central/WENO/Upwind, and for MUSCL the degree of its divergence fit (order − 1 for even and order for odd orders, see [MUSCL Reconstruction and Limiting](@ref)). Degrees above 4 (3 in 3-D) are clamped. Multiply the result by your CFL number.
+where $\lambda_d$ is `max_eigenvalue(eq, U, d)` and $c^{(d)}_{ij}$ are the weights of the first-derivative operator of the MLS fit at particle $i$. Every neighbour enters with the pair speed, boundary particles included, so a fast inflow state limits the step of its interior neighbours before it is inside; $\lvert c_{ij}\rvert \max(\lambda_i, \lambda_j)$ is the coefficient of neighbour $j$ in the first-order update, which makes this the local-extremum-diminishing bound. A `MUSCL` scheme whose divergence cache is current (after its first right-hand side) supplies the per-slot weights of its divergence fit and no moment matrix is factorised; otherwise the fit is assembled per particle. The fit degree is `_divergence_degree(interp)`: the consistency order for Central/WENO/Upwind, and for MUSCL the degree of its divergence fit (order − 1 for even and order for odd orders, see [MUSCL Reconstruction and Limiting](@ref)). Degrees above 4 (3 in 3-D) are clamped. Multiply the result by your CFL number.
 
 ### What the CFL number means on a point cloud
 

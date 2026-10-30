@@ -1,4 +1,4 @@
-export MOODu1, MOODu2, OnlyMOOD, EPD0, EPD1, EPD2, StrictEPD0, Halo
+export MOODu1, MOODu2, OnlyMOOD, MOODPAD, EPD0, EPD1, EPD2, StrictEPD0, Halo
 
 # =========================================================================
 # STRATEGIES
@@ -133,6 +133,17 @@ MOODu2(d::T; plateau::Real = T(1e-3), ratio::Real = T(0.5)) where {T <: Real} = 
 "Criterion that flags every particle (testing: one step drives all orders to 1)."
 struct OnlyMOOD <: MOODCriterion end
 
+"""
+    MOODPAD() <: MOODCriterion
+
+Physical admissibility only. The criterion never flags a candidate, so MOOD acts through the admissibility
+check alone (`is_admissible`, the PAD): a candidate outside the admissible set drops its order and is
+recomputed, everything else is left to the scheme's own stabilisation. For schemes whose limiting is a
+priori (a slope limiter such as `VenkatakrishnanLimiter`, which is not positivity preserving) this adds the
+positivity safeguard without the discrete maximum principle's cost or its dissipation at smooth extrema.
+"""
+struct MOODPAD <: MOODCriterion end
+
 MOOD(criterion::MOODCriterion) = MOOD(EPD1(), criterion)
 
 @inline function findLocalExtrema(rho_i::State{M, T}, nb_slice::OrdinalRange{Int, Int}, neighbor_fs::AbstractVector{State{M, T}}) where {M, T}
@@ -171,6 +182,7 @@ end
 
 (m::MOOD{<:MOODStrategy, NoMOOD})(args...) = false
 (m::MOOD{<:MOODStrategy, OnlyMOOD})(args...) = true
+(m::MOOD{<:MOODStrategy, MOODPAD})(args...) = false     # the admissibility check in `_mood_flag!` is what acts
 
 function (m::MOOD{<:MOODStrategy, MOODu1{T}})(
     g::DivergenceInterpolator, p_idx::Int, rho_i::State{M, T}, nb_slice::OrdinalRange{Int, Int},

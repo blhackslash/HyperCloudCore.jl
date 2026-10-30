@@ -364,7 +364,7 @@ end
             dev = run_case(ka, make_interp, mood, tab, mv)            # compiled as device kernels (PoCL)
             @test all(isapprox.(first.(dev[1]), first.(ref[1]); atol = 1e-12))
             @test all(isapprox.(first.(dev[2]), first.(ref[2]); atol = 1e-12))
-            @test isapprox(dev[3], ref[3]; rtol = 1e-12)
+            @test isapprox(dev[3], ref[3]; rtol = 1e-9)      # dt from per-slot weights computed in a device kernel (contraction differs)
             @test dev[4] == ref[4]
         end
     finally
@@ -1173,6 +1173,87 @@ end
     fill!(view(pg.core.particle_orders, 1:N), 0)
 end
 
+@testset "CFL estimate: pair speeds, boundary states, cached weights" begin
+    # A state-dependent wave speed 1 + 9u: a fast state on a boundary particle used to be invisible (boundary
+    # particles are skipped), now it limits the step of its interior neighbours through the pair speed.
+    struct FastWhereHigh <: HyperbolicPDE{1, 1, Float64} end
+    HyperCloudCore.max_eigenvalue(::FastWhereHigh, U::State{1, Float64}, d::Int) = 1 + 9 * U[1]
+    Nc = 60; dxc = 2.0 / Nc
+    pgc = ParticleGrid(get_rectangular_domain(Float64, (-1.0,), (1.0,); is_periodic = false,
+                                              bc_map = Dict{Int, AbstractBoundaryCondition}(1 => FixedDirichlet())),
+                       (dxc,), ExponentialWeightFunction(1.0, 2.5dxc), 1)
+    eqc = FastWhereHigh()
+    interp = MUSCL(Float64, 1, 1, 3, NoLimiter(), RusanovFlux())
+    fill!(view(pgc.rhos, 1:pgc.meta.N), zero(State{1, Float64}))
+    dt_slow = get_time_step(pgc, eqc, interp)
+    # the boundary particle next to the interior (the outermost ones are beyond the cutoff of every interior particle)
+    b = findlast(i -> pgc.core.is_boundary[i] && pgc.core.positions[i][1] < 0, 1:pgc.meta.N)
+    pgc.rhos[b] = State{1, Float64}(1.0)
+    dt_b = get_time_step(pgc, eqc, interp)
+    @test dt_b < 0.6 * dt_slow && dt_b >= 0.99 * dt_slow / 10
+    pgc.rhos[b] = zero(State{1, Float64})
+    i_fast = findfirst(i -> !pgc.core.is_boundary[i] && abs(pgc.core.positions[i][1]) < dxc, 1:pgc.meta.N)
+    pgc.rhos[i_fast] = State{1, Float64}(1.0)
+    dt_i = get_time_step(pgc, eqc, interp)
+    @test 0.99 * dt_slow / 10 <= dt_i <= dt_slow
+    # With a current divergence cache the cached per-slot weights are used (no factorisation): the kernel
+    # equals the host sum over the weights, and lies within a factor 2 of the assembled fit (intercept fit
+    # vs Taylor fit of the same degree)
+    @test HyperCloudCore._cfl_slot_weights(interp, pgc) === nothing
+    HyperCloudCore.prepare_geometry!(interp, pgc)
+    dw = HyperCloudCore._cfl_slot_weights(interp, pgc)
+    @test dw !== nothing
+    dt_c = get_time_step(pgc, eqc, interp)
+    nbc = pgc.neighbor
+    dt_host = minimum(begin
+            lam_i = 1 + 9 * pgc.rhos[i][1]
+            s = sum(abs(dw[k][1]) * max(lam_i, 1 + 9 * pgc.rhos[nbc.indices[k]][1]) for k in nbc.ranges[i])
+            s > 1e-14 ? 1 / s : Inf
+        end for i in 1:pgc.meta.N if !pgc.core.is_boundary[i])
+    @test isapprox(dt_c, dt_host; rtol = 1e-12)
+    @test 0.5 * dt_i <= dt_c <= 2 * dt_i
+    @test get_time_step(pgc, eqc, interp; cached_weights = false) == dt_i     # the opt-out assembles the fit as before
+    @test (@allocated get_time_step(pgc, eqc, interp)) < 8192
+end
+
+@testset "MOODPAD: admissibility only" begin
+    # Scalar advection with the admissible set u ≥ 0. An unlimited MUSCL3 undershoots a box; with MOODPAD the
+    # inadmissible candidates drop their order and the solution stays admissible, with no DMP involved. On a
+    # smooth profile MOODPAD never triggers and reproduces the run without MOOD.
+    struct PositiveAdvection <: HyperbolicPDE{1, 1, Float64} end
+    HyperCloudCore.flux(::PositiveAdvection, U::State{1, Float64}) = Flux{1, 1, Float64}((U,))
+    HyperCloudCore.max_eigenvalue(::PositiveAdvection, U::State{1, Float64}, d::Int) = 1.0
+    HyperCloudCore.velocity(::PositiveAdvection, U::State{1, Float64}, d::Int) = SMatrix{1, 1, Float64}(1.0)
+    HyperCloudCore.prim2cons(::PositiveAdvection, U::State) = U
+    HyperCloudCore.cons2prim(::PositiveAdvection, U::State) = U
+    HyperCloudCore.is_admissible(::PositiveAdvection, U::State{1, Float64}) = U[1] >= 0
+    eqp = PositiveAdvection()
+    function run_pad(ic, mood, steps)
+        pg = set_ic!(make_pg_1d(100), ic)
+        m  = MUSCL(Float64, 1, 1, 3, NoLimiter(), RusanovFlux())
+        ts = GeneralRKTimeStepper(eqp, m, mood, RK3_SSP_Tableau(Float64))
+        drops = 0; umin = Inf
+        for k in 1:steps
+            dt = 0.4 * get_time_step(pg, eqp, m)
+            ts(eqp, pg, (k - 1) * dt, dt)
+            drops += count(<(3), view(pg.core.particle_orders, 1:pg.meta.N))
+            umin = min(umin, minimum(pg.rhos[i][1] for i in 1:pg.meta.N))
+        end
+        return [pg.rhos[i][1] for i in 1:pg.meta.N], umin, drops
+    end
+    box = x -> abs(x) < 0.3 ? 1.0 : 0.0
+    _, umin_none, _ = run_pad(box, MOOD(), 30)
+    _, umin_pad, drops_pad = run_pad(box, MOOD(EPD1(), MOODPAD()), 30)
+    @test umin_none < -1e-3                      # the unlimited scheme undershoots
+    @test umin_pad >= -1e-12 && drops_pad > 0    # PAD alone keeps the solution admissible
+    gauss = x -> 1 + exp(-x^2 / 0.02)           # strictly positive: the unlimited scheme's small undershoots stay admissible
+    u_none, _, _ = run_pad(gauss, MOOD(), 20)
+    u_pad, _, drops_smooth = run_pad(gauss, MOOD(EPD1(), MOODPAD()), 20)
+    @test drops_smooth == 0 && all(isapprox.(u_none, u_pad; atol = 1e-14))
+    @test build_mood_criterion(Val(:PAD), Dict{Symbol, Any}(), Dict{Symbol, Any}()) isa MOODPAD
+    @test MOOD(EPD1(), MOODPAD())(nothing, 1, State{1, Float64}(0.0), 1:0, State{1, Float64}(-1.0), nothing, nothing) == false
+end
+
 @testset "Memory budget" begin
     N  = 400
     eq = make_advection_1d()
@@ -1201,7 +1282,7 @@ end
         # cache (degree 3 with a constant term: SMatrix{4,4} + Bool)
         @test memory_estimate(pg, interp).per_particle - g.per_particle ==
               2S + sizeof(SMatrix{2, 2, Float64, 4}) + 1 + sizeof(SMatrix{4, 4, Float64, 16}) + 1
-        @test memory_estimate(pg, interp).per_slot == g.per_slot                 # the weight signs count only for the aligned flux
+        @test memory_estimate(pg, interp).per_slot == g.per_slot + sizeof(Space{1, Float64})   # the per-slot divergence weights (CFL, aligned flux, streaming)
         interp_a = MUSCL(Float64, 1, 1, 3, NoLimiter(), AlignedRusanovFlux())
         @test memory_estimate(pg, interp_a).per_slot == g.per_slot + sizeof(Space{1, Float64})
         # A streamed scheme keeps the per-slot weights and the stepper drops its per-slot flux buffers
