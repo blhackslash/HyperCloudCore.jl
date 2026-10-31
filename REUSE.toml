@@ -1,0 +1,13 @@
+version = 1
+
+# Everything: code, docs and config
+[[annotations]]
+path = "**"
+SPDX-FileCopyrightText = "2024-2025 Klaas Willems 2025-2026 Pascal Jung"
+SPDX-License-Identifier = "MIT"
+
+# The logos (must come after the catch-all)
+[[annotations]]
+path = ["logos/**", "docs/src/assets/logo*.svg", "docs/src/assets/favicon*"]
+SPDX-FileCopyrightText = "2026 Pascal Jung"
+SPDX-License-Identifier = "CC-BY-4.0"
