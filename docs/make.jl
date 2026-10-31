@@ -25,6 +25,7 @@ makedocs(
         canonical = "https://blhackslash.github.io/HyperCloudCore.jl/",
         assets = String[],
         mathengine = Documenter.MathJax3(),
+        sidebar_sitename = false,
     ),
     pages = [
         "Home" => "index.md",
