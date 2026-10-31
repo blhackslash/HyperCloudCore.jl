@@ -23,7 +23,7 @@ makedocs(
     format = Documenter.HTML(
         prettyurls = get(ENV, "CI", "false") == "true",
         canonical = "https://blhackslash.github.io/HyperCloudCore.jl/",
-        assets = String[],
+        assets = String["src/assets/logo.svg","src/assets/logo-dark.svg"],
         mathengine = Documenter.MathJax3(),
         sidebar_sitename = false,
     ),
