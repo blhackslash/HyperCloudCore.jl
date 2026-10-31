@@ -1,4 +1,8 @@
-# HyperCloudCore.jl
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="logos/svg/logo-dark.svg">
+  <img alt="HyperCloud.jl" src="logos/svg/logo.svg" width="480">
+</picture>
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23124663.svg)](https://doi.org/10.5281/zenodo.23124663)
 [![Build Status](https://github.com/blhackslash/HyperCloudCore.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/blhackslash/HyperCloudCore.jl/actions/workflows/CI.yml)
@@ -177,7 +181,11 @@ fig = plot(p1, p2, layout=(1, 2), size=(900, 400))
 savefig(fig, "advection_comparison.png")
 display(fig)
 ```
+## License
+The code is licensed under the MIT License (see `LICENSE`).
+The logos in `logos/` are licensed under CC BY 4.0 (see `logos/LICENSE`).
+"HyperCloud" and the HyperCloud logos identify this project; please don't use them in a way that suggests endorsement.
 
----
+## AI Declaration
 
 Portions of this codebase and documentation were drafted by Claude Opus 5.5 and Fable 5.1 using Claude Code. All code has been human-reviewed, verified, and tested. If you notice any inaccuracies or unexpected behavior, please open an issue.
