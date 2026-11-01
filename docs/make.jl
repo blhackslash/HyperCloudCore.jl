@@ -28,7 +28,7 @@ makedocs(
         # dark themes) automatically. `assets` only takes CSS/JS files and favicons.
         assets = [asset("assets/favicon.png", class = :ico, islocal = true)],
         mathengine = Documenter.MathJax3(),
-        sidebar_sitename = false,
+        sidebar_sitename = true,
     ),
     pages = [
         "Home" => "index.md",
