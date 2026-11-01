@@ -13,3 +13,6 @@ docs/build
 # Logos and documentation assets are tracked despite the image rules above
 !logos/**
 !docs/src/assets/**
+
+# Licence texts for REUSE are tracked despite the *.txt rule above
+!LICENSES/**
