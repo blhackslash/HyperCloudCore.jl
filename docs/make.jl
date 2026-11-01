@@ -23,7 +23,10 @@ makedocs(
     format = Documenter.HTML(
         prettyurls = get(ENV, "CI", "false") == "true",
         canonical = "https://blhackslash.github.io/HyperCloudCore.jl/",
-        assets = String["src/assets/logo.svg","src/assets/logo-dark.svg"],
+        edit_link = "main",
+        # The sidebar logo needs no entry here: Documenter shows docs/src/assets/logo.svg (and logo-dark.svg for the
+        # dark themes) automatically. `assets` only takes CSS/JS files and favicons.
+        assets = [asset("assets/favicon.png", class = :ico, islocal = true)],
         mathengine = Documenter.MathJax3(),
         sidebar_sitename = false,
     ),
