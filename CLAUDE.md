@@ -17,8 +17,11 @@ HYPERCLOUD_BACKEND=amdgpu julia --project=test/gpu test/runtests.jl   # device t
 julia -t 8 --project benchmark/step.jl                            # step throughput, see BENCH_* in the file
 ```
 
-`test/runtests.jl` takes no arguments: to run a subset, include the files you need in a
-session (the shared helpers `make_pg_1d`, `set_ic!`, … are defined in `runtests.jl`).
+`test/runtests.jl` runs its test groups (`core`, `backends-a`, `backends-b`, `schemes`, `pipeline`) in parallel
+child processes with the same julia flags; `HYPERCLOUDCORE_TEST_GROUP=<group>` runs one group in the current
+process, `HYPERCLOUDCORE_TEST_JOBS=1` all of them one after the other. The suite is dominated by compilation
+(every new scheme/MOOD/tableau type combination compiles the stepper anew, 10-20 s): keep new tests on type
+combinations that already exist, and on small stencils (degree-5 2-D fits cost ~50 s of compilation).
 
 ## Layout
 
