@@ -1,0 +1,16 @@
+name: REUSE
+
+# Checks that every file has copyright and licence information (REUSE.toml, LICENSES/), on every push.
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  reuse:
+    name: REUSE compliance
+    runs-on: docker
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: reuse lint
+        uses: https://github.com/fsfe/reuse-action@v5
