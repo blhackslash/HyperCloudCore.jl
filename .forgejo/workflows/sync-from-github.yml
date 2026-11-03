@@ -1,0 +1,109 @@
+# Keeps Forgejo's `main` equal to GitHub's `main` (the release branch) and, on request,
+# merges it into `main_dev`.
+#
+# - Never force-pushes. If Forgejo's `main` has commits that GitHub's `main` doesn't,
+#   the job stops and changes nothing (something was merged into the wrong branch).
+# - The merge into `main_dev` only happens when it is conflict-free; otherwise the job
+#   fails, changes nothing and tells you to merge by hand.
+#
+# Setup:
+# 1. The GitHub repository has the same name as this one and belongs to the owner in
+#    the variable GH_MIRROR_OWNER (e.g. industrial-mathematics-group).
+# 2. The secret BOT_PAT is the action bot's Forgejo token; it needs write access to
+#    this repository ("write:repository").
+# 3. Protect `main` on Forgejo so that only the bot may push to it.
+# 4. For a private GitHub repository, also add a secret GITHUB_READ_TOKEN
+#    (fine-grained GitHub token with "Contents: read").
+# 5. Make `main_dev` the default branch, so agents' PRs target it and the schedule runs
+#    (scheduled workflows only run from the default branch).
+
+name: Sync main from GitHub
+
+on:
+  workflow_dispatch:
+    inputs:
+      merge_into_dev:
+        description: Also merge main into main_dev (only if conflict-free)
+        type: boolean
+        default: true
+  schedule:
+    - cron: '23 5 * * *'        # daily; only updates main, never touches main_dev
+
+env:
+  MAIN: main
+  DEV: main_dev
+
+jobs:
+  sync:
+    runs-on: docker              # any runner label whose image has git and bash
+    steps:
+      - name: Sync
+        shell: bash
+        env:
+          SYNC_TOKEN: ${{ secrets.BOT_PAT }}
+          GH_OWNER: ${{ vars.GH_MIRROR_OWNER }}
+          GITHUB_READ_TOKEN: ${{ secrets.GITHUB_READ_TOKEN }}
+          SERVER_URL: ${{ forgejo.server_url }}
+          REPO: ${{ forgejo.repository }}
+          MERGE: ${{ inputs.merge_into_dev == true || inputs.merge_into_dev == 'true' }}
+        run: |
+          set -euo pipefail
+          if [ -z "$GH_OWNER" ]; then
+            echo "::error::The variable GH_MIRROR_OWNER is not set."; exit 1
+          fi
+          if [ -z "$SYNC_TOKEN" ]; then
+            echo "::error::The secret BOT_PAT is not available to this repository."; exit 1
+          fi
+          GITHUB_URL="${GITHUB_URL:-https://github.com/$GH_OWNER/${REPO#*/}.git}"
+          echo "GitHub repository: $GITHUB_URL"
+
+          git init -q work && cd work
+          git config user.name "Sync from GitHub"
+          git config user.email "noreply@localhost"
+          auth() { printf 'Authorization: Basic %s' "$(printf 'sync:%s' "$1" | base64 -w0)"; }
+          git remote add forgejo "$SERVER_URL/$REPO.git"
+          git config "http.$SERVER_URL/.extraHeader" "$(auth "$SYNC_TOKEN")"
+          git remote add github "$GITHUB_URL"
+          if [ -n "$GITHUB_READ_TOKEN" ]; then
+            git config "http.https://github.com/.extraHeader" "$(auth "$GITHUB_READ_TOKEN")"
+          fi
+
+          git fetch -q --no-tags github "+refs/heads/$MAIN:refs/remotes/github/$MAIN"
+          git fetch -q --no-tags forgejo "+refs/heads/*:refs/remotes/forgejo/*"
+          upstream="refs/remotes/github/$MAIN"
+          echo "GitHub $MAIN: $(git log -1 --format='%h %s' "$upstream")"
+
+          # ---- main: fast-forward only
+          if git rev-parse -q --verify "refs/remotes/forgejo/$MAIN" >/dev/null; then
+            if ! git merge-base --is-ancestor "refs/remotes/forgejo/$MAIN" "$upstream"; then
+              echo "::error::Forgejo's $MAIN has commits that are not on GitHub's $MAIN:"
+              git log --oneline "$upstream..refs/remotes/forgejo/$MAIN"
+              echo "Move them to $DEV, then reset Forgejo's $MAIN to GitHub's by hand. Nothing was changed."
+              exit 1
+            fi
+          fi
+          if [ "$(git rev-parse "$upstream")" = "$(git rev-parse -q --verify "refs/remotes/forgejo/$MAIN" || true)" ]; then
+            echo "$MAIN is up to date."
+          else
+            git push -q forgejo "$upstream:refs/heads/$MAIN"
+            echo "Updated Forgejo's $MAIN."
+          fi
+
+          # ---- main_dev: merge only on request and only without conflicts
+          [ "$MERGE" = "true" ] || exit 0
+          if ! git rev-parse -q --verify "refs/remotes/forgejo/$DEV" >/dev/null; then
+            git push -q forgejo "$upstream:refs/heads/$DEV"
+            echo "Created $DEV from $MAIN."; exit 0
+          fi
+          git switch -q -c dev "refs/remotes/forgejo/$DEV"
+          if git merge-base --is-ancestor "$upstream" HEAD; then
+            echo "$DEV already contains $MAIN."; exit 0
+          fi
+          if ! git merge -q --no-edit -m "Merge GitHub $MAIN into $DEV" "$upstream"; then
+            git merge --abort
+            echo "::error::Merging $MAIN into $DEV has conflicts; $DEV was not changed. Merge by hand:"
+            echo "  git fetch forgejo && git switch $DEV && git merge forgejo/$MAIN"
+            exit 1
+          fi
+          git push -q forgejo "HEAD:refs/heads/$DEV"
+          echo "Merged $MAIN into $DEV."
