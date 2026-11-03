@@ -6,6 +6,7 @@ version = 2
 [[annotations]]
 path = "**"
 AI-Generation = "G3"
+Human-Review = "H1"
 Assisted-by = "Claude (Anthropic), claude-opus-5-5, claude-fable-5-1"
 AI-Review = "A1"
 AI-Reviewed-by = "Claude (Anthropic), claude-opus-5-5, independent review agent without the generating conversation"
