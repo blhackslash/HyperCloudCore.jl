@@ -9,8 +9,9 @@
 [![Dev Docs](https://img.shields.io/badge/docs-dev-blue.svg)](https://industrial-mathematics-group.github.io/HyperCloudCore.jl/dev/)
 [![Stable Docs](https://img.shields.io/badge/docs-stable-blue.svg)](https://industrial-mathematics-group.github.io/HyperCloudCore.jl/stable/)
 
-[![AI generation (files)](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/industrial-mathematics-group/HyperCloudCore.jl/badges/aidecl-generation.json)](https://github.com/industrial-mathematics-group/aidecl)
-[![Verification (files)](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/industrial-mathematics-group/HyperCloudCore.jl/badges/aidecl-verification.json)](https://github.com/industrial-mathematics-group/aidecl)
+![AI generation](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/industrial-mathematics-group/HyperCloudCore.jl/badges/aidecl-generation.json)
+![Human review](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/industrial-mathematics-group/HyperCloudCore.jl/badges/aidecl-human-review.json)
+![AI review](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/industrial-mathematics-group/HyperCloudCore.jl/badges/aidecl-ai-review.json)
 
 </div>
 
