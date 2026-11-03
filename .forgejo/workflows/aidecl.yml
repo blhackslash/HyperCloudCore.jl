@@ -11,6 +11,7 @@ permissions:
 
 jobs:
   aidecl:
+    runs-on: docker
     uses: https://github.com/industrial-mathematics-group/.github/.github/workflows/aidecl.yml@main
     with:
       weight: lines        # weight the badges by lines instead of files
