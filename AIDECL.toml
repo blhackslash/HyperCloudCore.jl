@@ -1,0 +1,38 @@
+# AI declarations for this repository (G0-G3 generation, V0-V3 verification).
+# Scheme: https://github.com/industrial-mathematics-group/.github/blob/main/.github/CONTRIBUTING.md#ai-assisted-contributions
+version = 1
+
+# The whole tool was written by an AI agent at the maintainer's direction, then checked by a
+# separate agent of the same model that did not see the generating conversation: it read the
+# code against the README, ran the test suite and its own reproductions (two review rounds,
+# all findings fixed and re-checked). Upgrade to V3 once a human has tested it.
+[[annotations]]
+path = "**"
+AI-Generation = "G3"
+AI-Verification = "V1"
+Assisted-by = "Claude (Anthropic), claude-opus-5-5, claude-fable-5-1"
+Verified-by = "Claude (Anthropic), claude-opus-5-5, independent review agent without the generating conversation"
+
+[[annotations]]
+path = "src/**"
+AI-Generation = "G2"
+AI-Verification = "V3"
+Assisted-by = "Claude (Anthropic), claude-opus-5-5, claude-fable-5-1"
+Verified-by = "Claude (Anthropic), claude-opus-5-5, independent review agent without the generating conversation"
+Tested-by = "blhackslash <dev@blackslash.win>"
+
+[[annotations]]
+path = "docs/**"
+AI-Generation = "G3"
+AI-Verification = "V3"
+Assisted-by = "Claude (Anthropic), claude-opus-5-5, claude-fable-5-1"
+Verified-by = "Claude (Anthropic), claude-opus-5-5, independent review agent without the generating conversation"
+Tested-by = "blhackslash <dev@blackslash.win>"
+
+[[annotations]]
+path = "logos/**"
+AI-Generation = "G2"
+AI-Verification = "V3"
+Assisted-by = "Claude (Anthropic), claude-opus-5-5"
+Verified-by = "Claude (Anthropic), claude-opus-5-5, independent review agent without the generating conversation"
+Tested-by = "blhackslash <dev@blackslash.win>"
