@@ -9,6 +9,11 @@
 [![Dev Docs](https://img.shields.io/badge/docs-dev-blue.svg)](https://industrial-mathematics-group.github.io/HyperCloudCore.jl/dev/)
 [![Stable Docs](https://img.shields.io/badge/docs-stable-blue.svg)](https://industrial-mathematics-group.github.io/HyperCloudCore.jl/stable/)
 
+[![AI generation](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/industrial-mathematics-group/HyperCloudCore.jl/badges/ai-generation.json)](https://github.com/industrial-mathematics-group/.github/blob/main/.github/CONTRIBUTING.md#generation-levels-how-was-it-written)
+[![Verification](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/industrial-mathematics-group/HyperCloudCore.jl/badges/ai-verification.json)](https://github.com/industrial-mathematics-group/.github/blob/main/.github/CONTRIBUTING.md#verification-levels-how-was-it-checked)
+[![AI generation (files)](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/industrial-mathematics-group/HyperCloudCore.jl/badges/aidecl-generation.json)](https://github.com/industrial-mathematics-group/aidecl)
+[![Verification (files)](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/industrial-mathematics-group/HyperCloudCore.jl/badges/aidecl-verification.json)](https://github.com/industrial-mathematics-group/aidecl)
+
 </div>
 
 **HyperCloudCore.jl** is a high-performance, physics-agnostic meshless solver backend designed for the numerical integration of hyperbolic Partial Differential Equations (PDEs) in Julia.
