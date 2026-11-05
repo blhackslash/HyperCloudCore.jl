@@ -75,6 +75,17 @@ is estimated from the degree-4 stencil and slightly too large; and the radius mu
 neighbours for the reconstruction, $B(D, o - 1)$, or particles drop to first order (see the pre-gather pass
 below).
 
+**Known limitation (cached weights and CFL degree vs the neighbour-count safeguard).** The cached divergence
+weights (`div_weights`, `dweights`) and the degree the CFL estimate uses (`_divergence_degree`) are those of the
+*full* divergence degree, even where `_divergence_index` lowers the degree because the stencil has too few
+neighbours. There the cache is never hit (every RHS assembles and factorises the fit of the lower degree, and the
+aligned/streamed paths take the dynamic per-slot weights), and the time step comes from weights the scheme does not
+use: in 1-D MUSCL3 with $R = 2.5\Delta x$ (every particle fits degree 2) $\sum |c_{ij}|\,\Delta x$ is 1.500 for the
+CFL estimate against 0.644 for the fit in use, i.e. the step is 2.3 times smaller than the CFL number implies;
+MUSCL5 with $R = 3.5\Delta x$: 1.6 times smaller; MUSCL5 with $R = 2.5\Delta x$: slightly *larger* (1.475 vs 1.500,
+the cached degree-5 fit is under-determined there). Changing it would change the time step of default
+configurations, so it is left as is for now.
+
 ## The two passes
 
 1. **Pre-gather (`update_content!`).** Fits the reconstruction at the particle's current order and stores the (limited) coefficients in `gradients[i]`. If the neighbourhood has fewer than $B(D, k-1)$ neighbours, the particle's order is set to 1 **in `particle_orders`**, so MOOD and the EPD rules see the starved particle as first order.
