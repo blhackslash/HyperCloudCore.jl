@@ -266,9 +266,12 @@ end
 @testset "Implicit stage: RHS from the solve" begin
     # One implicit source: K_I of a diagonal stage is (U_out - U_in) / (dt a_ii), which equals S(U_out) for an
     # exact solve. Constant state, so the explicit RHS is zero and the step is the ARS222 solution of u' = -λu.
-    struct DecaySource <: AbstractImplicitSourceTerm; λ::Float64; end
-    HyperCloudCore.evaluate_source(s::DecaySource, U, i::Int, pg, t::Real) = -s.λ * U
-    HyperCloudCore.implicit_solve(s::DecaySource, U_in, γ::Real, i::Int, pg, t::Real) = U_in / (1 + γ * s.λ)
+    # Decay rate λ (1 + κ sin(π x_i)); κ ≠ 0 makes it vary in space, so it does not commute with the advection
+    struct DecaySource <: AbstractImplicitSourceTerm; λ::Float64; κ::Float64; end
+    DecaySource(λ) = DecaySource(λ, 0.0)
+    decay_rate(s::DecaySource, i, pg) = s.λ * (1 + s.κ * sinpi(pg.core.positions[i][1]))
+    HyperCloudCore.evaluate_source(s::DecaySource, U, i::Int, pg, t::Real) = -decay_rate(s, i, pg) * U
+    HyperCloudCore.implicit_solve(s::DecaySource, U_in, γ::Real, i::Int, pg, t::Real) = U_in / (1 + γ * decay_rate(s, i, pg))
     eq  = make_advection_1d()
     pg  = set_ic!(make_pg_1d(40), x -> 1.0)
     src = DecaySource(3.0)
@@ -291,9 +294,11 @@ end
     # Advection (explicit) coupled with a decay (implicit) on a fixed periodic lattice: the error against a fine-Δt
     # run of the same spatial scheme is the temporal error. All four tableaus have three stages, so they share the
     # stepper type of the test above (one compilation). The old two-stage ARS222 and the inconsistent PRSSP3 had
-    # EOC 1.05 / 1.07 here.
+    # EOC 1.05 / 1.07 here. The decay rate varies in space: with a constant rate the two operators commute and only
+    # the sum b̃·c + b·c̃ of the coupling conditions enters (a pair with b̃·c = 0.7, b·c̃ = 0.3 passed at EOC 2.02;
+    # with κ = 0.8 it gives 1.07).
     eq  = make_advection_1d()
-    src = DecaySource(3.0)
+    src = DecaySource(3.0, 0.8)
     function imex_run(bt, n; tend = 0.4)
         pg = set_ic!(make_pg_1d(20), x -> sin(π * x))
         ts = GeneralRKTimeStepper(eq, MUSCL(Float64, 1, 1, 2, NoLimiter(), RusanovFlux()), MOOD(), (), (src,), bt)
