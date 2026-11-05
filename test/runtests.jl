@@ -92,11 +92,15 @@ end
 function run_groups_in_parallel(jobs)
     names = first.(TEST_GROUPS)
     threads = max(1, Threads.nthreads() ÷ jobs)
-    cmd(name) = addenv(`$(Base.julia_cmd()) --project=$(Base.active_project()) --threads=$threads $(@__FILE__)`,
+    # The backend groups compare Polyester, Threads and KA runs: with one thread `@batch` runs inline and nothing
+    # runs concurrently, so they get at least two (with -t 8 and 5 groups: 2 + 2 + 1 + 1 + 1 threads)
+    group_threads(name) = startswith(name, "backends") ? max(2, threads) : threads
+    cmd(name) = addenv(`$(Base.julia_cmd()) --project=$(Base.active_project()) --threads=$(group_threads(name)) $(@__FILE__)`,
                        "HYPERCLOUDCORE_TEST_GROUP" => name)
     logs = Dict(name => tempname() for name in names)
     queue, running, failed = copy(names), Dict{String, Tuple{Base.Process, IOStream, Float64}}(), String[]
-    println("Running $(length(names)) test groups in up to $jobs processes ($threads thread(s) each)")
+    println("Running $(length(names)) test groups in up to $jobs processes ($threads thread(s) each, ",
+            "$(group_threads("backends-a")) for the backend groups)")
     while !isempty(queue) || !isempty(running)
         while length(running) < jobs && !isempty(queue)
             name = popfirst!(queue)
