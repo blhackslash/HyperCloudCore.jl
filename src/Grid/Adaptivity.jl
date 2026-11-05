@@ -75,7 +75,8 @@ Detects holes and clusters, applies the conservative remap for every event on th
 changes the particle set, and rebuilds the neighbour lists. `max_order` is the scheme's maximum
 consistency order (new particles start there, and `exclude_reduced_order` compares against it).
 Requires valid neighbour lists and volumes (`update_volumes!`). `mass_residual` is the change of
-`total_mass` over the call, which should be at round-off level.
+`total_mass` over the call, which should be at round-off level. Merges and insertions involve interior
+particles only (no insertion between an interior particle and a ghost).
 
 The event work (detection, remap, compaction) is serial and runs on the host. On a grid built with
 `device_grid` a kernel first checks whether any neighbour pair violates the spacing rules; only then
@@ -95,7 +96,6 @@ function adapt_particles!(pg::ParticleGrid{D, M, T}, ad::ParticleAdaptivity{T}, 
 
     events = _detect_events(hg, ad, max_order)
     isempty(events) && return nothing_done
-
     remove_mask = hg.shared.bit_buffer
     fill!(view(remove_mask, 1:N), false)
     new_pos, new_rho, new_vol = Space{D, T}[], State{M, T}[], T[]
@@ -177,7 +177,7 @@ end
 """
     _has_adapt_candidates(pg, ad) -> Bool
 
-`true` if some interior particle has a neighbour pair that could trigger an event: closer than
+`true` if some interior particle has an interior neighbour that could trigger an event: closer than
 `min_gap` (merge) or farther than `max_gap` with an empty midpoint (insertion). A superset of what
 `_detect_events` selects (which also spaces events apart and skips the shock band). One kernel and one
 reduction, on the grid's backend.
@@ -205,7 +205,7 @@ end
             d2 = sum(abs2, dists[k])
             if d2 < min_gap_sq
                 isb[j] || (found = true)
-            elseif d2 > max_gap_sq
+            elseif d2 > max_gap_sq && !isb[j]
                 mid   = _wrap_coords(pos[i] + dists[k] / 2, is_per, Lv, mins)
                 empty = true
                 for k2 in ranges[i]
@@ -306,7 +306,9 @@ function _detect_events(pg::ParticleGrid{D, M, T}, ad::ParticleAdaptivity{T}, ma
             for k in nb.ranges[i]
                 j = nb.indices[k]
                 d2 = sum(abs2, nb.distances[k])
-                (j > i && !touched[j] && d2 > max_gap_sq) || continue
+                # Not towards a ghost (as for merges): the midpoint may lie outside the domain, and the new
+                # particle would be flagged interior there, out of reach of the boundary conditions
+                (j > i && !isb[j] && !touched[j] && d2 > max_gap_sq) || continue
                 mid = _wrap_point(pg, pos[i] + nb.distances[k] / 2)
                 empty = true
                 for k2 in nb.ranges[i]

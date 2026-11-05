@@ -745,6 +745,23 @@ end
         @test all(r -> 0.5 - 1e-12 <= r[1] <= 1.5 + 1e-12, view(pg.rhos, 1:pg.meta.N))
     end
 
+    @testset "No insertion between an interior particle and a ghost" begin
+        # The interior compresses towards 0, the ghosts stay: a gap opens at the right wall. The insertion used to
+        # put an interior-flagged particle at x = 1.001, outside the domain.
+        dx   = 0.01
+        geom = get_rectangular_domain(Float64, (0.0,), (1.0,))
+        pg   = ParticleGrid(geom, (dx,), ExponentialWeightFunction(1.0, 2.5dx), 1)
+        for i in 1:pg.meta.N
+            pg.rhos[i] = State{1, Float64}(1.0)
+            pg.core.is_boundary[i] || (pg.core.positions[i] = 0.992 * pg.core.positions[i])
+        end
+        pg.neighbor(pg)
+        update_volumes!(pg, ShepardVolumes())
+        adapt_particles!(pg, ad, kmax)
+        @test all(i -> pg.core.is_boundary[i] || geom.is_interior(pg.core.positions[i]), 1:pg.meta.N)
+        @test HyperCloudCore._has_adapt_candidates(pg, ad) == false       # the kernel pre-check agrees
+    end
+
     @testset "No events inside the shock band" begin
         pg = set_ic!(make_pg_1d(40), ic)
         punch_hole!(pg, 10)
