@@ -156,10 +156,16 @@ function ComputationalDomain(
     dxs_f = Space{D, T}(nominal_dx...)
     # Ghost layers are decided per axis: a periodic axis needs none, every other axis needs a band
     # of `interp_range_factor` spacings (mixed periodicity used to drop all ghost layers).
-    N_ghost = ceil(Int, interp_range_factor)
+    # `interp_range_factor` is R / max(dx): an axis with a smaller spacing needs more layers to be R thick
+    # (it used to get the same number, i.e. a band thinner than R on the finer axis of an anisotropic grid).
+    max_dx  = maximum(dxs_f)
+    N_ghost = ntuple(Val(D)) do d
+        dxs_f[d] == max_dx ? ceil(Int, interp_range_factor) :
+                             ceil(Int, interp_range_factor * (max_dx / dxs_f[d]) * (1 - 4 * eps(Float64)))
+    end
 
-    canvas_mins = Space{D, T}(ntuple(d -> is_per_svec[d] ? geom.mins[d] : geom.mins[d] - N_ghost * dxs_f[d], Val(D)))
-    canvas_maxs = Space{D, T}(ntuple(d -> is_per_svec[d] ? geom.maxs[d] : geom.maxs[d] + N_ghost * dxs_f[d], Val(D)))
+    canvas_mins = Space{D, T}(ntuple(d -> is_per_svec[d] ? geom.mins[d] : geom.mins[d] - N_ghost[d] * dxs_f[d], Val(D)))
+    canvas_maxs = Space{D, T}(ntuple(d -> is_per_svec[d] ? geom.maxs[d] : geom.maxs[d] + N_ghost[d] * dxs_f[d], Val(D)))
     
     L_physical = geom.maxs - geom.mins
     L_wrap = Space{D, T}(ntuple(d -> is_per_svec[d] ? L_physical[d] : zero(T), Val(D)))

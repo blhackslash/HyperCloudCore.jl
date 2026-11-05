@@ -161,6 +161,24 @@ end
         @test pg.meta.N_interior == 31^2
     end
 
+    @testset "Anisotropic spacing: the ghost band is R thick on every axis" begin
+        # Every axis used to get ceil(R / max dx) layers: on the finer axis the band was thinner than R (it reached
+        # y = -0.03 for R = 0.05 with dx = (0.02, 0.01)), and wall particles there had truncated stencils.
+        geom = get_rectangular_domain(Float64, (0.0, 0.0), (2.0, 1.0))
+        for dx in ((0.02, 0.01), (0.1, 0.05))
+            R  = 2.5 * maximum(dx)
+            pg = ParticleGrid(geom, dx, ExponentialWeightFunction(1.0, R), 1)
+            ghosts = [pg.core.positions[i] for i in 1:pg.meta.N if pg.core.is_boundary[i]]
+            @test minimum(p -> p[2], ghosts) <= -R + 1e-12 && minimum(p -> p[1], ghosts) <= -R + 1e-12
+            pos = pg.core.positions
+            near(x) = argmin(i -> pg.core.is_boundary[i] ? Inf : sum(abs2, pos[i] - Space{2, Float64}(x)), 1:pg.meta.N)
+            dx == (0.1, 0.05) && @test length(pg.neighbor.ranges[near((1.0, 0.0))]) == length(pg.neighbor.ranges[near((1.0, 0.5))])
+        end
+        # isotropic grids keep their layers
+        pg = ParticleGrid(get_rectangular_domain(Float64, (0.0, 0.0), (1.0, 1.0)), (0.1, 0.1), ExponentialWeightFunction(1.0, 0.3), 1)
+        @test pg.domain.canvas_mins ≈ Space{2, Float64}(-0.3, -0.3)
+    end
+
     @testset "Boundary tags: periodic edges ignored, bc_map mismatches warned" begin
         bc   = Dict{Int, AbstractBoundaryCondition}(3 => OutflowBC(), 4 => OutflowBC())
         geom = get_rectangular_domain(Float64, (0.0, 0.0), (1.0, 1.0); is_periodic = (true, false), bc_map = bc)
