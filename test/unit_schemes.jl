@@ -327,6 +327,32 @@ end
     @test all(j -> W[j] ≈ Y[j] + dt * (KE[j] + KI[j]) && KI[j][1] ≈ -src.λ * Y[j][1], interior_indices(pg))
 end
 
+@testset "Central/Upwind: the neighbour-count safeguard counts the intercept" begin
+    # The divergence fit has basis_count(D, q) + 1 unknowns. On a jittered 1-D cloud with R = 2.5Δx, particles with
+    # exactly 4 neighbours used to fit degree 4 through the Tikhonov retry: div(x) off by up to 8e-3 (and Central4
+    # did not converge, errors 4.5e-3, 5.7e-3, 3.8e-3 for N = 40, 80, 160). Now they fit degree 3: exact for F = x.
+    geom = get_rectangular_domain(Float64, (-1.0,), (1.0,); is_periodic = true)
+    dx   = 2 / 40
+    pg   = ParticleGrid(geom, (dx,), ExponentialWeightFunction(1.0, 2.5dx), 1; randomness = (0.2dx,), rng = MersenneTwister(1))
+    N    = pg.meta.N
+    eq   = make_advection_1d()
+    for i in 1:N; pg.rhos[i] = State{1, Float64}(pg.core.positions[i][1]); end    # F = u = x: div F = 1
+    ib   = HyperCloudCore.InteractionBuffer{1, 1, Float64}()
+    update_size!(ib, length(pg.neighbor.indices))
+    central = CentralDivergence(Float64, 1, 1, 4)
+    fill!(view(pg.core.particle_orders, 1:N), 4)
+    inner = [i for i in 1:N if abs(pg.core.positions[i][1]) < 0.7]               # away from the periodic seam of x
+    @test any(i -> length(pg.neighbor.ranges[i]) == HyperCloudCore.basis_count(1, 4), inner)
+    err = maximum(i -> abs(central(eq, i, pg.rhos[i], pg.neighbor.ranges[i], pg, pg.rhos, ib, EPD1())[1] - 1), inner)
+    @test err < 1e-10
+    # Upwind (degree 1, D + 1 = 2 unknowns): a single neighbour is not enough
+    upwind = UpwindDivergence(Float64, 1, 1, 1, :Classic, RusanovFlux())
+    fill!(view(pg.core.particle_orders, 1:N), 1)
+    i  = inner[1]
+    sl = first(pg.neighbor.ranges[i]):first(pg.neighbor.ranges[i])
+    @test upwind(eq, i, pg.rhos[i], sl, pg, pg.rhos, ib, EPD1()) == zero(State{1, Float64})
+end
+
 @testset "Streamed divergence" begin
     # The streamed flux pass (cached per-slot weights, dynamic per-slot weights for dropped particles) gives the
     # divergence of the buffered fit up to round-off, with both fluxes, and never touches the slot buffers.

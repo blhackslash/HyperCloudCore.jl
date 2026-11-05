@@ -24,7 +24,7 @@ UpwindDivergence(T, D, M, order, alg::Symbol, flux::NumericalFluxFunction; div_o
 \nabla\cdot F_i \approx 2\, \mathcal D^{(1)}_i\big[\, F_{\text{num},ij} - F(U_i) + \text{nc\_jump}_{ij} \,\big].
 ```
 
-See [Numerical Flux Functions](@ref) for the factor 2. The divergence is zero if the particle has fewer than $D$ neighbours.
+See [Numerical Flux Functions](@ref) for the factor 2. The divergence is zero if the particle has fewer than $D + 1$ neighbours (the degree-1 divergence fit has an intercept: $D + 1$ unknowns).
 
 **Tiwari.** For each direction $d$, the stencil is restricted to upwind neighbours, $v_d\, x_{ij,d} \le 0$ with $v_d = {\tt velocity}(eq, U_i, d)$, and
 

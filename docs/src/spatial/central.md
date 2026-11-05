@@ -20,7 +20,7 @@ CentralDivergence(T, D, M, order; div_order = 0)
 ## Behaviour
 
 - **Stateless.** `update_size!` and `update_content!` are no-ops; there is no pre-gather pass.
-- **Starved neighbourhoods.** The degree is lowered locally while the particle has fewer than $B(D, k)$ neighbours. If even degree 1 is impossible, the divergence is zero. This local lowering does not change `particle_orders`.
+- **Starved neighbourhoods.** The degree is lowered locally while the particle has fewer than $B(D, k) + 1$ neighbours (the divergence fit has an intercept, so it has $B(D, k) + 1$ unknowns; up to version 0.7.9 the check required only $B(D, k)$, and particles with exactly that many neighbours got an inconsistent regularised fit). If even degree 1 is impossible, the divergence is zero. This local lowering does not change `particle_orders`.
 - **MOOD.** The scheme reads `particle_orders[i]`, so MOOD can lower its order. Its flux at $i$ does not depend on neighbours' orders (`_order_reach = 0`), so an order drop only requires recomputing the dropped particle itself.
 - **Non-conservative terms.** None are evaluated; use a Riemann-based scheme for PDEs with `evaluate_nc_jump`.
 

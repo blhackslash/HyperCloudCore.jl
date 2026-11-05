@@ -54,13 +54,16 @@ function (central::CentralDivergence{D, M, T, MAX_ORDER, DIV_ORDER, INTERPS})(
     num_nb = length(nb_slice)
     p_order = pg.core.particle_orders[i]
 
+    # The divergence fit (`_mls_divergence`) has an intercept: basis_count(D, q) + 1 unknowns, as in MUSCL's
+    # `_divergence_index`. With only basis_count(D, q) neighbours the fit was rank deficient (Tikhonov retry) and
+    # inconsistent.
     while p_order > 1
-        req_nb = basis_count(D, p_order)
+        req_nb = basis_count(D, p_order) + 1
         if num_nb >= req_nb; break; end
         p_order -= 1
     end
 
-    if num_nb < basis_count(D, p_order)
+    if num_nb < basis_count(D, p_order) + 1
         return zero(State{M, T})
     end
 
