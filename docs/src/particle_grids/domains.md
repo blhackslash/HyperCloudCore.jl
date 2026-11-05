@@ -20,7 +20,9 @@ A `GeometricDomain` describes the physical problem region and nothing else: its 
 get_rectangular_domain(T, mins, maxs; bc_map = Dict(), is_periodic = false)
 ```
 
-`is_periodic` is either one `Bool` for all axes or an `NTuple{D,Bool}`. Tags in 2-D are assigned by the nearest edge: 1 left, 2 right, 3 bottom, 4 top. In 1-D and 3-D every boundary point has tag 1.
+`is_periodic` is either one `Bool` for all axes or an `NTuple{D,Bool}`. Tags in 2-D are assigned by the nearest edge: 1 left, 2 right, 3 bottom, 4 top; the edges of a periodic axis are ignored (a channel periodic in x has only the tags 3 and 4). In 1-D and 3-D every boundary point has tag 1: both walls of an interval get the same condition, so `Dict(1 => FixedDirichlet(), 2 => OutflowBC())` applies Dirichlet on both walls in 1-D.
+
+Boundary particles whose tag has no entry in `bc_map` keep their state (like a Dirichlet condition), and an entry whose tag no particle carries does nothing. When a non-empty `bc_map` and the tags of the boundary particles do not match, the `ParticleGrid` constructor warns (once per combination and session). An empty `bc_map` freezes every boundary particle without a warning.
 
 ### Spherical
 

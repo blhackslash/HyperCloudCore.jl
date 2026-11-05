@@ -32,7 +32,11 @@ end
 
 Generates a rectangular `GeometricDomain` instance. 
 - Constructs an interior evaluation function enforcing strict Cartesian bounding box constraints.
-- Automatically handles edge tagging in 2D by assigning 1 to Left, 2 to Right, 3 to Bottom, and 4 to Top based on nearest-distance evaluations.
+- Automatically handles edge tagging in 2D by assigning 1 to Left, 2 to Right, 3 to Bottom, and 4 to Top based on nearest-distance evaluations
+  (the edges of a periodic axis are ignored, so a channel periodic in x has only the tags 3 and 4).
+- In 1-D and 3-D every boundary point has tag 1 (both walls of a 1-D interval, all faces of a box). The
+  `ParticleGrid` constructor warns when `bc_map` names a tag no boundary particle carries, or when boundary
+  particles carry a tag `bc_map` does not cover (they then keep their state, like a Dirichlet condition).
 """
 function get_rectangular_domain(
     ::Type{T}, 
@@ -60,10 +64,12 @@ function get_rectangular_domain(
         if is_interior_func(pos); return 0; end
         
         if D == 2
-            d_left   = abs(pos[1] - mins_f[1])
-            d_right  = abs(pos[1] - maxs_f[1])
-            d_bottom = abs(pos[2] - mins_f[2])
-            d_top    = abs(pos[2] - maxs_f[2])
+            # The edges of a periodic axis are no boundary: ignore them (a channel periodic in x used to tag the
+            # ghosts near the seam 1/2, which no bc_map entry covered)
+            d_left   = is_per_svec[1] ? T(Inf) : abs(pos[1] - mins_f[1])
+            d_right  = is_per_svec[1] ? T(Inf) : abs(pos[1] - maxs_f[1])
+            d_bottom = is_per_svec[2] ? T(Inf) : abs(pos[2] - mins_f[2])
+            d_top    = is_per_svec[2] ? T(Inf) : abs(pos[2] - maxs_f[2])
             
             min_d = min(d_left, d_right, d_bottom, d_top)
             
@@ -246,6 +252,27 @@ function get_points(
     end
     
     return positions, is_boundary, tags, volumes, Tuple(dxs_f)
+end
+
+# Boundary particles whose tag has no condition keep their state (the stage predictor copies `pg.rhos`), and a
+# condition whose tag no particle carries does nothing: both are silent, so warn (host side, at grid set-up)
+# when a non-empty `bc_map` and the tags of the boundary particles do not match. An empty map (no conditions,
+# every boundary particle frozen) is taken as intended. Each mismatch is reported once per session.
+const _WARNED_BC_TAGS = Set{Tuple{Vector{Int}, Vector{Int}}}()
+function _check_bc_tags(geom::GeometricDomain, tags::AbstractVector{Int}, is_boundary::AbstractVector{Bool})
+    isempty(geom.bc_map) && return nothing
+    carried = sort!(unique(tags[i] for i in eachindex(tags) if is_boundary[i]))
+    mapped  = sort!(collect(keys(geom.bc_map)))
+    unused, uncovered = setdiff(mapped, carried), setdiff(carried, mapped)
+    (isempty(unused) && isempty(uncovered)) && return nothing
+    key = (mapped, carried)
+    key in _WARNED_BC_TAGS && return nothing
+    push!(_WARNED_BC_TAGS, key)
+    @warn "bc_map and boundary tags do not match: " *
+          (isempty(unused) ? "" : "no boundary particle carries tag(s) $(unused), so their condition is never applied; ") *
+          (isempty(uncovered) ? "" : "boundary particles with tag(s) $(uncovered) have no condition and keep their state; ") *
+          "the boundary particles carry tag(s) $(carried) (1-D and 3-D boxes tag every boundary particle 1, see get_rectangular_domain)."
+    return nothing
 end
 
 @inline _wrap_periodic(x::T, lo, L) where {T} = (y = T(lo) + mod(x - T(lo), T(L)); y >= T(lo) + T(L) ? T(lo) : y)

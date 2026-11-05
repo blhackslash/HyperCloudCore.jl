@@ -147,6 +147,24 @@ end
         @test pg.meta.N_interior == 31^2
     end
 
+    @testset "Boundary tags: periodic edges ignored, bc_map mismatches warned" begin
+        bc   = Dict{Int, AbstractBoundaryCondition}(3 => OutflowBC(), 4 => OutflowBC())
+        geom = get_rectangular_domain(Float64, (0.0, 0.0), (1.0, 1.0); is_periodic = (true, false), bc_map = bc)
+        pg   = @test_logs ParticleGrid(geom, (0.05, 0.05), ExponentialWeightFunction(1.0, 0.125), 1)   # no warning
+        ghosts = [i for i in 1:pg.meta.N if pg.core.is_boundary[i]]
+        @test !isempty(ghosts)
+        @test all(i -> pg.core.tags[i] == (pg.core.positions[i][2] < 0 ? 3 : 4), ghosts)   # 29 of 120 were 1 or 2
+        # 1-D: both walls carry tag 1, so a tag-2 entry is dead (documented, warned)
+        bc1 = Dict{Int, AbstractBoundaryCondition}(1 => FixedDirichlet(), 2 => OutflowBC())
+        geom1 = get_rectangular_domain(Float64, (0.0,), (1.0,); bc_map = bc1)
+        @test_logs (:warn, r"no boundary particle carries tag\(s\) \[2\]") ParticleGrid(geom1, (0.1,), ExponentialWeightFunction(1.0, 0.25), 1)
+        @test_logs ParticleGrid(geom1, (0.1,), ExponentialWeightFunction(1.0, 0.25), 1)       # once per session
+        # 2-D box with only the left/right walls mapped: the bottom/top particles keep their state
+        geom2 = get_rectangular_domain(Float64, (0.0, 0.0), (1.0, 1.0);
+                                       bc_map = Dict{Int, AbstractBoundaryCondition}(1 => OutflowBC(), 2 => OutflowBC()))
+        @test_logs (:warn, r"tag\(s\) \[3, 4\] have no condition") ParticleGrid(geom2, (0.1, 0.1), ExponentialWeightFunction(1.0, 0.25), 1)
+    end
+
     @testset "Jittered periodic grids have no boundary particles at the seam" begin
         for D in (1, 2), seed in 1:3
             geom = get_rectangular_domain(Float64, ntuple(_ -> 0.0, D), ntuple(_ -> 1.0, D); is_periodic = true)
