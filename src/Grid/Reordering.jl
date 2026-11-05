@@ -46,13 +46,16 @@ Executes a proximity-optimized spatial reordering of the entire particle grid to
 # Details
 - Normalizes the domain coordinates and sorts the permutation buffer using Morton Z-order curves for 2D/3D grids, or simple lexicographical sorting for 1D grids.
 - Bypasses the memory mutation entirely if the permutation buffer is already sorted.
-- Performs fast, in-place native Julia permutations (`Base.permute!`) across the positions, boundary flags, tags, state vectors, and volumes.
+- Permutes the active range `1:N` of the positions, boundary flags, tags, orders, state vectors, curvatures and volumes
+  (the buffers may be longer than `N` after growth), and bumps `pg.meta.geometry_version`.
+- Host only. The neighbour lists are stale afterwards: run `pg.neighbor(pg)` before the next step.
 """
 function (rd::ReorderData{D})(pg::ParticleGrid{D}) where {D}
     N = pg.meta.N
     if N <= 1; return nothing; end
     
     pos = pg.core.positions
+    ensure_capacity!(rd, N)
     p = rd.permutation # Alias the existing pre-allocated buffer
     
     # 1. Update permutation buffer to current range
@@ -90,18 +93,16 @@ function (rd::ReorderData{D})(pg::ParticleGrid{D}) where {D}
     # Check if already mostly sorted to prevent unnecessary memory writes
     if issorted(view(p, 1:N)); return nothing; end
     
-    # 4. Native Julia In-Place Permutations
-    Base.permute!(pg.core.positions, p)
-    Base.permute!(pg.core.is_boundary, p)
-    Base.permute!(pg.core.tags, p)
-    Base.permute!(pg.core.particle_orders, p)
-    Base.permute!(pg.rhos, p)          
-    Base.permute!(pg.curvatures, p)    
-    
-    # 5. Optional: Update volumes if they exist
-    if length(pg.core.volumes) >= N
-        Base.permute!(pg.core.volumes, p)
+    # 4. Permute the active range of every per-particle array. The buffers may be longer than N (grown by the
+    #    adaptivity, or the permutation longer than the grid after `reserve!`), so only `1:N` takes part.
+    perm = view(p, 1:N)
+    for x in (pg.core.positions, pg.core.is_boundary, pg.core.tags, pg.core.particle_orders, pg.rhos, pg.curvatures,
+              pg.core.volumes)
+        length(x) >= N || continue
+        v = view(parent(x), 1:N)
+        v .= v[perm]
     end
-    
+    pg.meta.geometry_version += 1   # the neighbour lists and every cache of the old order are stale
+
     return nothing
 end

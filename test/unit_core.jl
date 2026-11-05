@@ -165,6 +165,28 @@ end
         @test_logs (:warn, r"tag\(s\) \[3, 4\] have no condition") ParticleGrid(geom2, (0.1, 0.1), ExponentialWeightFunction(1.0, 0.25), 1)
     end
 
+    @testset "Reordering after buffer growth" begin
+        # permute! needed buffers of length N: after any growth (adaptivity) it threw a BoundsError
+        geom = get_rectangular_domain(Float64, (0.0, 0.0), (1.0, 1.0); is_periodic = true)
+        pg   = ParticleGrid(geom, (0.1, 0.1), ExponentialWeightFunction(1.0, 0.25), 1)
+        N    = pg.meta.N
+        pos0 = pg.core.positions[1:N]                         # the reordered layout of the constructor
+        f(x) = State{1, Float64}(x[1] + 10x[2])
+        HyperCloudCore.ensure_capacity!(pg, N + 5)
+        perm = shuffle(MersenneTwister(1), 1:N)
+        for i in 1:N
+            pg.core.positions[i] = pos0[perm[i]]; pg.rhos[i] = f(pos0[perm[i]]); pg.core.tags[i] = perm[i]
+        end
+        v0 = pg.meta.geometry_version
+        pg.reorder(pg)
+        @test pg.core.positions[1:N] == pos0
+        @test all(i -> pg.rhos[i] == f(pg.core.positions[i]) && pos0[pg.core.tags[i]] == pg.core.positions[i], 1:N)
+        @test pg.meta.geometry_version > v0
+        fill!(view(pg.core.tags, 1:N), 0)
+        pg.neighbor(pg)
+        @test all(i -> length(pg.neighbor.ranges[i]) > 0, 1:N)
+    end
+
     @testset "Jittered periodic grids have no boundary particles at the seam" begin
         for D in (1, 2), seed in 1:3
             geom = get_rectangular_domain(Float64, ntuple(_ -> 0.0, D), ntuple(_ -> 1.0, D); is_periodic = true)
