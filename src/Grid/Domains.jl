@@ -202,9 +202,18 @@ function get_points(
     inner_points = Space{D, T}[]
     ghost_candidates = Space{D, T}[]
     
+    # Lattice points within round-off of a non-periodic wall are put on the wall: `canvas_mins + (I - 1) dx`
+    # misses `maxs` by a few ulps for many spacings (e.g. [-1, 1] with dx = 2/30), and the closed-interval
+    # classification then made that wall point a ghost while the one on `mins` stayed interior.
+    snap = sqrt(eps(T)) .* dxs_f
     for I in CartesianIndices(Ns_total)
         pos_tuple = ntuple(Val(D)) do d
-            x = cd.canvas_mins[d] + (I[d] - 1) * dxs_f[d] + rand_f[d] * (rand(rng, T) * 2 - 1)
+            x = cd.canvas_mins[d] + (I[d] - 1) * dxs_f[d]
+            if !cd.is_periodic[d]
+                abs(x - geom.maxs[d]) <= snap[d] && (x = geom.maxs[d])
+                abs(x - geom.mins[d]) <= snap[d] && (x = geom.mins[d])
+            end
+            x += rand_f[d] * (rand(rng, T) * 2 - 1)
             # A jittered point that left a periodic axis belongs to the other end: classifying it
             # before wrapping made it a (frozen) boundary particle at the seam.
             cd.is_periodic[d] ? _wrap_periodic(x, geom.mins[d], cd.L_wrap[d]) : x

@@ -132,6 +132,21 @@ end
         @test count(i -> pg.core.positions[i][1] ≈ 1.0, 1:pg.meta.N) == 0               # no duplicated seam
     end
 
+    @testset "Wall lattice points are interior on both sides" begin
+        # canvas_mins + (I - 1) dx missed `maxs` by an ulp for many spacings: the right wall point became a ghost
+        for T in (Float64, Float32), (lo, hi, Ns) in ((-1, 1, 20), (-1, 1, 22), (-1, 1, 25), (-1, 1, 30), (-1, 1, 46), (0, 0.7, 10))
+            dx   = (T(hi) - T(lo)) / Ns
+            pg   = ParticleGrid(get_rectangular_domain(T, (lo,), (hi,)), (dx,), ExponentialWeightFunction(one(T), T(2.5) * dx), 1)
+            xs   = sort([pg.core.positions[i][1] for i in 1:pg.meta.N if !pg.core.is_boundary[i]])
+            @test length(xs) == Ns + 1 && xs[1] == T(lo) && xs[end] == T(hi)
+            ghosts = [pg.core.positions[i][1] for i in 1:pg.meta.N if pg.core.is_boundary[i]]
+            @test count(<(T(lo)), ghosts) == count(>(T(hi)), ghosts)
+        end
+        dx = 2 / 30                                                   # 2-D: no wall row or column lost
+        pg = ParticleGrid(get_rectangular_domain(Float64, (-1.0, -1.0), (1.0, 1.0)), (dx, dx), ExponentialWeightFunction(1.0, 2.5dx), 1)
+        @test pg.meta.N_interior == 31^2
+    end
+
     @testset "Jittered periodic grids have no boundary particles at the seam" begin
         for D in (1, 2), seed in 1:3
             geom = get_rectangular_domain(Float64, ntuple(_ -> 0.0, D), ntuple(_ -> 1.0, D); is_periodic = true)

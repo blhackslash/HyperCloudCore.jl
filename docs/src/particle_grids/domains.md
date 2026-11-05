@@ -34,8 +34,8 @@ A disc (2-D) or ball (3-D); every exterior point gets tag 1.
 
 When a `ParticleGrid` is constructed, the domain is wrapped in a `ComputationalDomain`, and points are generated as follows:
 
-1. **Canvas.** On non-periodic axes the bounding box is extended by $\lceil R/\Delta x_{\max}\rceil$ spacings on each side to host ghost particles. As soon as *any* axis is periodic, no padding is added on any axis.
-2. **Lattice.** A Cartesian lattice with spacing `nominal_dx` (plus optional jitter `randomness`) covers the canvas. A non-periodic axis gets `round(L/dx) + 1` points, endpoints included. A periodic axis gets `round(L/dx)` points, because the endpoint coincides with the start point after wrapping.
+1. **Canvas.** On non-periodic axes the bounding box is extended by $\lceil R/\Delta x_{\max}\rceil$ spacings on each side to host ghost particles; periodic axes get no padding.
+2. **Lattice.** A Cartesian lattice with spacing `nominal_dx` (plus optional jitter `randomness`) covers the canvas. A non-periodic axis gets `round(L/dx) + 1` points, endpoints included: lattice points within round-off ($\sqrt{\varepsilon}\,\Delta x$) of a wall are put on the wall exactly before the jitter is added, so both walls are interior. A periodic axis gets `round(L/dx)` points, because the endpoint coincides with the start point after wrapping.
 3. **Narrow band.** Lattice points outside the physical region are kept only if they lie within $R + \Delta x_{\max}$ of an interior point. These become the boundary (ghost) particles.
 4. **Tags.** `get_tag` sets `tags` and `is_boundary = (tag != 0)`.
 
