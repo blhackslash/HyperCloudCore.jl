@@ -762,6 +762,16 @@ end
         @test HyperCloudCore._has_adapt_candidates(pg, ad) == false       # the kernel pre-check agrees
     end
 
+    @testset "A CapacityError leaves the grid untouched" begin
+        pg = set_ic!(make_pg_1d(40), ic)
+        punch_hole!(pg, 10)
+        N  = pg.meta.N
+        reserve!(pg; limit = memory_estimate(pg).bytes + 1, tolerance = 0)   # exactly N particles
+        U0, V0, m0 = copy(view(pg.rhos, 1:N)), copy(view(pg.core.volumes, 1:N)), total_mass(pg)
+        @test_throws CapacityError adapt_particles!(pg, ad, kmax)
+        @test pg.meta.N == N && view(pg.rhos, 1:N) == U0 && view(pg.core.volumes, 1:N) == V0 && total_mass(pg) == m0
+    end
+
     @testset "No events inside the shock band" begin
         pg = set_ic!(make_pg_1d(40), ic)
         punch_hole!(pg, 10)

@@ -76,7 +76,8 @@ changes the particle set, and rebuilds the neighbour lists. `max_order` is the s
 consistency order (new particles start there, and `exclude_reduced_order` compares against it).
 Requires valid neighbour lists and volumes (`update_volumes!`). `mass_residual` is the change of
 `total_mass` over the call, which should be at round-off level. Merges and insertions involve interior
-particles only (no insertion between an interior particle and a ghost).
+particles only (no insertion between an interior particle and a ghost). On a grid whose buffers
+`reserve!` froze, a `CapacityError` is thrown before the grid is changed.
 
 The event work (detection, remap, compaction) is serial and runs on the host. On a grid built with
 `device_grid` a kernel first checks whether any neighbour pair violates the spacing rules; only then
@@ -96,6 +97,14 @@ function adapt_particles!(pg::ParticleGrid{D, M, T}, ad::ParticleAdaptivity{T}, 
 
     events = _detect_events(hg, ad, max_order)
     isempty(events) && return nothing_done
+    # Capacity first: the remaps below rewrite states and volumes in place, so a `CapacityError` (buffers frozen
+    # by `reserve!`) thrown by `_apply_topology!` would leave the grid in a non-conservative intermediate state
+    N_new = N + sum(ev -> length(ev.added) - length(ev.removed), events)
+    if N_new > N
+        ensure_capacity!(hg, N_new)
+        on_host || ensure_capacity!(pg, N_new)
+    end
+
     remove_mask = hg.shared.bit_buffer
     fill!(view(remove_mask, 1:N), false)
     new_pos, new_rho, new_vol = Space{D, T}[], State{M, T}[], T[]
