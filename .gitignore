@@ -16,3 +16,6 @@ docs/build
 
 # Licence texts for REUSE are tracked despite the *.txt rule above
 !LICENSES/**
+
+# Local Claude Code state (agent worktrees, settings)
+/.claude/

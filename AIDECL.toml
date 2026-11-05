@@ -1,6 +1,6 @@
 # AI declarations (migrated from version 1 by 'aidecl migrate').
 # Scheme: https://github.com/industrial-mathematics-group/.github/blob/main/.github/CONTRIBUTING.md#ai-assisted-contributions
-version = 2
+version = 3
 
 # TODO after migration: add Human-Review, Reviewed-by
 [[annotations]]
@@ -9,7 +9,7 @@ AI-Generation = "G3"
 Human-Review = "H1"
 Reviewed-by = "blhackslash <dev@blackslash.win>"
 Assisted-by = "Claude (Anthropic), claude-opus-5-5, claude-fable-5-1"
-AI-Review = "A1"
+AI-Review = "A2"
 AI-Reviewed-by = "Claude (Anthropic), claude-opus-5-5, independent review agent without the generating conversation"
 
 [[annotations]]
@@ -18,7 +18,7 @@ AI-Generation = "G2"
 Assisted-by = "Claude (Anthropic), claude-opus-5-5, claude-fable-5-1"
 Human-Review = "H2"
 Reviewed-by = "blhackslash <dev@blackslash.win>"
-AI-Review = "A1"
+AI-Review = "A2"
 AI-Reviewed-by = "Claude (Anthropic), claude-opus-5-5, independent review agent without the generating conversation"
 
 [[annotations]]
@@ -27,7 +27,7 @@ AI-Generation = "G3"
 Assisted-by = "Claude (Anthropic), claude-opus-5-5, claude-fable-5-1"
 Human-Review = "H1"
 Reviewed-by = "blhackslash <dev@blackslash.win>"
-AI-Review = "A1"
+AI-Review = "A2"
 AI-Reviewed-by = "Claude (Anthropic), claude-opus-5-5, independent review agent without the generating conversation"
 
 [[annotations]]
@@ -36,7 +36,7 @@ AI-Generation = "G3"
 Assisted-by = "Claude (Anthropic), claude-opus-5-5, claude-fable-5-1"
 Human-Review = "H2"
 Reviewed-by = "blhackslash <dev@blackslash.win>"
-AI-Review = "A1"
+AI-Review = "A2"
 AI-Reviewed-by = "Claude (Anthropic), claude-opus-5-5, independent review agent without the generating conversation"
 
 [[annotations]]
@@ -45,5 +45,5 @@ AI-Generation = "G2"
 Assisted-by = "Claude (Anthropic), claude-opus-5-5"
 Human-Review = "H2"
 Reviewed-by = "blhackslash <dev@blackslash.win>"
-AI-Review = "A1"
+AI-Review = "A2"
 AI-Reviewed-by = "Claude (Anthropic), claude-opus-5-5, independent review agent without the generating conversation"
