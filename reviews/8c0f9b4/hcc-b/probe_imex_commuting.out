@@ -1,0 +1,4 @@
+b̃·c = 0.7  b·c̃ = 0.3  b·c = 0.49999999999999994  b̃·c̃ = 0.5
+constructed pair   stepper test EOC = 2.02  (test asserts > 1.8)
+ARS222             stepper test EOC = 2.02  (test asserts > 1.8)
+constructed pair, non-autonomous ODE EOC = 1.0

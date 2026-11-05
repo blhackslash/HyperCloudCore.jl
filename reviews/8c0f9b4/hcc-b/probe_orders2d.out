@@ -1,0 +1,11 @@
+== 1-D MUSCL4 jit 0.2, R = 3.5, larger N
+MUSCL4 1D jit .2 errs=[6.89e-6, 5.16e-7, 3.29e-8, 2.44e-9] EOC=[3.74, 3.97, 3.75]
+== 2-D, jit 0.2, advection (1, 0.5), sin(2πx)sin(2πy)
+┌ Warning: Assignment to `errs` in soft scope is ambiguous because a global variable by the same name exists: `errs` will be treated as a new local. Disambiguate by using `local errs` to suppress this warning or `global errs` to assign to the existing global variable.
+└ @ ~/.claude/jobs/b26d185e/tmp/reviews/round2/hcc-b/probe_orders2d.jl:21
+MUSCL2         errs=[0.208, 0.044, 0.00916] EOC=[2.24, 2.27]
+MUSCL3         errs=[0.0738, 0.00988, 0.00129] EOC=[2.9, 2.93]
+MUSCL3 R3.5    errs=[0.175, 0.0254, 0.00328] EOC=[2.78, 2.96]
+MUSCL4         errs=[0.00464, 0.000292, 2.28e-5] EOC=[3.99, 3.68]
+MUSCL4 R3.5    errs=[0.017, 0.000765, 5.26e-5] EOC=[4.47, 3.86]
+MUSCL5         errs=[0.0102, 0.000325, 1.1e-5] EOC=[4.97, 4.89]
