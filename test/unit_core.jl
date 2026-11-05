@@ -673,6 +673,19 @@ end
         @test flags(MOODu2(δ; ratio = 0), p, cand) == false    # without it a 1-D box rings by 10 %
     end
 
+    @testset "Float32: no Float64 arithmetic in the curvature test" begin
+        pg32 = make_pg_1d(20; T = Float32)
+        g32  = MUSCL(Float32, 1, 1, 3, NoLimiter(), RusanovFlux())
+        c32  = MOODu2(1f-4)
+        U32  = pg32.rhos
+        rng  = HyperCloudCore._global_range(c32, U32, pg32.meta.N)
+        argt = (typeof(c32), typeof(g32), Int, eltype(U32), typeof(pg32.neighbor.ranges[1]), eltype(U32), typeof(pg32),
+                typeof(U32), typeof(rng))
+        ci, rt = only(code_typed(HyperCloudCore._u2_fails, argt))
+        @test rt === Bool
+        @test !any(t -> Core.Compiler.widenconst(t) === Float64, ci.ssavaluetypes)   # was (1.5 h)², a Float64
+    end
+
     @testset "Public functor and builder" begin
         set_fields!(f1, d1, f2, d2)
         p = nearest(c0)
