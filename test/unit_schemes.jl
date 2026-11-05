@@ -287,6 +287,28 @@ end
     @test all(j -> abs(pg.rhos[j][1] - exp(-src.λ * dt)) < 5e-3, interior_indices(pg))     # second-order IMEX step
 end
 
+@testset "IMEX tableaus: observed order through the stepper" begin
+    # Advection (explicit) coupled with a decay (implicit) on a fixed periodic lattice: the error against a fine-Δt
+    # run of the same spatial scheme is the temporal error. All four tableaus have three stages, so they share the
+    # stepper type of the test above (one compilation). The old two-stage ARS222 and the inconsistent PRSSP3 had
+    # EOC 1.05 / 1.07 here.
+    eq  = make_advection_1d()
+    src = DecaySource(3.0)
+    function imex_run(bt, n; tend = 0.4)
+        pg = set_ic!(make_pg_1d(20), x -> sin(π * x))
+        ts = GeneralRKTimeStepper(eq, MUSCL(Float64, 1, 1, 2, NoLimiter(), RusanovFlux()), MOOD(), (), (src,), bt)
+        dt = tend / n
+        for k in 0:(n - 1); ts(eq, pg, k * dt, dt); end
+        return [pg.rhos[i][1] for i in interior_indices(pg)]
+    end
+    for (make, order) in ((IMEX_ARS222_Tableau, 2), (IMEX_ARS233_Tableau, 3), (IMEX_PRSSP3_Tableau, 2), (IMEX_SSP2332_Tableau, 2))
+        bt  = make(Float64)
+        ref = imex_run(bt, 640)
+        e1, e2 = maximum(abs, imex_run(bt, 20) - ref), maximum(abs, imex_run(bt, 40) - ref)
+        @test log2(e1 / e2) > order - 0.2
+    end
+end
+
 @testset "Streamed divergence" begin
     # The streamed flux pass (cached per-slot weights, dynamic per-slot weights for dropped particles) gives the
     # divergence of the buffered fit up to round-off, with both fluxes, and never touches the slot buffers.

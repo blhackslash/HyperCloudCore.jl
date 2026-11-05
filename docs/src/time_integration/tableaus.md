@@ -15,10 +15,12 @@ Every tableau is an `IMEXButcherTableau{T}` holding an explicit part $(\tilde A,
 | `RK4_Classical_Tableau(T)` | 4 | no | Classical RK4, order 4 |
 | `RK4_SSP_Tableau(T)` | 5 | yes | Spiteri–Ruuth SSPRK(5,4), order 4, SSP coefficient 1.508 |
 | `IMEX_Euler_Tableau(T)` | 2 | yes | Forward/backward Euler, order 1 |
-| `IMEX_ARS222_Tableau(T[, γ])` | 2 | no | Ascher–Ruuth–Spiteri (2,2,2) |
-| `IMEX_ARS233_Tableau(T[, γ])` | 3 | no | Ascher–Ruuth–Spiteri (2,3,3) |
-| `IMEX_SSP2332_Tableau(T)` | 3 | yes | Pareschi–Russo SSP2(3,3,2), L-stable implicit part |
-| `IMEX_PRSSP3_Tableau(T)` | 3 | yes | Pareschi–Russo type, SSP-RK3 explicit part |
+| `IMEX_ARS222_Tableau(T[, γ])` | 3 | no | Ascher–Ruuth–Spiteri (2,2,2), order 2, first stage explicit, L-stable implicit part |
+| `IMEX_ARS233_Tableau(T[, γ])` | 3 | no | Ascher–Ruuth–Spiteri (2,3,3), order 3 |
+| `IMEX_SSP2332_Tableau(T)` | 3 | yes | Pareschi–Russo SSP2(3,3,2), order 2, L-stable implicit part |
+| `IMEX_PRSSP3_Tableau(T)` | 3 | yes | Pareschi–Russo SSP3(3,3,2), order 2 (SSP-RK3 explicit part, L-stable implicit part) |
+
+The IMEX orders are those of the pair, i.e. including the coupling conditions between the explicit and the implicit part (the test suite checks them, and the observed order through the stepper). The explicit part of `IMEX_PRSSP3_Tableau` alone is third order, but a three-stage pair with these weights is at most second order; Pareschi and Russo's third-order scheme SSP3(4,3,3) needs four stages. Up to version 0.7.9, `IMEX_ARS222_Tableau` dropped the explicit first stage and `IMEX_PRSSP3_Tableau` had an inconsistent implicit row: both were first order on coupled problems.
 
 ## Choosing a tableau with MOOD
 

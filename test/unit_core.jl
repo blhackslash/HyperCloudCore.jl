@@ -428,6 +428,29 @@ end
     for make in imex
         @test sum(make(Float64).b) ≈ 1.0
     end
+    # Order conditions of the IMEX pairs (partitioned RK conditions: every combination of the explicit and
+    # implicit weights, nodes and matrices), up to the claimed order, and the nodes are the row sums
+    function imex_residuals(bt)
+        A, At = Matrix(bt.a), Matrix(bt.a_t)
+        bs, cs, As = (Vector(bt.b_t), Vector(bt.b)), (Vector(bt.c_t), Vector(bt.c)), (At, A)
+        o1 = [sum(b) - 1 for b in bs]
+        o2 = [b' * c - 1/2 for b in bs for c in cs]
+        o3 = vcat([b' * (c .* c2) - 1/3 for b in bs for c in cs for c2 in cs],
+                  [b' * (Am * c) - 1/6 for b in bs for Am in As for c in cs])
+        nodes = max(maximum(abs, vec(sum(A; dims = 2)) - cs[2]), maximum(abs, vec(sum(At; dims = 2)) - cs[1]))
+        return maximum(abs, o1), maximum(abs, o2), maximum(abs, o3), nodes
+    end
+    for (make, order) in ((IMEX_Euler_Tableau, 1), (IMEX_ARS222_Tableau, 2), (IMEX_ARS233_Tableau, 3),
+                          (IMEX_PRSSP3_Tableau, 2), (IMEX_SSP2332_Tableau, 2)), T in (Float64, Float32)
+        r1, r2, r3, nodes = imex_residuals(make(T))
+        tol = 10eps(T)
+        @test nodes < tol
+        @test r1 < tol
+        order >= 2 && @test r2 < tol
+        order >= 3 && @test r3 < tol
+        order == 2 && @test r3 > 1e-3                       # the claimed order is the actual one
+    end
+    @test num_stages(IMEX_ARS222_Tableau(Float64)) == 3 && iszero(IMEX_ARS222_Tableau(Float64).a[1, 1])
     @test_throws AssertionError IMEXButcherTableau([1.0 1.0; 0.0 1.0], zeros(2, 2), [1.0, 1.0], [0.0, 1.0], [0.5, 0.5], [0.5, 0.5])
     @test_throws AssertionError IMEXButcherTableau(zeros(2, 2), [0.0 1.0; 0.0 0.0], [0.0, 1.0], [0.0, 1.0], [0.5, 0.5], [0.5, 0.5])
 end
