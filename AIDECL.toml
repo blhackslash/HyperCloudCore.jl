@@ -3,7 +3,6 @@
 version = 3
 exclude = ["reviews/**"]   # committed AI reviews (CONTRIBUTING.md) need no declaration
 
-# TODO after migration: add Human-Review, Reviewed-by
 [[annotations]]
 path = "**"
 AI-Generation = "G3"
@@ -11,7 +10,7 @@ Human-Review = "H1"
 Reviewed-by = "blhackslash <dev@blackslash.win>"
 Assisted-by = "Claude (Anthropic), claude-opus-5-5, claude-fable-5-1"
 AI-Review = "A2"
-AI-Reviewed-by = "Claude (Anthropic), claude-opus-5-5, independent review agent without the generating conversation"
+AI-Reviewed-by = "Claude Opus 5.5 (Anthropic), new sessions without the generating conversation (reviews/)"
 
 [[annotations]]
 path = "src/**"
@@ -20,7 +19,7 @@ Assisted-by = "Claude (Anthropic), claude-opus-5-5, claude-fable-5-1"
 Human-Review = "H2"
 Reviewed-by = "blhackslash <dev@blackslash.win>"
 AI-Review = "A2"
-AI-Reviewed-by = "Claude (Anthropic), claude-opus-5-5, independent review agent without the generating conversation"
+AI-Reviewed-by = "Claude Opus 5.5 (Anthropic), new sessions without the generating conversation (reviews/)"
 
 [[annotations]]
 path = "test/**"
@@ -29,7 +28,7 @@ Assisted-by = "Claude (Anthropic), claude-opus-5-5, claude-fable-5-1"
 Human-Review = "H1"
 Reviewed-by = "blhackslash <dev@blackslash.win>"
 AI-Review = "A2"
-AI-Reviewed-by = "Claude (Anthropic), claude-opus-5-5, independent review agent without the generating conversation"
+AI-Reviewed-by = "Claude Opus 5.5 (Anthropic), new sessions without the generating conversation (reviews/)"
 
 [[annotations]]
 path = "docs/**"
@@ -38,7 +37,7 @@ Assisted-by = "Claude (Anthropic), claude-opus-5-5, claude-fable-5-1"
 Human-Review = "H2"
 Reviewed-by = "blhackslash <dev@blackslash.win>"
 AI-Review = "A2"
-AI-Reviewed-by = "Claude (Anthropic), claude-opus-5-5, independent review agent without the generating conversation"
+AI-Reviewed-by = "Claude Opus 5.5 (Anthropic), new sessions without the generating conversation (reviews/)"
 
 [[annotations]]
 path = "logos/**"
@@ -47,4 +46,15 @@ Assisted-by = "Claude (Anthropic), claude-opus-5-5"
 Human-Review = "H2"
 Reviewed-by = "blhackslash <dev@blackslash.win>"
 AI-Review = "A2"
-AI-Reviewed-by = "Claude (Anthropic), claude-opus-5-5, independent review agent without the generating conversation"
+AI-Reviewed-by = "Claude Opus 5.5 (Anthropic), new sessions without the generating conversation (reviews/)"
+
+# Changed on claude/aidecl by Claude agents to address the A2 reviews in reviews/ (and reviewed again there).
+# Human-Review: to be filled in by the responsible person (e.g. `aidecl annotate ... -H H1 --reviewed-by ...`).
+[[annotations]]
+path = ["docs/src/gpu_roadmap.md", "docs/src/particle_grids/domains.md", "docs/src/particle_grids/overview.md", "docs/src/particle_grids/volumes.md", "docs/src/spatial/central.md", "docs/src/spatial/muscl.md", "docs/src/spatial/upwind.md", "docs/src/spatial/weno.md", "docs/src/time_integration/tableaus.md", "docs/src/time_integration/time_stepper.md", "src/Backend.jl", "src/DeviceAdapt.jl", "src/Grid/Adaptivity.jl", "src/Grid/Domains.jl", "src/Grid/ParticleGrids.jl", "src/Grid/Reordering.jl", "src/Grid/Volumes.jl", "src/Interpolation/Central.jl", "src/Interpolation/FluxFunctions.jl", "src/Interpolation/Limiter.jl", "src/Interpolation/MUSCL.jl", "src/Interpolation/Upwind.jl", "src/Interpolation/WENO.jl", "src/TimeStepping/ButcherTableaus.jl", "src/TimeStepping/MOOD.jl", "src/TimeStepping/TimeSteppers.jl", "src/Utils.jl", "test/pipeline_tests.jl", "test/runtests.jl", "test/unit_backends.jl", "test/unit_core.jl", "test/unit_schemes.jl"]
+AI-Generation = "G3"
+Human-Review = "TODO"
+AI-Review = "A2"
+Assisted-by = ["Claude (Anthropic), claude-opus-5-5"]
+AI-Reviewed-by = ["Claude Opus 5.5 (Anthropic), new sessions without the generating conversation (reviews/)"]
+Reviewed-by = ["TODO"]
