@@ -76,6 +76,8 @@ Two corrections follow:
 1. **Residual.** The stored content of a removed particle, $V_r U_r$, is not exactly $\int \phi_r^{\text{old}} \tilde U$. The difference is spread over the affected particles in proportion to their new volumes, so $\sum V U$ is preserved to round-off.
 2. **Repair.** Each affected particle is clipped to the bounds of its old neighbourhood, and the clipped content is redistributed to affected particles that still have room. This enforces the discrete maximum principle while keeping the sum exact; if no room is left, the remainder is spread by volume and the bounds are violated by that remainder.
 
+**Boundary particles** (the ghosts of a non-periodic box) are not remapped: their states are boundary data (`FixedDirichlet` restores them from `pg.rhos`, `OutflowBC` overwrites them at the next stage), so an event next to a wall leaves their states and volumes as they are. Their shape functions still change near the event; that swept share is left out of the balance, so the residual step puts it onto the interior particles and $\sum V U$ over the interior (and over all particles) is preserved exactly. (Up to version 0.7.9 the ghosts were remapped like interior particles, which changed Dirichlet data permanently.) Events only start at interior particles, and insertions need two interior particles.
+
 Then the particle arrays are compacted/extended, the neighbour lists are rebuilt, and new particles start at the scheme's maximum order. The remap is second-order accurate in smooth regions (linear reconstruction, averaged over the new shape function's support).
 
 ### Volumes after the call

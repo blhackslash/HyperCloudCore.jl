@@ -423,6 +423,11 @@ function _remap_event!(pg::ParticleGrid{D, M, T}, ad::ParticleAdaptivity{T}, ev:
     @inbounds for l in 1:n_loc; lmap[loc_idx[l]] = l; end
     is_removed = falses(n_loc)
     for r in ev.removed; is_removed[lmap[r]] = true; end
+    # Boundary (ghost) particles are not remapped: their states are boundary data (`FixedDirichlet` restores them
+    # from `pg.rhos`, `OutflowBC` overwrites them), so the remap must not write them. Their swept share is left out
+    # of the balance below, which then puts it onto the interior particles: Σ V U over the interior is exact.
+    isb      = pg.core.is_boundary
+    is_fixed = [isb[loc_idx[l]] for l in 1:n_loc]
 
     # 2. Limited linear reconstruction data of the old solution on the local set
     grads = Vector{SVector{D, State{M, T}}}(undef, n_loc)
@@ -515,6 +520,7 @@ function _remap_event!(pg::ParticleGrid{D, M, T}, ad::ParticleAdaptivity{T}, ev:
     # 4. New volumes and contents; exact residual correction
     V_before = zero(T); m_before = zero(State{M, T})
     @inbounds for l in 1:n_loc
+        is_fixed[l] && continue
         j = loc_idx[l]
         V_before += V[j]; m_before += V[j] * U[j]
     end
@@ -522,7 +528,7 @@ function _remap_event!(pg::ParticleGrid{D, M, T}, ad::ParticleAdaptivity{T}, ev:
     mn = zeros(State{M, T}, n_loc + n_add)
     V_after = zero(T); m_after = zero(State{M, T})
     @inbounds for l in 1:n_loc
-        is_removed[l] && continue
+        (is_removed[l] || is_fixed[l]) && continue
         j = loc_idx[l]
         Vn[l] = max(V[j] + δV[l], T(1e-12) * V[j])
         mn[l] = V[j] * U[j] + δm[l]
@@ -536,15 +542,15 @@ function _remap_event!(pg::ParticleGrid{D, M, T}, ad::ParticleAdaptivity{T}, ev:
     V_after > 0 || error("Remap produced no volume at $(ev.center); increase samples_per_dx.")
     εV, εm = V_before - V_after, m_before - m_after
     @inbounds for l in 1:(n_loc + n_add)
-        (l <= n_loc && is_removed[l]) && continue
+        (l <= n_loc && (is_removed[l] || is_fixed[l])) && continue
         frac  = Vn[l] / V_after
         mn[l] += frac * εm
         Vn[l] += frac * εV
     end
 
     # 5. DMP repair on the affected set (conservative redistribution)
-    aff = Int[]                                         # local ids of survivors + added
-    for l in 1:n_loc; is_removed[l] || push!(aff, l); end
+    aff = Int[]                                         # local ids of interior survivors + added
+    for l in 1:n_loc; (is_removed[l] || is_fixed[l]) || push!(aff, l); end
     for a in 1:n_add; push!(aff, n_loc + a); end
     Un  = [mn[l] / Vn[l] for l in aff]
     lo_a = Vector{State{M, T}}(undef, length(aff)); hi_a = similar(lo_a)

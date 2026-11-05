@@ -841,6 +841,30 @@ end
         @test maximum(i -> last(pg.neighbor.ranges[i]), 1:N) <= length(pg.neighbor.indices)
     end
 
+    @testset "Events next to a wall leave the boundary particles alone" begin
+        # A merge with the wall particle of a FixedDirichlet box: the remap used to write the ghosts too (0.95 →
+        # 0.9529 at x = -0.05), which changed the Dirichlet data for good. Ghost states and volumes stay now, and
+        # Σ V U over the interior is exact.
+        bc   = Dict{Int, AbstractBoundaryCondition}(1 => FixedDirichlet())
+        geom = get_rectangular_domain(Float64, (0.0,), (1.0,); bc_map = bc)
+        dx   = 0.05
+        pg   = ParticleGrid(geom, (dx,), ExponentialWeightFunction(1.0, 2.5dx), 1)
+        N    = pg.meta.N
+        for i in 1:N; pg.rhos[i] = State{1, Float64}(1 + pg.core.positions[i][1]); end
+        i5 = argmin(i -> abs(pg.core.positions[i][1] - 0.05), 1:N)
+        pg.core.positions[i5] = Space{1, Float64}(0.015); pg.rhos[i5] = State{1, Float64}(1.015)
+        pg.neighbor(pg); update_volumes!(pg, ShepardVolumes())
+        ghost(i) = pg.core.is_boundary[i]
+        g0 = Dict(pg.core.positions[i] => (pg.rhos[i], pg.core.volumes[i]) for i in 1:N if ghost(i))
+        content(g) = sum(i -> pg.core.volumes[i] * pg.rhos[i][1], filter(i -> ghost(i) == g, 1:pg.meta.N))
+        c_in, c_gh = content(false), content(true)
+        rep = adapt_particles!(pg, ad, kmax)
+        @test rep.removed == 2 && rep.inserted == 1
+        @test Dict(pg.core.positions[i] => (pg.rhos[i], pg.core.volumes[i]) for i in 1:pg.meta.N if ghost(i)) == g0
+        @test abs(content(false) - c_in) < 1e-14 && content(true) == c_gh
+        @test all(i -> ghost(i) || 1 - 1e-12 <= pg.rhos[i][1] <= 2 + 1e-12, 1:pg.meta.N)
+    end
+
     @testset "No events inside the shock band" begin
         pg = set_ic!(make_pg_1d(40), ic)
         punch_hole!(pg, 10)
