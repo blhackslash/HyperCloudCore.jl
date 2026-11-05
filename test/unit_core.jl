@@ -95,6 +95,11 @@ end
     # a tiny increment inside wide bounds is not limited (Float32: φ was 0)
     f32(x) = State{1, Float32}(x)
     @test HyperCloudCore._update_phi(BarthJespersenLimiter(:hard), ones(State{1, Float32}), f32(1f-8), f32(0), f32(1), f32(-1))[1] == 1f0
+    # Venkatakrishnan: r² overflowed Float32 from r ≈ 1.8e19 (NaN); the same values as the textbook form otherwise
+    vk(r) = HyperCloudCore.limiter_phi(VenkatakrishnanLimiter(:hard), r)
+    @test all(r -> isapprox(vk(r), (r^2 + 2r) / (r^2 + r + 2); rtol = 4eps()), (0.0, 1e-3, 0.5, 1.0, 1.5, 7.0, 1e3, 1e7))
+    @test vk(-2.0) == 0 && vk(1f20) ≈ 1f0 && vk(Inf32) == 1f0 && vk(1f20) ≈ Float32(vk(1e20))
+    @test !isnan(HyperCloudCore._update_phi(VenkatakrishnanLimiter(:hard), ones(State{1, Float32}), f32(1f-11), f32(0), f32(1f9), f32(-1f9))[1])
 end
 
 @testset "Grid capacity management" begin
