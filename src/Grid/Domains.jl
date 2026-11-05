@@ -211,7 +211,10 @@ function get_points(
     # Lattice points within round-off of a non-periodic wall are put on the wall: `canvas_mins + (I - 1) dx`
     # misses `maxs` by a few ulps for many spacings (e.g. [-1, 1] with dx = 2/30), and the closed-interval
     # classification then made that wall point a ghost while the one on `mins` stayed interior.
-    snap = sqrt(eps(T)) .* dxs_f
+    # The tolerance covers the round-off of the lattice coordinate itself, which grows with |x| and the number of
+    # spacings from canvas_mins (in Float32 sqrt(eps)·dx alone missed walls from about 4000 points per axis).
+    snap = Space{D, T}(ntuple(d -> sqrt(eps(T)) * dxs_f[d] +
+                                   8 * eps(T) * (abs(cd.canvas_mins[d]) + abs(cd.canvas_maxs[d] - cd.canvas_mins[d])), Val(D)))
     for I in CartesianIndices(Ns_total)
         pos_tuple = ntuple(Val(D)) do d
             x = cd.canvas_mins[d] + (I[d] - 1) * dxs_f[d]

@@ -147,6 +147,15 @@ end
             ghosts = [pg.core.positions[i][1] for i in 1:pg.meta.N if pg.core.is_boundary[i]]
             @test count(<(T(lo)), ghosts) == count(>(T(hi)), ghosts)
         end
+        # Float32 at fine resolutions: the round-off of the lattice coordinate grows with |x|/dx (lost from Ns ≈ 3900)
+        for (lo, hi, Ns) in ((0, 1, 3900), (0, 1, 5900), (-1, 1, 3900), (-1, 1, 6500), (0, 1, 20000))
+            dx   = (Float32(hi) - Float32(lo)) / Ns
+            geom = get_rectangular_domain(Float32, (lo,), (hi,))
+            cd   = HyperCloudCore.ComputationalDomain(geom, (dx,), 2.5f0)
+            pos, isb, _, _, _ = HyperCloudCore.get_points(cd, geom; nominal_dx = (dx,), interp_range_factor = 2.5f0)
+            xs   = [p[1] for (p, b) in zip(pos, isb) if !b]
+            @test length(xs) == Ns + 1 && minimum(xs) == lo && maximum(xs) == hi
+        end
         dx = 2 / 30                                                   # 2-D: no wall row or column lost
         pg = ParticleGrid(get_rectangular_domain(Float64, (-1.0, -1.0), (1.0, 1.0)), (dx, dx), ExponentialWeightFunction(1.0, 2.5dx), 1)
         @test pg.meta.N_interior == 31^2
