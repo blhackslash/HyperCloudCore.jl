@@ -104,7 +104,7 @@ include("GridMovers.jl")
 
 The one time integrator: explicit RK and IMEX share this struct, since an explicit tableau is an
 `IMEXButcherTableau` with a zero implicit part (see `RKButcherTableau`). `sources` may mix explicit
-and implicit terms. With an explicit tableau, implicit terms are applied explicitly (their `evaluate_source`
+and implicit terms. With an explicit tableau (`a = 0` and `b = 0`), implicit terms are applied explicitly (their `evaluate_source`
 at every stage, weighted like the flux divergence; the constructor warns), since there is no implicit part
 to solve them with. If `pg.mover` is not `NoGridMover`, particle positions are integrated as
 additional stage variables of the same tableau (see `GridMovers.jl`).
@@ -193,7 +193,7 @@ struct GeneralRKTimeStepper{D, M, T, PDE <: HyperbolicPDE, G <: DivergenceInterp
              VE <: Union{Nothing, VolumeEstimator}, AT <: AbstractArray}
         s  = num_stages(tableau)
         C  = ssp_coefficient(tableau)
-        if !isempty(implicit_sources) && all(iszero, tableau.a)
+        if !isempty(implicit_sources) && all(iszero, tableau.a) && all(iszero, tableau.b)   # no implicit part
             @warn "Implicit source terms given with a purely explicit tableau: they are applied explicitly, with the " *
                   "explicit weights of the tableau (no implicit solve)."
             tableau = _explicit_implicit_part(tableau)

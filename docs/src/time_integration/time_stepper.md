@@ -37,7 +37,7 @@ GeneralRKTimeStepper(pde, interp, mood, explicit::Tuple, implicit::Tuple, tablea
 
 - `interp` is a `DivergenceInterpolator`, and `mood` a `MOOD` object; `MOOD()` disables order reduction.
 - `tableau` is an `IMEXButcherTableau`; every built-in explicit tableau already returns one (see [Butcher Tableaus](@ref)).
-- A mixed `sources` tuple is split into `AbstractExplicitSourceTerm`s and `AbstractImplicitSourceTerm`s. Implicit sources with a purely explicit tableau ($A = 0$, $b = 0$) are applied explicitly: the stepper copies the explicit weights into the implicit part, so $K_I^{(k)} = S(Y_k)$ is evaluated without a solve and weighted like the flux divergence (the explicit method applied to $F + S$; the MOOD substeps of an SSP tableau include it). The constructor warns, since a stiff source then restricts the time step.
+- A mixed `sources` tuple is split into `AbstractExplicitSourceTerm`s and `AbstractImplicitSourceTerm`s. Implicit sources with a purely explicit tableau ($A = 0$, $b = 0$) are applied explicitly: the stepper copies the explicit weights into the implicit part, so $K_I^{(k)} = S(Y_k)$ is evaluated without a solve and weighted like the flux divergence (the explicit method applied to $F + S$; the MOOD substeps of an SSP tableau include it). The constructor warns, since a stiff source then restricts the time step; with an active MOOD criterion the Euler substeps of a stiff source ($\lambda \Delta t / C \gtrsim 1$) fail everywhere and drop the whole cloud to order 1, which lowering spatial orders cannot fix. A tableau with $A = 0$ but $b \ne 0$ is used as given.
 
 Keyword options:
 

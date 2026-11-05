@@ -322,6 +322,10 @@ end
     ts  = @test_logs (:warn, r"applied explicitly") GeneralRKTimeStepper(eq, MUSCL(Float64, 1, 1, 2, NoLimiter(), RusanovFlux()),
                                                                           MOOD(), (), (src,), RK3_SSP_Tableau(Float64))
     @test ts.substep_ratio ≈ 1 atol = 1e-9                          # still the SSP coefficient of RK3
+    # Only a tableau without an implicit part (a = 0 and b = 0) is converted: a hand-made a = 0, b ≠ 0 keeps its b
+    own = IMEXButcherTableau(zeros(2, 2), [0.0 0.0; 1.0 0.0], [0.0, 1.0], [0.0, 1.0], [0.25, 0.75], [0.5, 0.5])
+    ts2 = @test_logs GeneralRKTimeStepper(eq, MUSCL(Float64, 1, 1, 2, NoLimiter(), RusanovFlux()), MOOD(), (), (src,), own)
+    @test ts2.tableau.b == [0.25, 0.75] && iszero(ts2.tableau.a)
     dt = 0.1; z = -src.λ * dt
     ts(eq, pg, 0.0, dt)
     @test all(j -> isapprox(pg.rhos[j][1], 1 + z + z^2 / 2 + z^3 / 6; rtol = 1e-13), interior_indices(pg))
