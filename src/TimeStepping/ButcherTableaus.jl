@@ -17,8 +17,8 @@ special case `a == 0`, `b == 0` (see `RKButcherTableau`).
 For an explicit tableau with a positive SSP coefficient ([`ssp_coefficient`](@ref): `RK1_Euler`, `RK2_SSP`,
 `RK2_Ralston` (`C = 1/2`), `RK3_SSP`, `RK4_SSP`) the time stepper checks the forward Euler substeps of the
 canonical Shu–Osher form, of which every stage is a convex combination; that is rigorous for any SSP method.
-For the others (`RK4_Classical`, the IMEX tableaus) it checks the stage candidates, which has no theoretical
-backing.
+For the others (`RK4_Classical` and every IMEX tableau, also those with an SSP explicit part: `ssp_coefficient` is
+0 for any tableau with an implicit part) it checks the stage candidates, which has no theoretical backing.
 """
 struct IMEXButcherTableau{T, MA <: AbstractMatrix{T}, VA <: AbstractVector{T}}
     a::MA
@@ -113,7 +113,7 @@ function RK2_SSP_Tableau(::Type{T}) where {T}
     return RKButcherTableau(A, T[1/2, 1/2], T[0.0, 1.0])
 end
 
-"2-stage, 2nd-order Ralston (not SSP)."
+"2-stage, 2nd-order Ralston: minimal truncation error, SSP with coefficient `C = 1/2` (half that of SSP-RK2)."
 function RK2_Ralston_Tableau(::Type{T}) where {T}
     A = T[0.0 0.0;
           2/3 0.0]
