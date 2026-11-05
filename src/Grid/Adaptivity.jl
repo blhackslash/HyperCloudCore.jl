@@ -77,7 +77,8 @@ consistency order (new particles start there, and `exclude_reduced_order` compar
 Requires valid neighbour lists and volumes (`update_volumes!`). `mass_residual` is the change of
 `total_mass` over the call, which should be at round-off level. Merges and insertions involve interior
 particles only (no insertion between an interior particle and a ghost). On a grid whose buffers
-`reserve!` froze, a `CapacityError` is thrown before the grid is changed.
+`reserve!` froze, a `CapacityError` is thrown before the grid is changed: the particle buffers and the neighbour
+slots the new particle set needs (`_slots_after_events`) are checked before the first remap.
 
 The event work (detection, remap, compaction) is serial and runs on the host. On a grid built with
 `device_grid` a kernel first checks whether any neighbour pair violates the spacing rules; only then
@@ -104,6 +105,9 @@ function adapt_particles!(pg::ParticleGrid{D, M, T}, ad::ParticleAdaptivity{T}, 
         ensure_capacity!(hg, N_new)
         on_host || ensure_capacity!(pg, N_new)
     end
+    # ... and the neighbour slots the search after the topology change will need (in the layout of `pg`)
+    total_nb, max_nb = _slots_after_events(hg, events)
+    ensure_capacity!(pg.neighbor, _slot_capacity(eltype(pg.neighbor.ranges), total_nb, max_nb, N_new))
 
     remove_mask = hg.shared.bit_buffer
     fill!(view(remove_mask, 1:N), false)
@@ -124,6 +128,51 @@ function adapt_particles!(pg::ParticleGrid{D, M, T}, ad::ParticleAdaptivity{T}, 
     changed === nothing || _reestimate_volumes!(pg, hg, ad.volume_estimator, changed)
 
     return (inserted = length(new_pos), removed = n_removed, mass_residual = total_mass(pg) - mass0)
+end
+
+"""
+    _slots_after_events(pg, events) -> (total, max_nb)
+
+Neighbour slots of the particle set after `events` (old particles minus the removed ones, plus the added ones):
+the total and the largest count per particle, from the current neighbour lists and cell list, without changing
+anything. Removed particles leave the lists of their neighbours; an added particle gets every surviving or added
+particle within `R` and joins their lists. Distances are compared with a slightly larger radius, so the count is
+an upper bound (round-off at exactly `R`).
+"""
+function _slots_after_events(pg::ParticleGrid{D, M, T}, events) where {D, M, T}
+    N, nb = pg.meta.N, pg.neighbor
+    R_sq  = pg.meta.R^2 * (1 + 16 * eps(T))
+    L, Li = pg.domain.L_wrap, pg.domain.invL_wrap
+    removed = Set{Int}(r for ev in events for r in ev.removed)
+    added   = [x for ev in events for x in ev.added]
+    delta   = Dict{Int, Int}()                                    # change of the count of a surviving particle
+    for r in removed, k in nb.ranges[r]
+        j = nb.indices[k]
+        j in removed || (delta[j] = get(delta, j, 0) - 1)
+    end
+    total, max_nb = 0, 0
+    idx, dvec = Int[], Space{D, T}[]
+    for (a, xa) in enumerate(added)
+        c = 0
+        for k in 1:_collect_near!(pg, xa, R_sq, idx, dvec)
+            j = idx[k]
+            j in removed && continue
+            c += 1
+            delta[j] = get(delta, j, 0) + 1
+        end
+        for (b, xb) in enumerate(added)
+            b != a && sum(abs2, _wrapped_diff(xb, xa, L, Li)) <= R_sq && (c += 1)
+        end
+        total += c
+        max_nb = max(max_nb, c)
+    end
+    for i in 1:N
+        i in removed && continue
+        n = length(nb.ranges[i]) + get(delta, i, 0)
+        total += n
+        max_nb = max(max_nb, n)
+    end
+    return total, max_nb
 end
 
 # The particles the remaps wrote, with their DMP bounds, by index of the compacted cloud (survivors keep their

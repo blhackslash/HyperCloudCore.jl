@@ -807,6 +807,40 @@ end
         @test pg.meta.N == N && view(pg.rhos, 1:N) == U0 && view(pg.core.volumes, 1:N) == V0 && total_mass(pg) == m0
     end
 
+    @testset "A CapacityError of the neighbour slots also leaves the grid untouched" begin
+        # One gap of 1.7Δx; room for 51 particles but only for the current slots per particle (200 slots): the
+        # insertion needs 204, which used to throw in the neighbour search after the topology change.
+        function gap_grid()
+            geom = get_rectangular_domain(Float64, (0.0,), (1.0,); is_periodic = true)
+            dx   = 0.02
+            g    = ParticleGrid(geom, (dx,), ExponentialWeightFunction(1.0, 2.5dx), 1)   # not `pg`: the closure
+            n    = g.meta.N                                                               # would assign the outer one
+            for i in 1:n; g.rhos[i] = State{1, Float64}(sin(2π * g.core.positions[i][1])); end
+            order = sortperm([g.core.positions[i][1] for i in 1:n])
+            s = (1 - 1.7dx) / (n - 1)
+            for (k, i) in enumerate(order); g.core.positions[i] = Space{1, Float64}(0.001 + (k - 1) * s); end
+            g.neighbor(g); update_volumes!(g, ShepardVolumes())
+            return g
+        end
+        pg  = gap_grid()
+        N   = pg.meta.N
+        # the slot count of the new topology is predicted exactly (here, without a reservation)
+        evs = HyperCloudCore._detect_events(pg, ad, kmax)
+        tot, mx = HyperCloudCore._slots_after_events(pg, evs)
+        pg2 = gap_grid()
+        adapt_particles!(pg2, ad, kmax)
+        @test pg2.meta.N == N + 1
+        @test tot == sum(i -> length(pg2.neighbor.ranges[i]), 1:pg2.meta.N) && mx == pg2.meta.max_nb
+        spp = slots_per_particle(pg)
+        est = memory_estimate(pg; particles = 0, slots = 0)
+        reserve!(pg; limit = est.fixed + ceil(Int, (N + 1.5) * (est.per_particle + spp * est.per_slot)), tolerance = 0,
+                 slots_per_particle = spp)
+        U0, V0, X0 = copy(view(pg.rhos, 1:N)), copy(view(pg.core.volumes, 1:N)), copy(view(pg.core.positions, 1:N))
+        @test_throws CapacityError adapt_particles!(pg, ad, kmax)
+        @test pg.meta.N == N && view(pg.rhos, 1:N) == U0 && view(pg.core.volumes, 1:N) == V0 && view(pg.core.positions, 1:N) == X0
+        @test maximum(i -> last(pg.neighbor.ranges[i]), 1:N) <= length(pg.neighbor.indices)
+    end
+
     @testset "No events inside the shock band" begin
         pg = set_ic!(make_pg_1d(40), ic)
         punch_hole!(pg, 10)
