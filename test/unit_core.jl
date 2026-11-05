@@ -79,6 +79,22 @@ end
     @test math_max(-2.0, 3.0) == 3.0  && math_min(-2.0, 3.0) == -2.0
     @test math_max([1.0, 5.0], [2.0, 4.0]) == [2.0, 5.0]
     @test math_min([1.0, 5.0], [2.0, 4.0]) == [1.0, 4.0]
+    # Exact for infinite arguments and wide magnitudes (the former 0.5 (a + b ± |a - b|) gave NaN, 0, Inf, ...)
+    @test math_min(1.0, Inf) == 1.0 && math_max(-Inf, 1.0) == 1.0 && math_max(1.0, Inf) == Inf
+    @test math_min(1.0, 1e-17) == 1e-17 && math_min(1e20, 1.0) == 1.0 && math_max(-1e20, -1.0) == -1.0
+    @test math_min(1.0f0, 1.0f8) == 1.0f0 && math_min(1f3, 1f-3) == 1f-3 && math_max(3.0f38, 3.0f38) == 3.0f38
+    @test math_min(0.1, 0.3) == 0.1 && math_max(0.1, 0.3) == 0.3
+    @test isnan(math_min(NaN, 1.0)) && isnan(math_max(1.0, NaN))
+    @test math_min(SVector(1.0, 1f8), SVector(1e-17, 1.0)) == SVector(1e-17, 1.0)
+    # ... so the limiters do not switch off at a large ratio r (unlimited: φ = 1, superbee 2)
+    for (T, r) in ((Float64, 1e17), (Float32, 1.0f8))
+        @test HyperCloudCore.limiter_phi(BarthJespersenLimiter(:hard), r) == one(T)
+        @test HyperCloudCore.limiter_phi(MinmodLimiter(:hard), r) == one(T)
+        @test HyperCloudCore.limiter_phi(SuperbeeLimiter(:hard), r) == T(2)
+    end
+    # a tiny increment inside wide bounds is not limited (Float32: φ was 0)
+    f32(x) = State{1, Float32}(x)
+    @test HyperCloudCore._update_phi(BarthJespersenLimiter(:hard), ones(State{1, Float32}), f32(1f-8), f32(0), f32(1), f32(-1))[1] == 1f0
 end
 
 @testset "Grid capacity management" begin

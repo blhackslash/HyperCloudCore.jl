@@ -76,13 +76,15 @@ end
     math_max(a, b)
     math_min(a, b)
 
-Branchless, SIMD-friendly helper functions computing maximums and minimums.
-- Calculates the result algebraically using `0.5 * (a + b ± abs(a - b))` to avoid branching overhead during hot-loop execution.
+Branch-free maximum and minimum (scalars, or element-wise for vectors): `max`/`min`, which compile to
+select instructions on CPUs and GPUs. Exact for every pair of floats, including `±Inf` and arguments of
+very different magnitude (the former `0.5 (a + b ± |a − b|)` lost the smaller argument to cancellation,
+overflowed and gave `NaN` for infinite arguments); a `NaN` argument gives `NaN`.
 """
-@inline math_max(a::T, b::T) where {T <: Real} = T(0.5) * (a + b + abs(a - b))
-@inline math_min(a::T, b::T) where {T <: Real} = T(0.5) * (a + b - abs(a - b))
-@inline math_max(a::AbstractVector{T}, b::AbstractVector{T}) where {T} = T(0.5) * (a + b + abs.(a - b))
-@inline math_min(a::AbstractVector{T}, b::AbstractVector{T}) where {T} = T(0.5) * (a + b - abs.(a - b))
+@inline math_max(a::T, b::T) where {T <: Real} = max(a, b)
+@inline math_min(a::T, b::T) where {T <: Real} = min(a, b)
+@inline math_max(a::AbstractVector{T}, b::AbstractVector{T}) where {T} = max.(a, b)
+@inline math_min(a::AbstractVector{T}, b::AbstractVector{T}) where {T} = min.(a, b)
 
 """
     sort_flux(f_i, f_j, F_i, F_j, dist_k)
