@@ -97,7 +97,13 @@ high-degree weights overshoot (12 % on a box profile with `div_order = 5`).
 `dweights`, kept with the divergence cache) on every pair where one of the two particles is below the full order, and on
 every pair of a first-order scheme (order 1, where no particle can be below the full order: with the geometric sorting its
 degree-1 weights on a jittered cloud with `R = 2.5Δx` give about 2 % negative first-order coefficients, down to −0.57). The
-rule is symmetric in the pair, and elsewhere the flux is the plain one. The signs are those of the weights the particle
+choice of the pairs is symmetric, and elsewhere the flux is the plain one. The orientation is not pair-symmetric: particle
+$i$ sorts axis $d$ by $\operatorname{sign} c_{ij,d}$ and particle $j$ by $\operatorname{sign} c_{ji,d}$, which agree only where
+the two weights have opposite signs. That is the case in 1-D and on lattices; on jittered 2-D clouds 0.4–2.5 % of the
+$\sum \lvert c\rvert$ mass sits on (pair, axis) entries with same-sign weights (jitter 0.2–0.4, $K = 1$ with $R = 2.5\Delta x$ and
+degree 3 with $R = 3.5\Delta x$), where the two sides use opposite dissipation signs, a pair defect on top of the
+face-vector mismatch. The local-extremum-diminishing property of each particle's own update needs only its own weights
+and is unaffected. The signs are those of the weights the particle
 multiplies the slot's flux difference with: `dweights` on the cached full-degree fit, and the weights of the dynamic fit
 for a particle off the cached path (a degree lowered by the neighbour-count safeguard, e.g. in 1-D with `R = 2.5Δx` and
 `div_order = 3`, a lower particle order with `div_order = 0`, or no cached factorisation). With the aligned flux such a

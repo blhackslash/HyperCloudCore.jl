@@ -85,7 +85,13 @@ and on every pair of a first-order scheme (`MUSCL` order 1, where no particle ca
 the states are sorted by the sign of the particle's own divergence weight `c_ij` for that neighbour
 instead: the weight the slot's flux difference is multiplied with, from the cached full-degree fit or, for a
 particle off the cached path (a degree lowered by the neighbour-count safeguard or by `div_order = 0`, no
-cached factorisation), from its dynamic fit, solved per slot; the rule is symmetric in the pair, so both sides evaluate the same flux. The dissipation then
+cached factorisation), from its dynamic fit, solved per slot. *Where* the aligned sorting applies is
+symmetric in the pair (`below`), but the orientation is not: particle `i` sorts by `sign(c_ij,d)`,
+particle `j` by `sign(c_ji,d)`, and the two agree only where `c_ij,d` and `c_ji,d` have opposite signs. That
+holds in 1-D and on lattices; on jittered 2-D clouds a few percent of the (pair, axis) entries have
+same-sign weights (0.4–2.5 % of `Σ|c|`), where the two sides use opposite dissipation signs, a pair defect
+on top of the face mismatch. Each particle's own update keeps the property below, which only needs its
+own weights. The dissipation then
 enters the divergence of particle `i` with the coefficient `½ Σ_d s_d |c_ij,d| ≥ ½ |c_ij · f'|`, so the
 first-order update (constant reconstructions, zero-sum weights) is local-extremum-diminishing for *any*
 divergence weights, including high-degree fits on one-sided stencils, whose weights change sign over the
