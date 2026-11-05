@@ -104,7 +104,9 @@ include("GridMovers.jl")
 
 The one time integrator: explicit RK and IMEX share this struct, since an explicit tableau is an
 `IMEXButcherTableau` with a zero implicit part (see `RKButcherTableau`). `sources` may mix explicit
-and implicit terms. If `pg.mover` is not `NoGridMover`, particle positions are integrated as
+and implicit terms. With an explicit tableau, implicit terms are applied explicitly (their `evaluate_source`
+at every stage, weighted like the flux divergence; the constructor warns), since there is no implicit part
+to solve them with. If `pg.mover` is not `NoGridMover`, particle positions are integrated as
 additional stage variables of the same tableau (see `GridMovers.jl`).
 
 # Algorithm (per time step)
@@ -190,12 +192,17 @@ struct GeneralRKTimeStepper{D, M, T, PDE <: HyperbolicPDE, G <: DivergenceInterp
     ) where {D, M, T, G, MO <: MOOD, EST <: Tuple{Vararg{AbstractExplicitSourceTerm}}, IST <: Tuple{Vararg{AbstractImplicitSourceTerm}},
              VE <: Union{Nothing, VolumeEstimator}, AT <: AbstractArray}
         s  = num_stages(tableau)
+        C  = ssp_coefficient(tableau)
+        if !isempty(implicit_sources) && all(iszero, tableau.a)
+            @warn "Implicit source terms given with a purely explicit tableau: they are applied explicitly, with the " *
+                  "explicit weights of the tableau (no implicit solve)."
+            tableau = _explicit_implicit_part(tableau)
+        end
         bt = static_tableau(tableau, Val(s))
         states    = () -> Growable{State{M, T}}(AT)
         positions = () -> Growable{Space{D, T}}(AT)
         ib   = InteractionBuffer{D, M, T}(AT)
         work = MOODWork(AT)
-        C = ssp_coefficient(tableau)
         ratio = (mood_substeps && C > 0) ? T(1 / C) : zero(T)
         new{D, M, T, typeof(pde), G, MO, EST, IST, VE, s, typeof(states()), typeof(positions()), typeof(ib), typeof(work), typeof(bt)}(
             pde, div_interp, mood, explicit_sources, implicit_sources, bt,
@@ -211,15 +218,18 @@ end
 
 const GeneralIMEXTimeStepper = GeneralRKTimeStepper
 
+# An explicit tableau (`a = 0`, `b = 0`) has no implicit part to carry implicit sources. With the explicit
+# weights copied into the implicit part, the stepper evaluates `K_I[i] = S(Y_i)` without a solve
+# (`a[i, i] = 0`) and weights it like `K_E[i]`: the explicit RK method applied to `F + S`.
+_explicit_implicit_part(bt::IMEXButcherTableau) =
+    IMEXButcherTableau(copy(bt.a_t), copy(bt.a_t), copy(bt.c_t), copy(bt.c_t), copy(bt.b_t), copy(bt.b_t))
+
 # Mixed source tuple → sorted
 function GeneralRKTimeStepper(pde::HyperbolicPDE{D, M, T}, div_interp, mood::MOOD,
                               all_sources::Tuple{Vararg{AbstractSourceTerm}}, tableau::IMEXButcherTableau{T};
                               kwargs...) where {D, M, T}
     explicit_sts = filter(st -> st isa AbstractExplicitSourceTerm, all_sources)
     implicit_sts = filter(st -> st isa AbstractImplicitSourceTerm, all_sources)
-    if !isempty(implicit_sts) && all(iszero, tableau.a)
-        @warn "Implicit source terms given with a purely explicit tableau; the implicit solve is skipped (a[i,i] = 0)."
-    end
     return GeneralRKTimeStepper(pde, div_interp, mood, explicit_sts, implicit_sts, tableau; kwargs...)
 end
 
@@ -446,14 +456,21 @@ The forward Euler substep `W_{i-1} = Y_{i-1} + (Δt/C) K_E[i-1]` that MOOD check
 particles; boundary particles keep `Y_{i-1}`, they are not checked).
 """
 function form_substep!(ts::GeneralRKTimeStepper{D, M, T}, pg, i::Int, dt::T) where {D, M, T}
+    # Implicit sources reach an SSP (explicit) tableau only as explicitly applied sources: their K_I is part of the RHS.
+    with_KI = !isempty(ts.implicit_sources)
     foreach_particle(_substep_body!, get_backend(), pg.meta.N,
-        (ts.rho_sub, ts.Y_stages[i - 1], ts.K_E_stages[i - 1], pg.core.is_boundary, ts.substep_ratio * dt))
+        (ts.rho_sub, ts.Y_stages[i - 1], ts.K_E_stages[i - 1], ts.K_I_stages[i - 1], pg.core.is_boundary,
+         ts.substep_ratio * dt, with_KI))
     return ts.rho_sub
 end
 
 # Kernel body (see Backend.jl) of the Euler substep.
-@inline function _substep_body!(p, W, Y, K, is_boundary, h)
-    @inbounds W[p] = is_boundary[p] ? Y[p] : Y[p] + h * K[p]
+@inline function _substep_body!(p, W, Y, K, KI, is_boundary, h, with_KI)
+    @inbounds if is_boundary[p]
+        W[p] = Y[p]
+    else
+        W[p] = with_KI ? Y[p] + h * (K[p] + KI[p]) : Y[p] + h * K[p]
+    end
     return nothing
 end
 

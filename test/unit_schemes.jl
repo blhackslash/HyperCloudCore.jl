@@ -309,6 +309,24 @@ end
     end
 end
 
+@testset "Implicit sources with an explicit tableau are applied explicitly" begin
+    # Used to be dropped (b = 0): one RK3 step of u' = -λu from u = 1 is the cubic Taylor polynomial of exp(-λΔt)
+    eq  = make_advection_1d()
+    pg  = set_ic!(make_pg_1d(20), x -> 1.0)
+    src = DecaySource(3.0)
+    ts  = @test_logs (:warn, r"applied explicitly") GeneralRKTimeStepper(eq, MUSCL(Float64, 1, 1, 2, NoLimiter(), RusanovFlux()),
+                                                                          MOOD(), (), (src,), RK3_SSP_Tableau(Float64))
+    @test ts.substep_ratio ≈ 1 atol = 1e-9                          # still the SSP coefficient of RK3
+    dt = 0.1; z = -src.λ * dt
+    ts(eq, pg, 0.0, dt)
+    @test all(j -> isapprox(pg.rhos[j][1], 1 + z + z^2 / 2 + z^3 / 6; rtol = 1e-13), interior_indices(pg))
+    # The Euler substep MOOD would check includes the source (not sized here: no MOOD criterion)
+    HyperCloudCore.ensure_capacity!(ts.rho_sub, pg.meta.N)
+    W = HyperCloudCore.form_substep!(ts, pg, 2, dt)
+    Y, KE, KI = ts.Y_stages[1], ts.K_E_stages[1], ts.K_I_stages[1]
+    @test all(j -> W[j] ≈ Y[j] + dt * (KE[j] + KI[j]) && KI[j][1] ≈ -src.λ * Y[j][1], interior_indices(pg))
+end
+
 @testset "Streamed divergence" begin
     # The streamed flux pass (cached per-slot weights, dynamic per-slot weights for dropped particles) gives the
     # divergence of the buffered fit up to round-off, with both fluxes, and never touches the slot buffers.
