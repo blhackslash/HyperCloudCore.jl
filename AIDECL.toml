@@ -1,6 +1,7 @@
 # AI declarations (migrated from version 1 by 'aidecl migrate').
 # Scheme: https://github.com/industrial-mathematics-group/.github/blob/main/.github/CONTRIBUTING.md#ai-assisted-contributions
 version = 3
+exclude = ["reviews/**"]   # committed AI reviews (CONTRIBUTING.md) need no declaration
 
 # TODO after migration: add Human-Review, Reviewed-by
 [[annotations]]
