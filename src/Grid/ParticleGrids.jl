@@ -365,10 +365,11 @@ first-derivative weights of the divergence fit at particle `i` (degree `_diverge
   geometry caches are refreshed (`prepare_geometry!`, a no-op when current) and those weights are used: no moment
   matrix is factorised (50–100× cheaper), and they are the weights of the fit each particle uses, also where the
   neighbour-count safeguard lowers its degree (1-D MUSCL3 with `R = 2.5Δx`: degree 2, a 2.3× larger step than the
-  degree-3 fit gave before). `cached_weights = false` always assembles and factorises the Taylor fit of degree
-  `_divergence_degree(main_grad)` (the full degree) per particle (`_cfl_body!`). The two differ where the fits
-  differ: for degree-5 (odd-order) divergence fits the weights in use sum to about 1.8× the Taylor fit's, i.e. the
-  cached estimate is that much smaller; for degrees ≤ 3 on stencils that carry them they agree.
+  degree-3 fit gave before). `cached_weights = false` always assembles and factorises the Taylor fit per particle
+  (`_cfl_body!`), of degree `_divergence_degree(main_grad)`, lowered per particle by `_cfl_degree_of(main_grad)`
+  (MUSCL: the neighbour-count safeguard) to the degree in use. The two differ where the fits differ (Taylor fit vs
+  the fit with intercept): for degree-5 (odd-order) divergence fits the weights in use sum to about 1.8× the Taylor
+  fit's, i.e. the cached estimate is that much smaller; for degrees ≤ 3 they agree.
 - A particle restricts the step only if `Σ_j Σ_d |c_ij,d| λ_pair > 0` (any positive value, no absolute cut-off):
   particles without neighbours or without a solvable fit, with zero wave speeds, and with non-finite (NaN) states
   or speeds do not. `Inf` (an empty grid, or no restricting particle) means that nothing limits the step: a driver
@@ -395,8 +396,8 @@ first-derivative weights of the divergence fit at particle `i` (degree `_diverge
         degree = _divergence_degree(main_grad)
         invL   = one(T) / minimum(pg.meta.dx)
         foreach_particle(_cfl_body!, get_backend(), pg.meta.N,
-            (dt_buffer, pg.core.is_boundary, nb.ranges, nb.indices, pg.rhos, eq, degree, Val(D), get_distances(pg), get_weights(pg),
-             invL, floatmin(T), one(T) / D))
+            (dt_buffer, pg.core.is_boundary, nb.ranges, nb.indices, pg.rhos, eq, degree, _cfl_degree_of(main_grad), Val(D),
+             get_distances(pg), get_weights(pg), invL, floatmin(T), one(T) / D))
     else
         foreach_particle(_cfl_weights_body!, get_backend(), pg.meta.N,
             (dt_buffer, pg.core.is_boundary, nb.ranges, nb.indices, pg.rhos, eq, sw, Val(D), floatmin(T), one(T) / D))
@@ -416,12 +417,13 @@ factorise the moment matrices itself.
 @inline _cfl_slot_weights(interp, pg) = nothing
 
 # Kernel body of the CFL estimate (see Backend.jl): fit and sum of particle `i`.
-@inline function _cfl_body!(i, dt_buffer, is_boundary, ranges, indices, rhos, eq, degree, valD, dist_vec, w_vec, invL, tol, inv_dim)
+@inline function _cfl_body!(i, dt_buffer, is_boundary, ranges, indices, rhos, eq, degree, degree_of, valD, dist_vec, w_vec, invL, tol, inv_dim)
     is_boundary[i] && return nothing
     nb_slice = ranges[i]
     isempty(nb_slice) && return nothing
     Lambda = _get_Lambda(eq, rhos[i], valD)
-    sum_c  = dispatch_cfl(degree, valD, nb_slice, dist_vec, w_vec, invL, typeof(invL), rhos, indices, eq, Lambda)
+    sum_c  = dispatch_cfl(_cfl_particle_degree(degree, degree_of, length(nb_slice)), valD, nb_slice, dist_vec, w_vec, invL,
+                          typeof(invL), rhos, indices, eq, Lambda)
     sum_c > tol && (dt_buffer[i] = inv_dim / sum_c)
     return nothing
 end

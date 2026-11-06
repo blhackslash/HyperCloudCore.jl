@@ -441,6 +441,22 @@ end
         HyperCloudCore._face_vectors!(S, nb.ranges[1], nb.distances, nb.weights, 1 / pg.meta.dx[1], 1.0, used, Val(1))
         @test all(k -> isapprox(m.dweights[k][1], S[k][1]; rtol = 1e-10, atol = 1e-10 / pg.meta.dx[1]), nb.ranges[1])
     end
+    # Particles with different degrees in one cloud: 2-D MUSCL3 (divergence degree 3) on a jittered cloud with
+    # R = 2Δx, where the safeguard lowers the particles with fewer than 9 neighbours to degree 2
+    dx2 = 1 / 16
+    pg2 = ParticleGrid(get_rectangular_domain(Float64, (0.0, 0.0), (1.0, 1.0); is_periodic = true), (dx2, dx2),
+                       ExponentialWeightFunction(1.0, 2.0dx2), 1; randomness = (0.25dx2, 0.25dx2), rng = MersenneTwister(5))
+    m2  = MUSCL(Float64, 2, 1, 3, NoLimiter(), AlignedRusanovFlux())
+    HyperCloudCore.prepare_geometry!(m2, pg2)
+    nb2 = pg2.neighbor
+    deg(i) = HyperCloudCore._divergence_index(Val(0), Val(2), 3, length(nb2.ranges[i])) - 1
+    @test any(i -> deg(i) == 2, 1:pg2.meta.N) && any(i -> deg(i) == 3, 1:pg2.meta.N)
+    S2 = zeros(Space{2, Float64}, length(nb2.indices))
+    ok = map(1:pg2.meta.N) do i
+        HyperCloudCore._face_vectors!(S2, nb2.ranges[i], nb2.distances, nb2.weights, 1 / dx2, 1.0, deg(i), Val(2))
+        all(k -> isapprox(m2.dweights[k], S2[k]; rtol = 1e-8, atol = 1e-8 / dx2), nb2.ranges[i])
+    end
+    @test all(ok)
 end
 
 @testset "CFL estimate: pair speeds, boundary states, cached weights" begin
@@ -481,8 +497,11 @@ end
         end for i in 1:pgc.meta.N if !pgc.core.is_boundary[i])
     @test isapprox(dt_c, dt_host; rtol = 1e-12)
     # They are the weights of the fit in use: with R = 2.5Δx (4 neighbours) the safeguard lowers MUSCL3's divergence
-    # to degree 2 (Σ|c|Δx = 0.644), while the assembled fit is the full degree 3 (1.500), a 2.3× smaller step
-    @test 2 * dt_i <= dt_c <= 2.6 * dt_i
+    # to degree 2 (Σ|c|Δx = 0.644 instead of 1.500 for degree 3, a 2.3× longer step); the assembled fit of the opt-out
+    # takes the same degree per particle (`_cfl_degree_of`), so the two agree (Taylor fit vs fit with intercept)
+    @test isapprox(dt_c, dt_i; rtol = 0.05)
+    @test get_time_step(pgc, eqc, interp; cached_weights = false) == dt_i
+    @test 2 * HyperCloudCore.get_time_step(pgc, eqc, CentralDivergence(Float64, 1, 1, 3); cached_weights = false) < dt_c
     @test get_time_step(pgc, eqc, interp; cached_weights = false) == dt_i     # the opt-out assembles the fit as before
     @test (@allocated get_time_step(pgc, eqc, interp)) < 8192
     # No particle restricts the step (zero wave speeds): Inf, without a warning (a field at rest; drivers decide);

@@ -118,7 +118,7 @@ face-vector mismatch. The local-extremum-diminishing property of each particle's
 and is unaffected. The signs are those of the weights the particle
 multiplies the slot's flux difference with: `dweights` on the cached fit (the full order, of the degree the stencil
 carries), and the weights of the dynamic fit for a particle off the cached path (a lower particle order with
-`div_order = 0`, or no cached factorisation). With the aligned flux such a
+`div_order = 0` whose divergence degree differs from the cached one, or no cached factorisation). With the aligned flux such a
 particle always takes the per-slot path of the streamed divergence below, also with `streamed = false`, so each slot's
 weight is solved once and used for both the sorting and the divergence. The coefficient becomes
 `½ Σ_d s_d |c_ij,d| ≥ ½ |c_ij·f'|`, so the first-order update is local-extremum-diminishing for any zero-sum
@@ -185,7 +185,7 @@ reduced order). Per neighbour that costs $B \cdot D \cdot M$ flops for the right
 $D \cdot M$ numbers of buffer traffic, where $B$ is the number of fit terms (21 for degree 5 in 2-D): for
 systems with many components (kinetic models) the fit dominates the step and the buffer the memory.
 
-With `streamed = true` the scheme keeps the derivative weights $c_{ij}$ of the full-degree fit per slot
+With `streamed = true` the scheme keeps the derivative weights $c_{ij}$ of the cached full-order fit per slot (of the degree each stencil carries)
 (`dweights`, $D$ numbers, computed with the divergence cache at $D\cdot B$ flops per slot, once per geometry)
 and the flux pass accumulates $\sum_j c_{ij}\cdot\Delta F_{ij}$ directly: $D\cdot M$ flops per neighbour, no
 buffer, no static $B\times D M$ matrices. A particle whose fit is not the cached one (a MOOD drop, or no

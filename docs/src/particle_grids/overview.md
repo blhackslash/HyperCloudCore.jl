@@ -96,7 +96,7 @@ RK2 (SSP) and RK4, Float32/Float64, from the HyperCloud.jl example problems (202
 | 1-D Sod, 330 particles, radius 5.5 Δx | RK2 Upwind1, MUSCL2 (MOOD, VK, minmod); RK4 MUSCL4 MOOD | 1.2 | 1.5 (VK and minmod still run) |
 | 1-D linear advection, smooth | RK4 MUSCL2 … MUSCL5 | 1.5 (MUSCL2) … 3.0 (MUSCL5) | 2.0 … 4.0 |
 
-On the 2-D shock problems, the solutions at CFL 1 differ from those at CFL 0.2 by 1e-5 (limiters, first order) to a few 1e-3 (MOOD, whose order decisions shift) in relative L1 norm of the density, far below the discretisation error. CFL 0.5 – 1 is a reasonable default for shock problems in 2-D; in 1-D stay at or below 1.
+On the 2-D shock problems, the solutions at CFL 1 differ from those at CFL 0.2 by 1e-5 (limiters, first order) to a few 1e-3 (MOOD, whose order decisions shift) in relative L1 norm of the density, far below the discretisation error. CFL 0.5 – 1 is a reasonable default for shock problems in 2-D; in 1-D stay at or below 1, and below about 0.6 for a limited MUSCL3 with RK3 on a radius of 2.5 Δx. There the neighbour-count safeguard lowers the divergence fit to degree 2, whose weights are smaller than those of the degree-3 fit, so the CFL step is 2.3 times longer than up to 0.7.9 (the CFL estimate then used the unused degree-3 weights). Limited MUSCL3 with Venkatakrishnan and RK3 overshoots a square wave by 0.08 % at CFL 0.6, 0.5 % at 0.8 and 1.4 % at 1.0; MUSCL2, RK2 or MOOD keep it bounded (MOOD at some cost in accuracy).
 
 On moving grids this estimate uses the absolute wave speed $\lambda$, not the relative speed $\lvert\lambda - w\rvert$ seen by the scheme. See [Moving Grids (ALE)](@ref) for the consequences.
 

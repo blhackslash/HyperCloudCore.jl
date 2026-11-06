@@ -83,7 +83,7 @@ a pair whose particles both have the full order it is the plain [`RusanovFlux`](
 "left" and "right" per axis by the sign of the distance). Where either particle is below the full order,
 and on every pair of a first-order scheme (`MUSCL` order 1, where no particle can be below the full order),
 the states are sorted by the sign of the particle's own divergence weight `c_ij` for that neighbour
-instead: the weight the slot's flux difference is multiplied with, from the cached full-degree fit or, for a
+instead: the weight the slot's flux difference is multiplied with, from the cached full-order fit (of the degree its stencil carries) or, for a
 particle off the cached path (a degree lowered by the neighbour-count safeguard or by `div_order = 0`, no
 cached factorisation), from its dynamic fit, solved per slot. *Where* the aligned sorting applies is
 symmetric in the pair (`below`), but the orientation is not: particle `i` sorts by `sign(c_ij,d)`,

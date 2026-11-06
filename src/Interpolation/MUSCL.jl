@@ -92,7 +92,7 @@ struct MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER, INTERPS, L, NF, VG <: Abstrac
     # order fall back to the direct solves.
     grad_weights::WG
     div_weights::WD
-    # Derivative weights c_ij of the full-degree divergence fit, one per neighbour slot (physical units, so
+    # Derivative weights c_ij of the cached (full-order) divergence fit, one per neighbour slot (physical units, so
     # 2 V_i c_ij is the face vector): the streamed divergence accumulates Σ_j c_ij · ΔF_ij with them and
     # `AlignedRusanovFlux` sorts by their signs. Filled with the divergence cache (`update_divergence_weights!`),
     # empty when neither is used.
@@ -189,7 +189,7 @@ end
 """
     update_divergence_weights!(muscl::MUSCL, pg::ParticleGrid)
 
-The derivative weights of the full-degree divergence fit for every neighbour slot (`dweights`), from the
+The derivative weights of the cached full-order divergence fit (of the degree each stencil carries) for every neighbour slot (`dweights`), from the
 current divergence cache: rows 2..D+1 of `inv(N) w_j p̃_j`, scaled to physical units. Zero where the cache
 has no factorisation for the particle (such a particle takes a dynamic fit, whose weights are solved per slot).
 Called by `prepare_geometry!` when the cache was refreshed, for streamed schemes and the aligned flux.
@@ -507,7 +507,7 @@ end
     return acc
 end
 
-# Streamed divergence of a particle whose fit is not the cached full-degree one (a reduced order, or no
+# Streamed divergence of a particle whose fit is not the cached full-order one (a reduced order with another divergence degree, or no
 # factorisation in the cache), for streamed schemes and the aligned flux: the moment matrix of its degree is
 # assembled and factorised once, and every slot's weights are solved inside the flux loop. The per-slot buffer
 # is never used. A singular moment matrix gives a zero divergence, as in `compute_dynamic_divergence`.

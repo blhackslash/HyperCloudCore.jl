@@ -511,6 +511,8 @@ With `degree_of` (a bits callable: neighbour count → fit degree `≤ IO`), par
 `degree_of(length(ranges[i]))`, its inverse moment matrix zero-padded to `B_LEN × B_LEN`. The basis is graded
 (`_generate_exponents`: all terms of degree `q` before those of degree `q + 1`), so the padded inverse applied to the
 full basis is exactly the degree-`q` fit: one cache serves particles whose stencils carry different degrees.
+The cache is keyed on `geometry_version` only: a cache is always updated with the same `degree_of` (MUSCL's
+divergence cache with `_FullOrderDivDegree`), never alternately with and without one.
 """
 function update_weights!(w::MLSWeights{B_LEN, IO, T}, pg::ParticleGrid{D, M, T}, degree_of = nothing) where {B_LEN, IO, T, D, M}
     is_current(w, pg) && return w
