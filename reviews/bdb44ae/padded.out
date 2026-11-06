@@ -1,0 +1,30 @@
+┌ Warning: bc_map and boundary tags do not match: no boundary particle carries tag(s) [2], so their condition is never applied; the boundary particles carry tag(s) [1] (1-D and 3-D boxes tag every boundary particle 1, see get_rectangular_domain).
+└ @ HyperCloudCore /workspace/julia/HyperCloudDev/HyperCloudCore.jl/.claude/worktrees/cache-degree/src/Grid/Domains.jl:280
+┌ Warning: bc_map and boundary tags do not match: no boundary particle carries tag(s) [2, 3, 4, 5, 6], so their condition is never applied; the boundary particles carry tag(s) [1] (1-D and 3-D boxes tag every boundary particle 1, see get_rectangular_domain).
+└ @ HyperCloudCore /workspace/julia/HyperCloudDev/HyperCloudCore.jl/.claude/worktrees/cache-degree/src/Grid/Domains.jl:280
+(a) graded prefix mismatches: 0
+(b) D=1 Float64 C=false IO=5: padded != inverse(q) padded: 0, ok mismatches: 0
+(b) D=1 Float64 C=true IO=5: padded != inverse(q) padded: 0, ok mismatches: 0
+(b) D=1 Float32 C=false IO=5: padded != inverse(q) padded: 0, ok mismatches: 0
+(b) D=1 Float32 C=true IO=5: padded != inverse(q) padded: 0, ok mismatches: 0
+(b) D=2 Float64 C=false IO=5: padded != inverse(q) padded: 0, ok mismatches: 0
+(b) D=2 Float64 C=true IO=5: padded != inverse(q) padded: 0, ok mismatches: 0
+(b) D=2 Float32 C=false IO=5: padded != inverse(q) padded: 0, ok mismatches: 0
+(b) D=2 Float32 C=true IO=5: padded != inverse(q) padded: 0, ok mismatches: 0
+(b) D=3 Float64 C=false IO=3: padded != inverse(q) padded: 0, ok mismatches: 0
+(b) D=3 Float64 C=true IO=3: padded != inverse(q) padded: 0, ok mismatches: 0
+(b) D=3 Float32 C=false IO=3: padded != inverse(q) padded: 0, ok mismatches: 0
+(b) D=3 Float32 C=true IO=3: padded != inverse(q) padded: 0, ok mismatches: 0
+(c) _moment_body! allocation (2-D, IO = 5): 240 bytes; isbits(deg) = true
+(d) D=1 Float64 MUSCL3 R=2.5 jit=0.0 per=true DO=0   degrees used: [2 => 40]  max rel |dw - dynamic| = 3.740490413738206e-16  ok mismatches: 0
+(d) D=1 Float64 MUSCL3 R=2.5 jit=0.3 per=true DO=0   degrees used: [2 => 40]  max rel |dw - dynamic| = 4.509129212756376e-16  ok mismatches: 0
+(d) D=1 Float64 MUSCL5 R=2.5 jit=0.3 per=true DO=0   degrees used: [3 => 36, 4 => 4]  max rel |dw - dynamic| = 7.790201352923059e-16  ok mismatches: 0
+(d) D=1 Float64 MUSCL5 R=3.5 jit=0.3 per=false DO=0  degrees used: [2 => 2, 3 => 2, 4 => 43]  max rel |dw - dynamic| = 1.867221729190283e-15  ok mismatches: 0
+(d) D=1 Float32 MUSCL5 R=3.5 jit=0.3 per=true DO=0   degrees used: [4 => 40]  max rel |dw - dynamic| = 1.4625347e-6  ok mismatches: 0
+(d) D=1 Float64 MUSCL3 R=1.2 jit=0.35 per=true DO=0  degrees used: [1 => 40]  max rel |dw - dynamic| = 2.6191268396594175e-8  ok mismatches: 0
+(d) D=2 Float64 MUSCL3 R=2.0 jit=0.3 per=true DO=0   degrees used: [2 => 253, 3 => 3]  max rel |dw - dynamic| = 1.0567446913160235e-15  ok mismatches: 0
+(d) D=2 Float64 MUSCL5 R=2.5 jit=0.3 per=false DO=0  degrees used: [2 => 15, 3 => 74, 4 => 410]  max rel |dw - dynamic| = 2.8454175447488655e-9  ok mismatches: 0
+(d) D=2 Float32 MUSCL5 R=2.5 jit=0.3 per=true DO=0   degrees used: [4 => 256]  max rel |dw - dynamic| = 1.44075375e-5  ok mismatches: 0
+(d) D=2 Float64 MUSCL5 R=2.5 jit=0.3 per=true DO=4   degrees used: [3 => 256]  max rel |dw - dynamic| = 1.5072393486313773e-15  ok mismatches: 0
+(d) D=3 Float64 MUSCL3 R=1.8 jit=0.2 per=true DO=0   degrees used: [2 => 343]  max rel |dw - dynamic| = 8.741765496709176e-16  ok mismatches: 0
+(d) D=3 Float64 MUSCL4 R=2.0 jit=0.2 per=false DO=0  degrees used: [1 => 1, 2 => 358, 3 => 1207]  max rel |dw - dynamic| = 2.52695391293909e-9  ok mismatches: 0

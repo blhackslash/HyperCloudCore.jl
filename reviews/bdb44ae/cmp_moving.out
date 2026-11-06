@@ -1,0 +1,6 @@
+D1 MUSCL3 R2.5 full_search=false     max|branch - parent|/max|u| = 1.111e-16
+D1 MUSCL3 R2.5 full_search=true      max|branch - parent|/max|u| = 1.111e-16
+D2 MUSCL3 R2.0 full_search=false     max|branch - parent|/max|u| = 2.250e-16
+D2 MUSCL3 R2.0 full_search=true      max|branch - parent|/max|u| = 2.250e-16
+D2 MUSCL5 R2.5 full_search=false     max|branch - parent|/max|u| = 3.057e-15
+D2 MUSCL5 R2.5 full_search=true      max|branch - parent|/max|u| = 3.963e-15

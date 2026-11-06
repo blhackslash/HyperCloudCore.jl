@@ -1,0 +1,14 @@
+branch rep1: Float64 cpu D=1 M=1 N=200000   stab=both    moving=0 threads=8  ms/step =     7.22  checksum = 50132.53675
+branch rep1: Float64 cpu D=1 M=1 N=200000   stab=none    moving=0 threads=8  ms/step =     4.03  checksum = 50132.53675
+parent rep1: Float64 cpu D=1 M=1 N=200000   stab=both    moving=0 threads=8  ms/step =     9.62  checksum = 50132.53675
+parent rep1: Float64 cpu D=1 M=1 N=200000   stab=none    moving=0 threads=8  ms/step =     6.04  checksum = 50132.53675
+branch rep2: Float64 cpu D=1 M=1 N=200000   stab=both    moving=0 threads=8  ms/step =     7.46  checksum = 50132.53675
+branch rep2: Float64 cpu D=1 M=1 N=200000   stab=none    moving=0 threads=8  ms/step =     3.85  checksum = 50132.53675
+parent rep2: Float64 cpu D=1 M=1 N=200000   stab=both    moving=0 threads=8  ms/step =     9.13  checksum = 50132.53675
+parent rep2: Float64 cpu D=1 M=1 N=200000   stab=none    moving=0 threads=8  ms/step =     5.79  checksum = 50132.53675
+branch rep3: Float64 cpu D=1 M=1 N=200000   stab=both    moving=0 threads=8  ms/step =     7.54  checksum = 50132.53675
+branch rep3: Float64 cpu D=1 M=1 N=200000   stab=none    moving=0 threads=8  ms/step =     3.78  checksum = 50132.53675
+parent rep3: Float64 cpu D=1 M=1 N=200000   stab=both    moving=0 threads=8  ms/step =     9.09  checksum = 50132.53675
+parent rep3: Float64 cpu D=1 M=1 N=200000   stab=none    moving=0 threads=8  ms/step =     5.73  checksum = 50132.53675
+branch 2D: Float64 cpu D=2 M=1 N=62500    stab=both    moving=0 threads=8  ms/step =     8.08  checksum = 3926.986299
+parent 2D: Float64 cpu D=2 M=1 N=62500    stab=both    moving=0 threads=8  ms/step =     7.96  checksum = 3926.986299
