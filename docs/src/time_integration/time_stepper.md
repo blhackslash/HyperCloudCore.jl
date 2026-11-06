@@ -96,4 +96,5 @@ end
 ```@docs
 GeneralRKTimeStepper
 mood_flags
+mood_inadmissible
 ```
