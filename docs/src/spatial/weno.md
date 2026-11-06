@@ -26,7 +26,7 @@ with $\Delta x = \min_d \Delta x_d$. Only the first derivatives enter: the fit's
 w_S = \frac{\beta_S}{\beta_S + \beta_C}, \quad w_C = \frac{\beta_C}{\beta_S + \beta_C},
 ```
 
-with $\epsilon = 10^{-12} \max(u_i^2, IS_C)$ (plus `floatmin(T)`, which only keeps an identically zero field finite), applied per state component. The offset is relative to the local data, so the weights do not depend on the scale of $u$: a profile of height $10^{-13}$ is blended like one of height 1 (an absolute $10^{-12}$ blended it half and half). The code evaluates $w_S = 1/(1 + q^2)$ with $q = (IS_S + \epsilon)/(IS_C + \epsilon)$, the same weights without squared offsets that could underflow. The divergence is
+with $\epsilon = 10^{-12} s^2$, $s^2 = \max(u_i^2, IS_C)$ ($s = 1$ for a locally zero field), applied per state component. The offset is relative to the local data, so the weights do not depend on the scale of $u$: a profile of height $10^{-13}$ is blended like one of height 1 (an absolute $10^{-12}$ blended it half and half). The code evaluates $w_S = 1/(1 + q^2)$ with $q = (IS_S/s^2 + 10^{-12})/(IS_C/s^2 + 10^{-12})$, the same weights from normalised indicators, so neither the offset (which would underflow in Float32 below $|u| \approx 10^{-13}$) nor squared offsets leave the floating-point range; scaling $u$ by a power of two scales the result exactly, in Float64 and Float32, as long as $u_i^2$ and the indicators stay normal numbers (in Float32 roughly $|u| \gtrsim 10^{-19}$; where they underflow, e.g. in the far tails of a Gaussian, the weights agree to about $10^{-7}$). The divergence is
 
 ```math
 \nabla\cdot F_i \approx \sum_d v_d \left( w_S\, (\partial_d u)_{S_d} + w_C\, (\partial_d u)_C \right),

@@ -88,7 +88,7 @@ configurations, so it is left as is for now.
 
 ## The two passes
 
-1. **Pre-gather (`update_content!`).** Fits the reconstruction at the particle's current order and stores the (limited) coefficients in `gradients[i]`. If the neighbourhood has fewer than $B(D, k-1)$ neighbours, the particle's order is lowered to the highest $k' < k$ with $B(D, k'-1)$ neighbours (order 1 only below $D$ neighbours) **in `particle_orders`**, so MOOD and the EPD rules see the starved particle at that order.
+1. **Pre-gather (`update_content!`).** Fits the reconstruction at the particle's current order and stores the (limited) coefficients in `gradients[i]`. If the neighbourhood has fewer than $B(D, k-1)$ neighbours, the particle's order is lowered to the highest $k' < k$ with $B(D, k'-1)$ neighbours (order 1 only below $D$ neighbours) **in `particle_orders`**, so MOOD and the EPD rules see the starved particle at that order. Its reconstruction is then (nearly) exactly determined, e.g. degree 2 from 5 neighbours in 2-D: accurate on smooth data (2-D MUSCL4 with $R = 1.6\Delta x$: $L^2$ error 4.4e-4 instead of 1.6e-2 with the former drop to order 1), but unlimited it overshoots more at discontinuities (a box: 1.35 instead of 1.05), so combine small radii with a limiter or MOOD.
 2. **Flux.** For every neighbour, it chooses the interface degrees from the MOOD strategy, masks both reconstructions to those degrees (`mask_basis`), evaluates the numerical flux and non-conservative jump, and differentiates the interface differences.
 
 Because the flux at $i$ reads `gradients[j]` of its neighbours, all gradients of a stage must be computed before any flux; that is why the pre-gather pass is separate.

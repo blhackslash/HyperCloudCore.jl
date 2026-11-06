@@ -260,11 +260,14 @@ mood_flags(ts::GeneralRKTimeStepper) = view(parent(ts.work.triggered_step), 1:ts
 """
     mood_inadmissible(ts::GeneralRKTimeStepper) -> Int
 
-Per-step diagnostic: the number of interior candidates (summed over the checkpoints of the last step) that MOOD
-accepted although they are not admissible (`is_admissible`, e.g. a negative pressure or a NaN). That happens only
-where the order cannot drop further (order 1): the step goes on with the inadmissible state, which usually ends
-the run a few steps later. The stepper warns the first time it happens; the count is `0` without a MOOD
-criterion (`NoMOOD` checks nothing).
+Per-step diagnostic: the number of interior candidates (summed over the checkpoints of the last step; with an SSP
+tableau the checked candidates are the Euler substeps) that MOOD accepted although they are not admissible
+(`is_admissible`, e.g. a negative pressure or a NaN). That happens only where the order cannot drop further
+(order 1): the first-order update itself is not admissible there, because the step is above its positivity limit
+or because the first-order scheme is not positive on the cloud (e.g. the geometric Rusanov dissipation on an
+irregular cloud; `AlignedRusanovFlux` is local-extremum-diminishing). The run goes on with the inadmissible
+(sub)step, which often ends it a few steps later. The stepper warns the first time it happens; the count is `0`
+without a MOOD criterion (`NoMOOD` checks nothing).
 """
 mood_inadmissible(ts::GeneralRKTimeStepper) = ts.work.inadmissible[]
 
@@ -462,7 +465,7 @@ function mood_checkpoint!(ts::GeneralRKTimeStepper{D, M, T}, eq, pg, i::Int, dt:
         cand = _checks_substeps(ts) ? form_substep!(ts, pg, i, dt) : target
         if !detect_and_drop!(ts.mood, work, interp, pg, Y_prev, cand, full; eq = eq)
             # Accepted. Flagged particles at order 1 were un-flagged by the decrement: count those still inadmissible.
-            ts.mood.criterion isa NoMOOD || (work.inadmissible[] += _count_inadmissible(eq, pg, cand))
+            ts.mood.criterion isa NoMOOD || (work.inadmissible[] += _count_inadmissible(eq, pg, cand, parent(work.scratch)))
             return nothing
         end
 
@@ -473,13 +476,17 @@ function mood_checkpoint!(ts::GeneralRKTimeStepper{D, M, T}, eq, pg, i::Int, dt:
     end
 end
 
-# Interior particles whose state is not admissible: one lazy broadcast reduction (a two-array `mapreduce` would
-# materialise the map), which also runs on device arrays
-function _count_inadmissible(eq, pg, U)
+# Interior particles whose state is not admissible: one kernel pass into the free MOOD scratch mask and a `count`
+# over it (the pattern of the other MOOD reductions; no allocation, device arrays included)
+function _count_inadmissible(eq, pg, U, flags)
     N = pg.meta.N
     N == 0 && return 0
-    bad = Broadcast.instantiate(Broadcast.broadcasted((b, u) -> !b && !_admissible(eq, u), view(pg.core.is_boundary, 1:N), view(U, 1:N)))
-    return Int(sum(bad))
+    foreach_particle(_inadmissible_body!, get_backend(), N, (flags, pg.core.is_boundary, U, eq))
+    return count(view(flags, 1:N))
+end
+@inline function _inadmissible_body!(p, flags, is_boundary, U, eq)
+    @inbounds flags[p] = !is_boundary[p] && !_admissible(eq, U[p])
+    return nothing
 end
 
 # MOOD checks the Euler substeps (an SSP tableau, a criterion that flags anything)
@@ -556,8 +563,9 @@ function (ts::GeneralRKTimeStepper{D, M, T})(eq::HyperbolicPDE, pg::ParticleGrid
     if ts.work.inadmissible[] > 0 && !ts.work.warned[]
         ts.work.warned[] = true
         @warn "MOOD accepted $(ts.work.inadmissible[]) inadmissible candidate(s) at first order in the step at t = $time " *
-              "(dt = $dt): the first-order update itself is not admissible there, e.g. a CFL number above the " *
-              "positivity limit. Reported once per stepper; `mood_inadmissible(ts)` gives the count of each step."
+              "(dt = $dt): the first-order update itself is not admissible there (a step above its positivity limit, or a " *
+              "first-order scheme that is not positive on the cloud, e.g. RusanovFlux on an irregular cloud; " *
+              "AlignedRusanovFlux is). Reported once per stepper; `mood_inadmissible(ts)` gives the count of each step."
     end
 
     if moving
