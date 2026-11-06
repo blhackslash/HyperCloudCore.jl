@@ -145,6 +145,15 @@ end
 # Sign tests instead of products: `sL * sR` underflows to zero for slopes below ~1e-154 (1e-19 in Float32)
 @inline _same_sign(a, b) = !iszero(a) && !iszero(b) && signbit(a) == signbit(b)
 
+# Minmod and Superbee limit along the 1-D stencil only: rejected when the scheme is built (the kernel-side error
+# below stays as a guard for a scheme used on a grid of another dimension)
+_check_limiter_dimension(limiter, D::Int) = nothing
+function _check_limiter_dimension(limiter::Union{SuperbeeLimiter, MinmodLimiter}, D::Int)
+    D == 1 || throw(ArgumentError("$(nameof(typeof(limiter))) is a one-dimensional limiter and cannot be used in $(D)-D; " *
+                                  "use BarthJespersenLimiter or VenkatakrishnanLimiter instead."))
+    return nothing
+end
+
 function _limit_slopes(strategy::Union{SuperbeeLimiter, MinmodLimiter}, raw_grad, nb_slice, f_i, f_neighbors,
                        pg::ParticleGrid{D}, distVec, ::Val) where {D}
     error("$(nameof(typeof(strategy))) is a one-dimensional limiter and cannot be used on a $(D)-D grid; " *

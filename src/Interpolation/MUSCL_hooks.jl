@@ -1,6 +1,6 @@
 # =========================================================================
 # MUSCL ↔ TIME-STEPPING HOOKS
-# Append this block to the end of MUSCL.jl (or `include` it right after MUSCL.jl). Everything the
+# Included at the end of MUSCL.jl. Everything the
 # stepper, MOOD and the grid movers need to know about MUSCL is declared here, so the
 # TimeStepping/ files never mention the MUSCL type and can be loaded first.
 # =========================================================================

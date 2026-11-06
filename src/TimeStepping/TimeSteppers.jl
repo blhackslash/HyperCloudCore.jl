@@ -110,8 +110,12 @@ The one time integrator: explicit RK and IMEX share this struct, since an explic
 `IMEXButcherTableau` with a zero implicit part (see `RKButcherTableau`). `sources` may mix explicit
 and implicit terms. With an explicit tableau (`a = 0` and `b = 0`), implicit terms are applied explicitly (their `evaluate_source`
 at every stage, weighted like the flux divergence; the constructor warns), since there is no implicit part
-to solve them with. If `pg.mover` is not `NoGridMover`, particle positions are integrated as
-additional stage variables of the same tableau (see `GridMovers.jl`).
+to solve them with; a tableau whose implicit part has a zero diagonal (e.g. `a = 0`, `b ≠ 0`) is kept as given and
+also evaluates them explicitly, with a warning. Several implicit sources are solved one after another per stage
+(`U → implicit_solve(S₁, U) → implicit_solve(S₂, ·) …`), a first-order splitting inside the stage: the stage
+relation `Y = U + Δt a_ii ΣS(Y)` holds only for a single implicit source (or commuting ones). If `pg.mover` is
+not `NoGridMover`, particle positions are integrated as additional stage variables of the same tableau (see
+`GridMovers.jl`).
 
 # Algorithm (per time step)
 Orders start at the interpolator's maximum consistency order. For each stage `i`:
@@ -201,6 +205,10 @@ struct GeneralRKTimeStepper{D, M, T, PDE <: HyperbolicPDE, G <: DivergenceInterp
             @warn "Implicit source terms given with a purely explicit tableau: they are applied explicitly, with the " *
                   "explicit weights of the tableau (no implicit solve)."
             tableau = _explicit_implicit_part(tableau)
+        elseif !isempty(implicit_sources) && all(i -> iszero(tableau.a[i, i]), 1:s)
+            # e.g. a hand-made `a = 0`, `b ≠ 0`: kept as given, but no stage solves anything either
+            @warn "Implicit source terms given with a tableau whose implicit part has a zero diagonal: they are " *
+                  "evaluated explicitly, with the implicit weights of the tableau (no implicit solve)."
         end
         bt = static_tableau(tableau, Val(s))
         states    = () -> Growable{State{M, T}}(AT)
