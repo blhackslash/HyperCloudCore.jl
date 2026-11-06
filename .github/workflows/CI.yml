@@ -26,7 +26,7 @@ jobs:
           - ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       
       - name: Set up Julia
         uses: julia-actions/setup-julia@v3
@@ -58,7 +58,7 @@ jobs:
       contents: write
       statuses: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Julia
         uses: julia-actions/setup-julia@v3
