@@ -31,12 +31,6 @@ end
     return idx
 end
 
-@inline function (::ConstantReconstruction)(
-    nb_slice, dist_all, w_all, df_flux, df_scratch; scale::T
-) where {T}
-    return zero(T)
-end
-
 # =========================================================================
 # MUSCL STRUCTURE
 # =========================================================================
@@ -126,6 +120,7 @@ function MUSCL(
 ) where {T, AT <: AbstractArray}
     @assert max_order >= 1 "MUSCL must have a maximum order of at least 1."
     @assert div_order >= 0 "Divergence order only supports 0 (adaptive) or positive values!"
+    _check_limiter_dimension(limiter, dimension)
     
     if div_order > max_order; div_order = max_order; end
     
@@ -353,14 +348,13 @@ function update_content!(
     num_nb = length(nb_slice)
     p_order = pg.core.particle_orders[i]
 
-    req_deg = p_order - 1
-    req_nb = basis_count(D, req_deg)
-    
-    # Dynamically clamp spatial order in core arrays if neighborhood is starved
-    if num_nb < req_nb
-        pg.core.particle_orders[i] = 1 
-        p_order = 1
+    # A starved neighbourhood (fewer neighbours than the basis_count(D, p - 1) unknowns of the reconstruction)
+    # lowers the order to the highest one it supports, stored in the core arrays for the flux pass (it went straight
+    # to order 1 before, e.g. a 2-D particle with 4 neighbours lost its linear reconstruction for want of a quadratic)
+    while p_order > 1 && num_nb < basis_count(D, p_order - 1)
+        p_order -= 1
     end
+    p_order < pg.core.particle_orders[i] && (pg.core.particle_orders[i] = p_order)
 
     dist_all = get_distances(pg)
     w_all = get_weights(pg)

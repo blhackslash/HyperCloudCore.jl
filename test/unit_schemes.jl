@@ -208,6 +208,15 @@ end
     @test ssp_coefficient(RK4_SSP_Tableau(Float64)) ≈ 1.50818004918983 atol = 1e-8   # Spiteri & Ruuth
     @test ssp_coefficient(RK4_Classical_Tableau(Float64)) == 0
     @test ssp_coefficient(IMEX_ARS222_Tableau(Float64)) == 0
+    # Rounded copies of the built-in tableaus get the Float64 coefficient (the rounded SSPRK(5,4) alone gave 1.5032);
+    # other Float32 tableaus are computed from their own coefficients
+    for f in (RK1_Euler_Tableau, RK2_Ralston_Tableau, RK3_SSP_Tableau, RK4_SSP_Tableau, RK4_Classical_Tableau)
+        @test ssp_coefficient(f(Float32)) == ssp_coefficient(f(Float64))
+    end
+    @test ssp_coefficient(IMEX_ARS222_Tableau(Float32)) == 0
+    own32 = RKButcherTableau(Float32[0 0; 0.5 0], Float32[0, 1], Float32[0, 0.5])          # explicit midpoint: not SSP
+    @test ssp_coefficient(own32) == 0
+    @test HyperCloudCore._ssp_coefficient(RK4_SSP_Tableau(Float32)) < 1.504                  # what the rounded coefficients give
     # At C the canonical coefficients are non-negative, above C some are negative
     bt = RK4_SSP_Tableau(Float64); C = ssp_coefficient(bt); s = num_stages(bt)
     K = zeros(s + 1, s + 1); K[1:s, 1:s] .= bt.a_t; K[s + 1, 1:s] .= bt.b_t
@@ -322,9 +331,10 @@ end
     ts  = @test_logs (:warn, r"applied explicitly") GeneralRKTimeStepper(eq, MUSCL(Float64, 1, 1, 2, NoLimiter(), RusanovFlux()),
                                                                           MOOD(), (), (src,), RK3_SSP_Tableau(Float64))
     @test ts.substep_ratio ≈ 1 atol = 1e-9                          # still the SSP coefficient of RK3
-    # Only a tableau without an implicit part (a = 0 and b = 0) is converted: a hand-made a = 0, b ≠ 0 keeps its b
+    # Only a tableau without an implicit part (a = 0 and b = 0) is converted: a hand-made a = 0, b ≠ 0 keeps its b,
+    # with a warning that nothing is solved implicitly either
     own = IMEXButcherTableau(zeros(2, 2), [0.0 0.0; 1.0 0.0], [0.0, 1.0], [0.0, 1.0], [0.25, 0.75], [0.5, 0.5])
-    ts2 = @test_logs GeneralRKTimeStepper(eq, MUSCL(Float64, 1, 1, 2, NoLimiter(), RusanovFlux()), MOOD(), (), (src,), own)
+    ts2 = @test_logs (:warn, r"zero diagonal") GeneralRKTimeStepper(eq, MUSCL(Float64, 1, 1, 2, NoLimiter(), RusanovFlux()), MOOD(), (), (src,), own)
     @test ts2.tableau.b == [0.25, 0.75] && iszero(ts2.tableau.a)
     dt = 0.1; z = -src.λ * dt
     ts(eq, pg, 0.0, dt)
@@ -360,6 +370,29 @@ end
     i  = inner[1]
     sl = first(pg.neighbor.ranges[i]):first(pg.neighbor.ranges[i])
     @test upwind(eq, i, pg.rhos[i], sl, pg, pg.rhos, ib, EPD1()) == zero(State{1, Float64})
+end
+
+@testset "MUSCL: a starved particle keeps the highest order its neighbours support" begin
+    # MUSCL4 reconstructs with degree 3 (9 unknowns in 2-D). A particle with 5-8 neighbours went straight to
+    # order 1 (no slope at all); now it reconstructs with degree 2 (order 3), with 2-4 neighbours degree 1.
+    geom = get_rectangular_domain(Float64, (0.0, 0.0), (1.0, 1.0); is_periodic = true)
+    dx   = 1 / 16
+    pg   = ParticleGrid(geom, (dx, dx), ExponentialWeightFunction(1.0, 1.6dx), 1; randomness = (0.25dx, 0.25dx), rng = MersenneTwister(3))
+    N    = pg.meta.N
+    for i in 1:N; x = pg.core.positions[i]; pg.rhos[i] = State{1, Float64}(x[1] + 2x[2]); end    # linear: exact for degree ≥ 1
+    m  = MUSCL(Float64, 2, 1, 4, NoLimiter(), AlignedRusanovFlux())
+    update_size!(m, N)
+    ib = HyperCloudCore.InteractionBuffer{2, 1, Float64}()
+    update_size!(ib, length(pg.neighbor.indices))
+    fill!(view(pg.core.particle_orders, 1:N), 4)
+    nnb(i) = length(pg.neighbor.ranges[i])
+    inner = [i for i in 1:N if all(d -> 3dx < pg.core.positions[i][d] < 1 - 3dx, 1:2)]   # away from the periodic seam of x + 2y
+    for i in inner; update_content!(m, i, pg.rhos[i], pg.neighbor.ranges[i], pg, pg.rhos, ib); end
+    expected(n) = n >= 9 ? 4 : n >= 5 ? 3 : n >= 2 ? 2 : 1
+    starved = filter(i -> 2 <= nnb(i) < 9, inner)
+    @test !isempty(starved) && any(i -> nnb(i) >= 5, starved)
+    @test all(i -> pg.core.particle_orders[i] == expected(nnb(i)), inner)
+    @test all(i -> isapprox(m.gradients[i][1][1], 1; atol = 1e-8) && isapprox(m.gradients[i][2][1], 2; atol = 1e-8), starved)
 end
 
 @testset "Streamed divergence" begin
@@ -478,6 +511,36 @@ end
     @test upw(1e-20, 3e-20) ≈ (0.5e-40 + 4.5e-40) / 2 - 2e-20 * 2e-20 / 2 rtol = 1e-12    # s = 2e-20 (secant)
     @test upw(1e-20, 3e-20) == 2.0^-264 * upw(2.0^132 * 1e-20, 2.0^132 * 3e-20)
     @test upw(1.0, 1.0 + 1e-10) ≈ 0.5 + 0.5e-10 - 0.5 * 1e-10 rtol = 1e-12                 # Jacobian at u_L = 1
+end
+
+@testset "Limited reconstructions stay in the local bounds" begin
+    # The interface (midpoint) reconstructions of a limited MUSCL3 lie within [min, max] of the neighbourhood, for
+    # steps, kinks, narrow peaks and ramps; unlimited they overshoot (16 % on the box)
+    eq = make_advection_1d()
+    function max_overshoot(limiter, ic; order = 3, N = 60)
+        pg = set_ic!(make_pg_1d(N), ic)
+        m  = MUSCL(Float64, 1, 1, order, limiter, RusanovFlux())
+        ts = GeneralRKTimeStepper(eq, m, MOOD(), RK3_SSP_Tableau(Float64))
+        HyperCloudCore.update_size!(ts, N, length(pg.neighbor.indices), false); HyperCloudCore.update_size!(m, N)
+        fill!(view(pg.core.particle_orders, 1:N), order)
+        HyperCloudCore.compute_explicit_rhs!(ts, eq, pg, ts.K_E_stages[1], ts.K_X_stages[1], pg.rhos, 0.0, true)
+        nb = pg.neighbor; worst = 0.0
+        for i in 1:N
+            lo, hi = extrema(push!([pg.rhos[nb.indices[k]][1] for k in nb.ranges[i]], pg.rhos[i][1]))
+            for k in nb.ranges[i]
+                p = HyperCloudCore.build_basis(Val(order - 1), 0.5 * nb.distances[k])
+                r = pg.rhos[i][1] + sum(m.gradients[i][b][1] * p[b] for b in eachindex(p))
+                worst = max(worst, r - hi, lo - r)
+            end
+        end
+        return worst
+    end
+    ics = (x -> 0.5 * (1 + tanh(x / 0.04)), x -> abs(x) < 0.3 ? 1.0 : 0.0, x -> abs(x), x -> exp(-x^2 / 0.002),
+           x -> x < 0 ? 0.0 : x < 0.2 ? 5x : 0.5)
+    for lim in (BarthJespersenLimiter(:soft), VenkatakrishnanLimiter(:hard), MinmodLimiter(:hard)), ic in ics
+        @test max_overshoot(lim, ic) <= 1e-12
+    end
+    @test max_overshoot(NoLimiter(), ics[2]) > 0.1
 end
 
 @testset "MOODPAD: admissibility only" begin

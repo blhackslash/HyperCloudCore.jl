@@ -88,7 +88,7 @@ configurations, so it is left as is for now.
 
 ## The two passes
 
-1. **Pre-gather (`update_content!`).** Fits the reconstruction at the particle's current order and stores the (limited) coefficients in `gradients[i]`. If the neighbourhood has fewer than $B(D, k-1)$ neighbours, the particle's order is set to 1 **in `particle_orders`**, so MOOD and the EPD rules see the starved particle as first order.
+1. **Pre-gather (`update_content!`).** Fits the reconstruction at the particle's current order and stores the (limited) coefficients in `gradients[i]`. If the neighbourhood has fewer than $B(D, k-1)$ neighbours, the particle's order is lowered to the highest $k' < k$ with $B(D, k'-1)$ neighbours (order 1 only below $D$ neighbours) **in `particle_orders`**, so MOOD and the EPD rules see the starved particle at that order.
 2. **Flux.** For every neighbour, it chooses the interface degrees from the MOOD strategy, masks both reconstructions to those degrees (`mask_basis`), evaluates the numerical flux and non-conservative jump, and differentiates the interface differences.
 
 Because the flux at $i$ reads `gradients[j]` of its neighbours, all gradients of a stage must be computed before any flux; that is why the pre-gather pass is separate.
@@ -198,7 +198,9 @@ budget counts `dweights` instead. The toggle is the constructor keyword (`:strea
 ## Slope limiting (*a priori*)
 
 - **Barth–Jespersen / Venkatakrishnan** (any dimension). The reconstruction is evaluated at every interface. If an interface value leaves the range $[\min_{\nu(i)} U, \max_{\nu(i)} U]$, the coefficients are scaled by $\phi = \min_j \phi(r_j)$ with $\phi_{BJ}(r) = \min(1, r)$ and the smooth Venkatakrishnan function. This is done per state component.
-- **Minmod / Superbee** (1-D only). They compare the left and right one-sided slopes from the nearest neighbours on each side.
+- **Minmod / Superbee** (1-D only, rejected by the constructor in 2-D and 3-D). They compare the left and right one-sided slopes from the nearest neighbours on each side.
+
+The round-off cut-offs are relative to the local data, not absolute: Barth–Jespersen and Venkatakrishnan ignore interface increments below `16 eps(T) max(|u_i|, max − min)`, and Minmod/Superbee skip neighbours closer than `1e-6 Δx` and compare slope signs rather than products (which underflow). A profile of height $10^{-13}$ (a kinetic tail, say) is therefore limited exactly like one of height 1; with the earlier absolute $10^{-12}$ it was left unlimited.
 
 Limiting and MOOD can be combined: the limiter acts on every reconstruction, and MOOD reduces the order where the limited update is still inadmissible.
 

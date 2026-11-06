@@ -101,6 +101,10 @@ end
     @test vk(-2.0) == 0 && vk(1f20) ≈ 1f0 && vk(Inf32) == 1f0 && vk(1f20) ≈ Float32(vk(1e20))
     # (through `_update_phi` the ratio is now bounded by 1 / 16ε: increments below that share of the local range are skipped)
     @test !isnan(HyperCloudCore._update_phi(VenkatakrishnanLimiter(:hard), ones(State{1, Float32}), f32(1f-11), f32(0), f32(1f9), f32(-1f9))[1])
+    # the 1-D limiters are rejected when a scheme of another dimension is built (it used to fail inside the kernel)
+    @test_throws ArgumentError MUSCL(Float64, 2, 1, 2, MinmodLimiter(:hard), RusanovFlux())
+    @test_throws ArgumentError MUSCL(Float64, 3, 1, 2, SuperbeeLimiter(), RusanovFlux())
+    @test MUSCL(Float64, 1, 1, 2, SuperbeeLimiter(), RusanovFlux()) isa MUSCL
     @test HyperCloudCore._update_phi(BarthJespersenLimiter(:hard), ones(State{1, Float64}), State{1, Float64}(1e-14), State{1, Float64}(1e-13),
                                      State{1, Float64}(1e-13), State{1, Float64}(0.0))[1] == 0    # at a local max of a 1e-13 field: limited
 end
