@@ -1,0 +1,4 @@
+HyperCloudCore from /workspace/julia/HyperCloudDev/HyperCloudCore.jl/.claude/worktrees/numerics/src/HyperCloudCore.jl
+reached tmax: true
+WARNING LOGGED: get_time_step: no particle restricts the time step (all wave speeds zero, or no particle with neighbours and a solvable fit); returning Inf, a driver has to cap it (reported once per session)
+HyperCloud assertion !any(level >= Warn) holds: false

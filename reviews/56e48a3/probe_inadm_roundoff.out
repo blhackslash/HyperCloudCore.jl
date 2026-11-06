@@ -1,0 +1,4 @@
+jitter 0.2 U1: inadmissible per step [11, 81, 166, 237, 353], min state after 5 steps -5.121971375516583e-11, #negative 120
+jitter 0.2 PAD: inadmissible per step [11, 81, 166, 237, 353], min state after 5 steps -5.121971375516583e-11, #negative 120
+lattice PAD: inadmissible per step [30, 78, 169, 325, 486], min state after 5 steps -2.255311401651611e-48, #negative 159
+jitter 0.2 PAD cfl 0.1: inadmissible per step [11, 99, 252, 425, 637], min state after 5 steps -1.1280430761187909e-6, #negative 221
