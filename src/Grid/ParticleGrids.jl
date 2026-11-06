@@ -350,6 +350,9 @@ end
     return expr
 end
 
+# Whether `get_time_step` has reported an unbounded step (once per session)
+const _WARNED_INF_DT = Threads.Atomic{Bool}(false)
+
 """
     get_time_step(pg::ParticleGrid, eq::HyperbolicPDE, main_grad)
 
@@ -367,7 +370,9 @@ first-derivative weights of the divergence fit at particle `i` (degree `_diverge
   degree `_divergence_degree(main_grad)` per particle (`_cfl_body!`), as every call did before. The two differ
   where the fits differ: for degree-5 (odd-order) divergence fits the weights in use sum to about 1.8× the
   Taylor fit's, i.e. the cached estimate is that much smaller; for degrees ≤ 3 they agree.
-- Returns `Inf` for an empty grid or for particles without neighbours / without a solvable fit.
+- Returns `Inf` for an empty grid or for particles without neighbours / without a solvable fit (or with zero wave
+  speeds). If no particle of a non-empty grid restricts the step it warns once: a driver that takes `Δt = Inf`
+  (capped to the end time) would jump to the end in one step.
 """
 @inline function get_time_step(pg::ParticleGrid{D, M, T}, eq::HyperbolicPDE, main_grad; cached_weights::Bool = true) where {D, M, T}
     # 1. Graceful exit for empty grids
@@ -394,7 +399,12 @@ first-derivative weights of the divergence fit at particle `i` (degree `_diverge
     end
 
     # 2. Provide init=T(Inf) to prevent any future reduction errors
-    return minimum(view(dt_buffer, 1:pg.meta.N); init=T(Inf))
+    dt = minimum(view(dt_buffer, 1:pg.meta.N); init=T(Inf))
+    if !isfinite(dt) && !Threads.atomic_xchg!(_WARNED_INF_DT, true)
+        @warn "get_time_step: no particle restricts the time step (all wave speeds zero, or no particle with " *
+              "neighbours and a solvable fit); returning Inf, a driver has to cap it (reported once per session)"
+    end
+    return dt
 end
 
 """

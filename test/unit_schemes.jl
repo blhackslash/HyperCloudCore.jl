@@ -434,6 +434,12 @@ end
     @test 0.5 * dt_i <= dt_c <= 2 * dt_i
     @test get_time_step(pgc, eqc, interp; cached_weights = false) == dt_i     # the opt-out assembles the fit as before
     @test (@allocated get_time_step(pgc, eqc, interp)) < 8192
+    # No particle restricts the step (zero wave speeds): Inf, reported once
+    struct StandStill <: HyperbolicPDE{1, 1, Float64} end
+    HyperCloudCore.max_eigenvalue(::StandStill, U::State{1, Float64}, d::Int) = 0.0
+    HyperCloudCore._WARNED_INF_DT[] = false
+    @test (@test_logs (:warn, r"no particle restricts") get_time_step(pgc, StandStill(), interp)) == Inf
+    @test (@test_logs get_time_step(pgc, StandStill(), interp)) == Inf
 end
 
 @testset "Limiters, WENO weights and the upwind speed are scale invariant" begin
@@ -508,6 +514,18 @@ end
     u_none, _, _ = run_pad(gauss, MOOD(), 20)
     u_pad, _, drops_smooth = run_pad(gauss, MOOD(EPD1(), MOODPAD()), 20)
     @test drops_smooth == 0 && all(isapprox.(u_none, u_pad; atol = 1e-14))
+    # Above the positivity limit of the first-order update a candidate at order 1 stays inadmissible: MOOD accepts it
+    # (it cannot drop further), counts it and warns once per stepper; admissible steps count zero
+    pg = set_ic!(make_pg_1d(100), box)
+    m  = MUSCL(Float64, 1, 1, 3, NoLimiter(), RusanovFlux())
+    ts = GeneralRKTimeStepper(eqp, m, MOOD(EPD1(), MOODPAD()), RK3_SSP_Tableau(Float64))
+    dt = get_time_step(pg, eqp, m)
+    @test_logs ts(eqp, pg, 0.0, 0.4dt)
+    @test mood_inadmissible(ts) == 0
+    @test_logs (:warn, r"inadmissible candidate") ts(eqp, pg, 0.4dt, 3dt)
+    n_bad = mood_inadmissible(ts)
+    @test n_bad > 0                       # (the substeps are checked: the RK3 combination itself may be positive again)
+    @test_logs ts(eqp, pg, 3.4dt, 0.4dt)
     @test build_mood_criterion(Val(:PAD), Dict{Symbol, Any}(), Dict{Symbol, Any}()) isa MOODPAD
     @test MOOD(EPD1(), MOODPAD())(nothing, 1, State{1, Float64}(0.0), 1:0, State{1, Float64}(-1.0), nothing, nothing) == false
 end
