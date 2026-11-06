@@ -115,7 +115,8 @@ Evaluates the non-conservative path integral jump across an interface. Has to be
 
 # Arguments
 - `eq::HyperbolicPDE`: The physical equation system.
-- `f_L::State`, `f_R::State`: The reconstructed left and right interface states.
+- `f_L::Flux`, `f_R::Flux`: The reconstructed left and right interface states, one `State` per spatial direction
+  (as passed to the numerical flux).
 - `dist_k::Space`: The spatial distance vector between the two points.
 
 # Returns
