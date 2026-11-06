@@ -49,15 +49,15 @@ struct InverseWeightFunction{T} <: MLSWeightFunction
     alpha::T
     range::T
 end
-InverseWeightFunction(alpha::T, range::T) where {T <: Real} = InverseWeightFunction{T}(alpha, range)
-InverseWeightFunction(alpha::Real, range::Real) = InverseWeightFunction(promote(alpha, range)...)
+InverseWeightFunction(alpha::T, range::T) where {T <: AbstractFloat} = InverseWeightFunction{T}(alpha, range)
+InverseWeightFunction(alpha::Real, range::Real) = InverseWeightFunction(promote(float(alpha), float(range))...)
 
-function ExponentialWeightFunction(alpha::T, range::T) where {T <: Real}
+function ExponentialWeightFunction(alpha::T, range::T) where {T <: AbstractFloat}
     inv_range_sq = one(T) / (range^2)
     ExponentialWeightFunction{T}(alpha, range, inv_range_sq)
 end
-# Mixed argument types (e.g. a Float64 alpha with a Float32 range) are promoted to a common type
-ExponentialWeightFunction(alpha::Real, range::Real) = ExponentialWeightFunction(promote(alpha, range)...)
+# Mixed argument types (e.g. a Float64 alpha with a Float32 range) are promoted to a common float type (integers to Float64)
+ExponentialWeightFunction(alpha::Real, range::Real) = ExponentialWeightFunction(promote(float(alpha), float(range))...)
 
 """
     fast_exp_accurate(x)

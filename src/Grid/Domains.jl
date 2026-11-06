@@ -184,13 +184,16 @@ end
 # 3. UNIVERSAL NARROW-BAND POINT GENERATOR
 # =========================================================================
 # Lattice index `j` (point `canvas_min + j dx`) of the wall at `w`, or -1 if the wall falls between two lattice
-# points (the extent is not a multiple of `dx`). The ratio carries the round-off of `w`, `canvas_min` and `dx`
-# (a few ulps of the ratio); a quarter spacing caps the tolerance, so a wall is never assigned to a point that is
-# not its own.
+# points (the extent is not a multiple of `dx`). The tolerance is the round-off of the ratio only: the rounding of
+# `w` and of `canvas_min` (half an ulp each, in units of `dx`; `canvas_min` may lie in the next binade, e.g. below
+# a wall at -1 in Float32), of their difference and of the division. An extent that is not a multiple of `dx`
+# by more than that is not snapped, however close (as before 0.7.9). A quarter spacing caps the tolerance, so a
+# wall is never assigned to a point that is not its own.
 function _wall_index(w::T, canvas_min::T, dx::T) where {T}
-    r = (w - canvas_min) / dx
-    k = round(Int, r)
-    return abs(r - k) <= min(T(0.25), T(0.01) + 8 * eps(T) * abs(r)) ? k : -1
+    r   = (w - canvas_min) / dx
+    k   = round(Int, r)
+    tol = (2 * (eps(abs(w)) + eps(abs(canvas_min))) + eps(T) * abs(w - canvas_min)) / dx + 4 * eps(T) * abs(r)
+    return abs(r - k) <= min(T(0.25), tol) ? k : -1
 end
 
 """
