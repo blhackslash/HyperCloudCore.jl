@@ -32,10 +32,13 @@ end
 
 Generates a rectangular `GeometricDomain` instance. 
 - Constructs an interior evaluation function enforcing strict Cartesian bounding box constraints.
-- Automatically handles edge tagging in 2D by assigning 1 to Left, 2 to Right, 3 to Bottom, and 4 to Top based on nearest-distance evaluations
-  (the edges of a periodic axis are ignored, so a channel periodic in x has only the tags 3 and 4).
-- In 1-D and 3-D every boundary point has tag 1 (both walls of a 1-D interval, all faces of a box). The
-  `ParticleGrid` constructor warns when `bc_map` names a tag no boundary particle carries, or when boundary
+- Tags every boundary point with the face nearest to it: `2d - 1` for the lower and `2d` for the upper face of
+  axis `d`, i.e. 1-D: 1 left, 2 right; 2-D: 1 left, 2 right, 3 bottom, 4 top; 3-D: 1/2 at `x = min/max`, 3/4 at
+  `y`, 5/6 at `z`. Ties (corners) go to the lower tag. The faces of a periodic axis are ignored, so a 2-D channel
+  periodic in x has only the tags 3 and 4.
+- Up to 0.7.9, 1-D and 3-D boxes tagged every boundary point 1 (both walls of an interval, all faces of a box);
+  a map `Dict(1 => bc)` now covers only the lower wall (x-min face): give both, e.g. `Dict(1 => bc, 2 => bc)`.
+- The `ParticleGrid` constructor warns when `bc_map` names a tag no boundary particle carries, or when boundary
   particles carry a tag `bc_map` does not cover (they then keep their state, like a Dirichlet condition).
 """
 function get_rectangular_domain(
@@ -60,27 +63,20 @@ function get_rectangular_domain(
         return true
     end
 
+    # Nearest face, `2d - 1` (lower) / `2d` (upper) for axis `d`, the first one on ties. The faces of a periodic axis
+    # are no boundary: ignored (a channel periodic in x used to tag the ghosts near the seam 1/2, which no bc_map entry
+    # covered).
     tag_func = (pos) -> begin
         if is_interior_func(pos); return 0; end
-        
-        if D == 2
-            # The edges of a periodic axis are no boundary: ignore them (a channel periodic in x used to tag the
-            # ghosts near the seam 1/2, which no bc_map entry covered)
-            d_left   = is_per_svec[1] ? T(Inf) : abs(pos[1] - mins_f[1])
-            d_right  = is_per_svec[1] ? T(Inf) : abs(pos[1] - maxs_f[1])
-            d_bottom = is_per_svec[2] ? T(Inf) : abs(pos[2] - mins_f[2])
-            d_top    = is_per_svec[2] ? T(Inf) : abs(pos[2] - maxs_f[2])
-            
-            min_d = min(d_left, d_right, d_bottom, d_top)
-            
-            if min_d == d_left; return 1
-            elseif min_d == d_right; return 2
-            elseif min_d == d_bottom; return 3
-            else; return 4
-            end
-        else
-            return 1
+        best_tag, best_d = 1, T(Inf)
+        for d in 1:D
+            is_per_svec[d] && continue
+            d_lo = abs(pos[d] - mins_f[d])
+            d_hi = abs(pos[d] - maxs_f[d])
+            d_lo < best_d && (best_tag = 2d - 1; best_d = d_lo)
+            d_hi < best_d && (best_tag = 2d; best_d = d_hi)
         end
+        return best_tag
     end
 
     return GeometricDomain(Val(:rectangular),mins_f, maxs_f, is_per_svec, is_interior_func, tag_func, bc_map)
@@ -296,7 +292,8 @@ function _check_bc_tags(geom::GeometricDomain, tags::AbstractVector{Int}, is_bou
     @warn "bc_map and boundary tags do not match: " *
           (isempty(unused) ? "" : "no boundary particle carries tag(s) $(unused), so their condition is never applied; ") *
           (isempty(uncovered) ? "" : "boundary particles with tag(s) $(uncovered) have no condition and keep their state; ") *
-          "the boundary particles carry tag(s) $(carried) (1-D and 3-D boxes tag every boundary particle 1, see get_rectangular_domain)."
+          "the boundary particles carry tag(s) $(carried) (boxes tag the face `2d - 1` / `2d` of axis `d`; up to 0.7.9 1-D and " *
+          "3-D boxes tagged every boundary particle 1, see get_rectangular_domain)."
     return nothing
 end
 
