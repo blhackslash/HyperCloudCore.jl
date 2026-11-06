@@ -55,6 +55,9 @@ end
     @test param2uvec((1.0, 2.0, 3.0)) == SVector(1.0, 2.0, 3.0)
     @test param2uvec([4.0, 5.0]) == SVector(4.0, 5.0)
     @test param2uvec(SVector(6.0, 7.0)) == SVector(6.0, 7.0)
+    @test param2uvec((1, 2.0)) isa SVector{2, Float64}              # mixed tuples are promoted (was SVector{2, Real})
+    @test ExponentialWeightFunction(1.0, 0.25f0) isa ExponentialWeightFunction{Float64}   # mixed types promoted
+    @test InverseWeightFunction(1, 0.5) isa InverseWeightFunction{Float64}
 
     @test param2xvec(-1.5) == SVector(-1.5)
     @test param2xvec((0.0, 1.0)) isa SVector{2, Float64}
@@ -112,7 +115,7 @@ end
     for v in (pg.rhos, pg.curvatures,
               pg.core.positions, pg.core.is_boundary, pg.core.volumes, pg.core.tags, pg.core.particle_orders,
               pg.shared.rho_buffer, pg.shared.pos_buffer, pg.shared.float_buffer, pg.shared.bit_buffer, pg.shared.int_buffer,
-              pg.reorder.permutation, pg.reorder.inv_permutation, pg.reorder.new_permutation_buffer, pg.reorder.seen_buffer,
+              pg.reorder.permutation,
               pg.bins.cell_particles, pg.bins.bin_of)
         @test length(v) == cap
     end
@@ -156,9 +159,34 @@ end
             xs   = [p[1] for (p, b) in zip(pos, isb) if !b]
             @test length(xs) == Ns + 1 && minimum(xs) == lo && maximum(xs) == hi
         end
+        # Wall points are chosen by index: far from the origin in Float32 a distance tolerance grew to almost dx
+        # (0.96 dx on [100, 101], Ns = 1e4) and could put the wall point's neighbour on the wall as well
+        for (lo, hi, Ns) in ((100, 101, 10_000), (1000, 1001, 1000))
+            dx   = (Float32(hi) - Float32(lo)) / Ns
+            geom = get_rectangular_domain(Float32, (lo,), (hi,))
+            cd   = HyperCloudCore.ComputationalDomain(geom, (dx,), 2.5f0)
+            pos, isb, _, _, _ = HyperCloudCore.get_points(cd, geom; nominal_dx = (dx,), interp_range_factor = 2.5f0)
+            xs   = sort([p[1] for (p, b) in zip(pos, isb) if !b])
+            @test length(xs) == Ns + 1 && xs[1] == lo && xs[end] == hi
+            @test minimum(diff(xs)) > dx / 2                        # no duplicated wall point
+        end
+        # A wall between two lattice points (extent not a multiple of dx) is not snapped to: the points stay on the lattice
+        geom = get_rectangular_domain(Float64, (0.0,), (1.0,))
+        cd   = HyperCloudCore.ComputationalDomain(geom, (0.3,), 2.5)
+        pos, isb, _, _, _ = HyperCloudCore.get_points(cd, geom; nominal_dx = (0.3,), interp_range_factor = 2.5)
+        xs   = sort([p[1] for (p, b) in zip(pos, isb) if !b])
+        @test xs[1] == 0 && maximum(abs.(xs ./ 0.3 .- round.(xs ./ 0.3))) < 1e-12 && xs[end] < 1
         dx = 2 / 30                                                   # 2-D: no wall row or column lost
         pg = ParticleGrid(get_rectangular_domain(Float64, (-1.0, -1.0), (1.0, 1.0)), (dx, dx), ExponentialWeightFunction(1.0, 2.5dx), 1)
         @test pg.meta.N_interior == 31^2
+    end
+
+    @testset "Interior particles without a linear fit are reported" begin
+        # 1-D, R = 1.2 dx with 20 % jitter: some particles have a single neighbour (frozen by Central/Upwind)
+        geom = get_rectangular_domain(Float64, (0.0,), (1.0,); is_periodic = true)
+        @test_logs (:warn, r"fewer than 2 neighbours") match_mode = :any ParticleGrid(geom, (0.025,),
+            ExponentialWeightFunction(1.0, 1.2 * 0.025), 1; randomness = (0.2 * 0.025,), rng = MersenneTwister(3))
+        @test_logs ParticleGrid(geom, (0.025,), ExponentialWeightFunction(1.0, 2.5 * 0.025), 1)    # normal radius: quiet
     end
 
     @testset "Anisotropic spacing: the ghost band is R thick on every axis" begin
@@ -177,6 +205,25 @@ end
         # isotropic grids keep their layers
         pg = ParticleGrid(get_rectangular_domain(Float64, (0.0, 0.0), (1.0, 1.0)), (0.1, 0.1), ExponentialWeightFunction(1.0, 0.3), 1)
         @test pg.domain.canvas_mins ≈ Space{2, Float64}(-0.3, -0.3)
+        # Complete stencils at every wall and corner, 2-D and 3-D: each interior particle of an unjittered lattice sees
+        # the bulk count (R = 2.37 max dx avoids distance ties)
+        function lattice_count(dx, R)
+            K = ntuple(d -> floor(Int, R / dx[d]) + 1, length(dx))
+            return count(I -> !all(==(0), Tuple(I)) && sum(abs2, ntuple(d -> I[d] * dx[d], length(dx))) <= R^2,
+                         CartesianIndices(ntuple(d -> -K[d]:K[d], length(dx))))
+        end
+        for (mins, maxs, dx) in (((0.0, 0.0), (2.0, 1.0), (0.1, 0.05)), ((0.0, 0.0, 0.0), (1.0, 0.5, 0.5), (0.1, 0.05, 0.025)))
+            R  = 2.37 * maximum(dx)
+            pg = ParticleGrid(get_rectangular_domain(Float64, mins, maxs), dx, ExponentialWeightFunction(1.0, R), 1)
+            nref = lattice_count(dx, R)
+            @test all(i -> pg.core.is_boundary[i] || length(pg.neighbor.ranges[i]) == nref, 1:pg.meta.N)
+        end
+        # Float32: the layer count of the finer axis is ⌈R/dx_d⌉, not one more from round-off (the guard was a Float64
+        # factor that cannot pull a Float32 product back: 22 layers instead of 21 here)
+        dxm  = 1.0f0 / 197
+        dx32 = (dxm, dxm / 6)
+        cd   = HyperCloudCore.ComputationalDomain(get_rectangular_domain(Float32, (0.0, 0.0), (1.0, 1.0)), dx32, 3.5f0)
+        @test round(Int, -cd.canvas_mins[2] / dx32[2]) == ceil(Int, 3.5 * Float64(dxm) / Float64(dx32[2]) - 1e-6)
     end
 
     @testset "Boundary tags: periodic edges ignored, bc_map mismatches warned" begin
@@ -206,13 +253,20 @@ end
         f(x) = State{1, Float64}(x[1] + 10x[2])
         HyperCloudCore.ensure_capacity!(pg, N + 5)
         perm = shuffle(MersenneTwister(1), 1:N)
+        # every per-particle array must follow its particle: tags carry the original index, the others a function of it
         for i in 1:N
-            pg.core.positions[i] = pos0[perm[i]]; pg.rhos[i] = f(pos0[perm[i]]); pg.core.tags[i] = perm[i]
+            k = perm[i]
+            pg.core.positions[i] = pos0[k]; pg.rhos[i] = f(pos0[k]); pg.core.tags[i] = k
+            pg.core.volumes[i] = k / N; pg.core.particle_orders[i] = k; pg.core.is_boundary[i] = isodd(k)
+            pg.curvatures[i] = f(pos0[k])
         end
         v0 = pg.meta.geometry_version
         pg.reorder(pg)
         @test pg.core.positions[1:N] == pos0
         @test all(i -> pg.rhos[i] == f(pg.core.positions[i]) && pos0[pg.core.tags[i]] == pg.core.positions[i], 1:N)
+        @test all(i -> (k = pg.core.tags[i]; pg.core.volumes[i] == k / N && pg.core.particle_orders[i] == k &&
+                       pg.core.is_boundary[i] == isodd(k) && pg.curvatures[i] == f(pos0[k])), 1:N)
+        fill!(view(pg.core.is_boundary, 1:N), false)
         @test pg.meta.geometry_version > v0
         fill!(view(pg.core.tags, 1:N), 0)
         pg.neighbor(pg)

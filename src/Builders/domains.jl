@@ -107,8 +107,10 @@ function build_domain(::Val{:spherical}, domain_conf::Dict, context::Dict)
     req_mins = Tuple(T.(domain_conf[:mins]))
     req_maxs = Tuple(T.(domain_conf[:maxs]))
     
-    center = ntuple(d -> (req_mins[d] + req_maxs[d]) / 2.0, Val(D))
-    radius = (req_maxs[1] - req_mins[1]) / 2.0
+    # The sphere is inscribed in the box: centre at its middle, radius half its x extent (the other extents are not
+    # used, so a non-cubic box gives the sphere of its first axis).
+    center = ntuple(d -> (req_mins[d] + req_maxs[d]) / 2, Val(D))
+    radius = (req_maxs[1] - req_mins[1]) / 2
     
     return get_spherical_domain(T, center, radius; bc_map = bc_map, is_periodic = is_per)
 end

@@ -16,7 +16,10 @@ An exponential weighting function for Moving Least Squares (MLS) algorithms. It 
 
 # Callable / Functor
 
-Evaluates the weight for a given squared distance `dist_sq`. It dispatches through a highly accurate, stable 4th-order polynomial approximation of `exp(x)` tailored strictly for negative inputs (`x <= 0`), shifting the expansion entirely into the denominator to eliminate standard library overhead.
+Evaluates the weight for a given squared distance `dist_sq` (the neighbour search passes `r²`), approximately
+`exp(-alpha r² / range²)`: a positive, monotone kernel through `fast_exp_accurate`, which is close to the exponential
+only for small arguments (0.4 % off at the cutoff with `alpha = 1`, 23 % with `alpha = 3`). That is harmless for an
+MLS weight, but the kernel is this approximation, not the exact Gaussian.
 """
 struct ExponentialWeightFunction{T} <: MLSWeightFunction
     alpha::T
@@ -35,7 +38,7 @@ An inverse distance weighting function for Moving Least Squares (MLS) algorithms
 
     InverseWeightFunction(alpha::T, range::T)
 
-- `alpha`: Scaling parameter.
+- `alpha`: stored for a uniform interface with `ExponentialWeightFunction`; the inverse weight does not use it.
 - `range`: The spatial cutoff radius.
 
 # Callable / Functor
@@ -46,17 +49,21 @@ struct InverseWeightFunction{T} <: MLSWeightFunction
     alpha::T
     range::T
 end
+InverseWeightFunction(alpha::T, range::T) where {T <: Real} = InverseWeightFunction{T}(alpha, range)
+InverseWeightFunction(alpha::Real, range::Real) = InverseWeightFunction(promote(alpha, range)...)
 
-function ExponentialWeightFunction(alpha::T, range::T) where {T}
+function ExponentialWeightFunction(alpha::T, range::T) where {T <: Real}
     inv_range_sq = one(T) / (range^2)
     ExponentialWeightFunction{T}(alpha, range, inv_range_sq)
 end
+# Mixed argument types (e.g. a Float64 alpha with a Float32 range) are promoted to a common type
+ExponentialWeightFunction(alpha::Real, range::Real) = ExponentialWeightFunction(promote(alpha, range)...)
 
 """
     fast_exp_accurate(x)
 
-Provides a highly accurate, stable numerical approximation of `exp(x)` tailored strictly for negative inputs (`x <= 0`). 
-- Eliminates standard library overhead by computing a rigid 4th-order polynomial expansion shifted entirely into the denominator.
+`1 / P₄(-x)` with `P₄` the 4th-order Taylor polynomial of `exp`, for `x <= 0`: positive and monotone, exact to
+`O(x⁵)` near 0 and increasingly off for larger `|x|` (0.4 % at `x = -1`, 23 % at `x = -3`).
 """
 @inline function fast_exp_accurate(x::T) where {T}
     y = -x

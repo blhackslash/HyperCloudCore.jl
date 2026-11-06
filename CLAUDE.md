@@ -62,9 +62,8 @@ backend-specific code elsewhere. Kernel bodies must work on every backend:
 
 ## Conventions
 
-- Supports **Julia 1.10** (`[compat] julia = "1.10"`, tested on GitHub). Don't use
-  1.11+ features (`public`, `@main`, `Memory`, `ScopedValues`, `:greedy` scheduling, …),
-  even though the container's Julia is newer.
+- Requires **Julia 1.12** (`[compat] julia = "1.12"`; CI tests 1.12 and the latest release). Julia 1.10
+  support was dropped in e89da77, so 1.11/1.12 features may be used.
 - Stay generic in `T` (Float32 and Float64 both work: no `Float64` literals in numerics,
   use `T(…)`/`zero(T)`/`eps(T)`), in `D` (1–3) and in `M`.
 - Use the `SVector` aliases (`State{M,T}`, `Flux{D,M,T}`, …) and keep hot paths type
