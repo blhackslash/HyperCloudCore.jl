@@ -1,0 +1,3 @@
+cube n=16 R=2.5h: ghosts 6514, outside one face only 5202, tagged with another face 2556 (of these off the edge lines 1404) e.g. (0.0625, 0.0625, -0.1875) -> tag 1
+cube n=16 R=5.5h: ghosts 16932, outside one face only 10404, tagged with another face 7056 (of these off the edge lines 4752) e.g. (0.0625, 0.0625, -0.375) -> tag 1
+cube n=32 R=2.5h: ghosts 22066, outside one face only 19602, tagged with another face 5436 (of these off the edge lines 3132) e.g. (0.03125, 0.03125, -0.09375) -> tag 1

@@ -1,0 +1,4 @@
+n=8 R=2.5h jit=0.0 per=false: ghosts 2194, different outflow states 86 (max |Δ| 0.315), left at the initial state only per-tag: 0
+n=12 R=2.5h jit=0.3 per=false: ghosts 4079, different outflow states 207 (max |Δ| 0.658), left at the initial state only per-tag: 0
+n=10 R=5.5h jit=0.2 per=false: ghosts 8457, different outflow states 91 (max |Δ| 0.754), left at the initial state only per-tag: 0
+n=10 R=2.5h jit=0.3 per=(false, false, true): ghosts 1666, different outflow states 71 (max |Δ| 0.904), left at the initial state only per-tag: 0

@@ -1,0 +1,46 @@
+== 1. 2-D: new tags == parent tags on ParticleGrids ==
+  grids 768, particles 734385, mismatches 0
+== 2. 2-D: random + adversarial points (ties, corners, Inf, NaN, huge) ==
+  NaN point [NaN, -1.0]: new 3, old 4 (is_interior false? true)
+  points 1766560, mismatches 0
+== 3. 1-D tags ==
+  Float64 [0.0,1.0] dx=0.1 jit=0.0: ok=true n1=6 n2=6 interior=11
+  Float64 [0.0,1.0] dx=0.1 jit=0.3: ok=true n1=6 n2=6 interior=11
+  Float64 [-1.0,1.0] dx=0.06666666666666667 jit=0.0: ok=true n1=6 n2=6 interior=31
+  Float64 [-1.0,1.0] dx=0.06666666666666667 jit=0.3: ok=true n1=6 n2=6 interior=31
+  Float64 [-5.0,5.0] dx=0.02 jit=0.0: ok=true n1=6 n2=6 interior=501
+  Float64 [-5.0,5.0] dx=0.02 jit=0.3: ok=true n1=6 n2=6 interior=500
+  Float64 [2.5,2.75] dx=0.01 jit=0.0: ok=true n1=6 n2=6 interior=26
+  Float64 [2.5,2.75] dx=0.01 jit=0.3: ok=true n1=6 n2=6 interior=26
+  Float32 [0.0,1.0] dx=0.1 jit=0.0: ok=true n1=6 n2=6 interior=11
+  Float32 [0.0,1.0] dx=0.1 jit=0.3: ok=true n1=6 n2=6 interior=11
+  Float32 [-1.0,1.0] dx=0.06666666666666667 jit=0.0: ok=true n1=6 n2=6 interior=31
+  Float32 [-1.0,1.0] dx=0.06666666666666667 jit=0.3: ok=true n1=6 n2=6 interior=30
+  Float32 [-5.0,5.0] dx=0.02 jit=0.0: ok=true n1=6 n2=6 interior=501
+  Float32 [-5.0,5.0] dx=0.02 jit=0.3: ok=true n1=6 n2=6 interior=501
+  Float32 [2.5,2.75] dx=0.01 jit=0.0: ok=true n1=6 n2=6 interior=26
+  Float32 [2.5,2.75] dx=0.01 jit=0.3: ok=true n1=6 n2=6 interior=26
+  periodic 1-D: N_ghost = 0; get_tag(-0.1) = 1, get_tag(1.2) = 1
+== 4. 3-D tags ==
+  per=false Float64: ghosts 2259 ok=true counts(1..6)=[341, 344, 247, 264, 554, 509]; single-axis ghosts 1351, of these tagged with another axis 857
+  per=false Float32: ghosts 2253 ok=true counts(1..6)=[360, 335, 230, 227, 576, 525]; single-axis ghosts 1352, of these tagged with another axis 849
+  per=(false, false, true) Float64: ghosts 861 ok=true counts(1..6)=[249, 256, 182, 174, 0, 0]; single-axis ghosts 691, of these tagged with another axis 237
+  per=(false, false, true) Float32: ghosts 856 ok=true counts(1..6)=[251, 242, 182, 181, 0, 0]; single-axis ghosts 687, of these tagged with another axis 240
+  per=(true, false, false) Float64: ghosts 1191 ok=true counts(1..6)=[0, 0, 195, 196, 396, 404]; single-axis ghosts 925, of these tagged with another axis 365
+  per=(true, false, false) Float32: ghosts 1205 ok=true counts(1..6)=[0, 0, 195, 195, 401, 414]; single-axis ghosts 941, of these tagged with another axis 348
+  per=(false, true, true) Float64: ghosts 412 ok=true counts(1..6)=[209, 203, 0, 0, 0, 0]; single-axis ghosts 412, of these tagged with another axis 0
+  per=(false, true, true) Float32: ghosts 419 ok=true counts(1..6)=[211, 208, 0, 0, 0, 0]; single-axis ghosts 419, of these tagged with another axis 0
+  per=true Float64: ghosts 0 ok=true counts(1..6)=[0, 0, 0, 0, 0, 0]; single-axis ghosts 0, of these tagged with another axis 0
+  per=true Float32: ghosts 0 ok=true counts(1..6)=[0, 0, 0, 0, 0, 0]; single-axis ghosts 0, of these tagged with another axis 0
+== 5. 2-D: ghosts outside on one axis only that carry the other axis' tag (parent behaviour, kept) ==
+  n=20 R=2.5h jit=0.0: ghosts 276, outside one axis but tagged with the other 66 e.g. (0.0, -0.15) -> 1
+  n=20 R=5.5h jit=0.0: ghosts 616, outside one axis but tagged with the other 206 e.g. (0.0, -0.3) -> 1
+  n=50 R=2.5h jit=0.2: ghosts 704, outside one axis but tagged with the other 39 e.g. (-0.0365, 0.0009) -> 3
+  n=100 R=5.5h jit=0.2: ghosts 2676, outside one axis but tagged with the other 159 e.g. (0.0002, -0.0514) -> 1
+== 6. spherical unchanged ==
+  3-D sphere: ghost tags [1]
+== 7. reorder / adaptivity / device copy keep tags consistent with positions ==
+  after construction (reordered): true
+  adapt: inserted 2, removed 2, N 56 -> 56; consistent: true; ghost tags [1, 2]
+  after explicit reorder: true
+  device_grid(Array) tags equal: true
