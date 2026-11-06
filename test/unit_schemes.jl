@@ -436,6 +436,44 @@ end
     @test (@allocated get_time_step(pgc, eqc, interp)) < 8192
 end
 
+@testset "Limiters, WENO weights and the upwind speed are scale invariant" begin
+    # The round-off thresholds were absolute (1e-12, 1e-14): a box of height 1e-15 was left unlimited (Venkatakrishnan
+    # increments below 1e-12, Minmod slopes below 1e-12 taken as r = 1) and WENO blended it half/half, while the same
+    # box of height 1 was limited. Relative to the local data a power-of-two scale now gives bitwise scaled results.
+    eq  = make_advection_1d()
+    box = x -> abs(x) < 0.3 ? 1.0 : 0.0
+    sc  = 2.0^-50
+    @testset "$name" for (name, mk) in (("MUSCL3 VK", () -> MUSCL(Float64, 1, 1, 3, VenkatakrishnanLimiter(:hard), RusanovFlux())),
+                                        ("MUSCL2 Minmod", () -> MUSCL(Float64, 1, 1, 2, MinmodLimiter(:hard), RusanovFlux())),
+                                        ("WENO2", () -> WENO(Float64, 1, 1, 2)))
+        function run_box(a)
+            pg = set_ic!(make_pg_1d(60), x -> a * box(x))
+            m  = mk()
+            ts = GeneralRKTimeStepper(eq, m, MOOD(), RK2_SSP_Tableau(Float64))
+            dt = 0.4 * 2 / 60
+            for k in 0:9; ts(eq, pg, k * dt, dt); end
+            return [pg.rhos[i][1] for i in 1:pg.meta.N]
+        end
+        u1 = run_box(1.0)
+        us = run_box(sc)
+        @test us == sc .* u1
+        name == "WENO2" || @test minimum(u1) >= -1e-12 && maximum(u1) <= 1 + 1e-12
+    end
+    # UpwindFlux (Murman–Roe) for Burgers: the secant speed for states 1e-20 apart near 1e-20 (the absolute 1e-14
+    # took the Jacobian at u_L, off by half), the Jacobian only where the secant has lost its digits
+    struct TinyBurgers <: HyperbolicPDE{1, 1, Float64} end
+    HyperCloudCore.flux(::TinyBurgers, U::State{1, Float64}) = Flux{1, 1, Float64}((State{1, Float64}(U[1]^2 / 2),))
+    HyperCloudCore.velocity(::TinyBurgers, U::State{1, Float64}, d::Int) = SMatrix{1, 1, Float64}(U[1])
+    eqb = TinyBurgers()
+    upw(uL, uR) = begin
+        fL = Flux{1, 1, Float64}((State{1, Float64}(uL),)); fR = Flux{1, 1, Float64}((State{1, Float64}(uR),))
+        UpwindFlux()(fL, fR, flux(eqb, fL[1]), flux(eqb, fR[1]), eqb)[1][1]
+    end
+    @test upw(1e-20, 3e-20) ≈ (0.5e-40 + 4.5e-40) / 2 - 2e-20 * 2e-20 / 2 rtol = 1e-12    # s = 2e-20 (secant)
+    @test upw(1e-20, 3e-20) == 2.0^-264 * upw(2.0^132 * 1e-20, 2.0^132 * 3e-20)
+    @test upw(1.0, 1.0 + 1e-10) ≈ 0.5 + 0.5e-10 - 0.5 * 1e-10 rtol = 1e-12                 # Jacobian at u_L = 1
+end
+
 @testset "MOODPAD: admissibility only" begin
     # Scalar advection with the admissible set u ≥ 0. An unlimited MUSCL3 undershoots a box; with MOODPAD the
     # inadmissible candidates drop their order and the solution stays admissible, with no DMP involved. On a

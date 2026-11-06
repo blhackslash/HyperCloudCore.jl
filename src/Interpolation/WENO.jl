@@ -79,7 +79,6 @@ function (weno::WENO{D, M, T, MAX_ORDER, DIV_ORDER, INTERPS})(
     scale_val = minimum(pg.meta.dx)
     dx2 = scale_val^2
     dx4 = dx2^2
-    e_tol = T(1e-12)
 
     # --- 1. Central Stencil Calculation ---
     @inbounds for global_idx in nb_slice; ib.mask[global_idx] = true; end
@@ -102,7 +101,11 @@ function (weno::WENO{D, M, T, MAX_ORDER, DIV_ORDER, INTERPS})(
         weight = k <= D ? dx2 : dx4 
         smoothC += (resC[k] .* resC[k]) * weight
     end
-    betaC = T(0.5) ./ ((smoothC .+ e_tol) .^ 2)
+    # Offset of the smoothness indicators relative to the local data (`u_i²` and the central indicator), not an
+    # absolute 1e-12: the weights then do not depend on the scale of `u` (a profile of height 1e-13 is blended like
+    # one of height 1). `floatmin` only keeps a locally zero field finite.
+    e_tol = T(1e-12) .* max.(f_i .* f_i, smoothC) .+ floatmin(T)
+    aC    = smoothC .+ e_tol
 
     div_total = zero(State{M, T})
 
@@ -146,13 +149,12 @@ function (weno::WENO{D, M, T, MAX_ORDER, DIV_ORDER, INTERPS})(
             weight = k <= D ? dx2 : dx4
             smoothS += (resS[k] .* resS[k]) * weight
         end
-        betaS = T(0.5) ./ ((smoothS .+ e_tol) .^ 2)
-
         # --- 3. Apply Non-Linear Weights ---
-        sum_beta = betaS .+ betaC
-        
-        wS = betaS ./ sum_beta
-        wC = betaC ./ sum_beta
+        # β = ½ / (IS + ε)², normalised: w_S = β_S / (β_S + β_C) = 1 / (1 + (a_S / a_C)²). The ratio form cannot
+        # overflow or underflow to Inf/Inf, which the squared offsets of a tiny field would.
+        q  = (smoothS .+ e_tol) ./ aC
+        wS = one(T) ./ (one(T) .+ q .* q)
+        wC = one(T) .- wS
 
         div_d = wS .* resS[d] .+ wC .* resC[d]
         div_total += div_d * vel[d]
