@@ -20,7 +20,7 @@ A `GeometricDomain` describes the physical problem region and nothing else: its 
 get_rectangular_domain(T, mins, maxs; bc_map = Dict(), is_periodic = false)
 ```
 
-`is_periodic` is either one `Bool` for all axes or an `NTuple{D,Bool}`. Boundary points get the tag of the nearest face: `2d - 1` for the lower and `2d` for the upper face of axis `d`, the lower tag on ties (edges and corners); the faces of a periodic axis are ignored.
+`is_periodic` is either one `Bool` for all axes or an `NTuple{D,Bool}`. Boundary points get the tag of the face they lie outside of: `2d - 1` for the lower and `2d` for the upper face of axis `d`; outside several faces (the edges and corners of the ghost band) the one they are farthest outside of, the lower tag on ties. The faces of a periodic axis are ignored. (Up to 0.7.9 the 2-D tag was that of the nearest face *plane*, also measured from inside the box, so ghosts outside one wall close to another plane carried the other wall's tag.)
 
 | D | tags |
 |:--|:-----|

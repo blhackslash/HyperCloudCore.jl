@@ -247,16 +247,17 @@ end
         geom1b = get_rectangular_domain(Float64, (0.0,), (1.0,); bc_map = Dict{Int, AbstractBoundaryCondition}(1 => OutflowBC()))
         @test_logs (:warn, r"tag\(s\) \[2\] have no condition") ParticleGrid(geom1b, (0.1,), ExponentialWeightFunction(1.0, 0.25), 1)
         @test_logs ParticleGrid(geom1b, (0.1,), ExponentialWeightFunction(1.0, 0.25), 1)       # once per session
-        # 3-D: faces 1/2 (x), 3/4 (y), 5/6 (z), the nearest face, the lower tag at edges and corners; periodic z: no 5, 6
+        # 3-D: faces 1/2 (x), 3/4 (y), 5/6 (z): the face a ghost is outside of, at edges and corners the one it is
+        # farthest outside of (lower tag on ties); periodic z: no 5, 6
         for per in (false, (false, false, true))
             g3  = get_rectangular_domain(Float64, (0.0, 0.0, 0.0), (1.0, 1.0, 1.0); is_periodic = per)
             pg3 = ParticleGrid(g3, (0.125, 0.125, 0.125), ExponentialWeightFunction(1.0, 0.3), 1)
             function face(x)
-                best, bd = 1, Inf
+                best, bo = 0, 0.0
                 for d in 1:3
                     per isa Tuple && per[d] && continue
-                    abs(x[d]) < bd && (best = 2d - 1; bd = abs(x[d]))
-                    abs(x[d] - 1) < bd && (best = 2d; bd = abs(x[d] - 1))
+                    -x[d] > bo && (best = 2d - 1; bo = -x[d])
+                    x[d] - 1 > bo && (best = 2d; bo = x[d] - 1)
                 end
                 return best
             end
@@ -264,6 +265,15 @@ end
             @test all(i -> pg3.core.tags[i] == face(pg3.core.positions[i]), gh)
             @test sort(unique(pg3.core.tags[gh])) == (per === false ? collect(1:6) : collect(1:4))
         end
+        # 2-D: a ghost outside only the right wall gets tag 2 also next to the bottom plane (the nearest-plane rule
+        # gave it 3: 66 of 276 ghosts of this grid had another wall's tag)
+        g2  = get_rectangular_domain(Float64, (0.0, 0.0), (1.0, 1.0))
+        pg2 = ParticleGrid(g2, (0.05, 0.05), ExponentialWeightFunction(1.0, 0.125), 1)
+        gh2 = [i for i in 1:pg2.meta.N if pg2.core.is_boundary[i]]
+        outside(x) = (x[1] < 0, x[1] > 1, x[2] < 0, x[2] > 1)
+        single = filter(i -> count(outside(pg2.core.positions[i])) == 1, gh2)
+        @test !isempty(single) && all(i -> pg2.core.tags[i] == findfirst(outside(pg2.core.positions[i])), single)
+        @test any(i -> pg2.core.positions[i][1] > 1 && pg2.core.positions[i][2] < 0.1, single)   # right wall, near the bottom
         # 2-D box with only the left/right walls mapped: the bottom/top particles keep their state
         geom2 = get_rectangular_domain(Float64, (0.0, 0.0), (1.0, 1.0);
                                        bc_map = Dict{Int, AbstractBoundaryCondition}(1 => OutflowBC(), 2 => OutflowBC()))

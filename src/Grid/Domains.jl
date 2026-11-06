@@ -32,10 +32,12 @@ end
 
 Generates a rectangular `GeometricDomain` instance. 
 - Constructs an interior evaluation function enforcing strict Cartesian bounding box constraints.
-- Tags every boundary point with the face nearest to it: `2d - 1` for the lower and `2d` for the upper face of
-  axis `d`, i.e. 1-D: 1 left, 2 right; 2-D: 1 left, 2 right, 3 bottom, 4 top; 3-D: 1/2 at `x = min/max`, 3/4 at
-  `y`, 5/6 at `z`. Ties (corners) go to the lower tag. The faces of a periodic axis are ignored, so a 2-D channel
-  periodic in x has only the tags 3 and 4.
+- Tags every boundary point with the face it lies outside of: `2d - 1` for the lower and `2d` for the upper face
+  of axis `d`, i.e. 1-D: 1 left, 2 right; 2-D: 1 left, 2 right, 3 bottom, 4 top; 3-D: 1/2 at `x = min/max`, 3/4 at
+  `y`, 5/6 at `z`. Outside several faces (edges and corners of the ghost band) the one it is farthest outside of
+  wins, the lower tag on ties. The faces of a periodic axis are ignored, so a 2-D channel periodic in x has only the
+  tags 3 and 4. (Up to 0.7.9 the 2-D tag was that of the nearest face plane, also measured from inside, so ghosts
+  outside one wall but near another plane got the other wall's tag.)
 - Up to 0.7.9, 1-D and 3-D boxes tagged every boundary point 1 (both walls of an interval, all faces of a box);
   a map `Dict(1 => bc)` now covers only the lower wall (x-min face): give both, e.g. `Dict(1 => bc, 2 => bc)`.
 - The `ParticleGrid` constructor warns when `bc_map` names a tag no boundary particle carries, or when boundary
@@ -63,11 +65,23 @@ function get_rectangular_domain(
         return true
     end
 
-    # Nearest face, `2d - 1` (lower) / `2d` (upper) for axis `d`, the first one on ties. The faces of a periodic axis
-    # are no boundary: ignored (a channel periodic in x used to tag the ghosts near the seam 1/2, which no bc_map entry
-    # covered).
+    # The face the point lies outside of, `2d - 1` (lower) / `2d` (upper) for axis `d`; outside several (edges and
+    # corners of the ghost band), the one it is farthest outside of, the first one on ties. Measuring the distance to
+    # the nearest face *plane* instead (also from inside the box, the former 2-D rule) gave a ghost outside only the
+    # right wall the bottom tag when it was close to the bottom plane. The faces of a periodic axis are no boundary:
+    # ignored (a channel periodic in x used to tag the ghosts near the seam 1/2, which no bc_map entry covered).
     tag_func = (pos) -> begin
         if is_interior_func(pos); return 0; end
+        best_tag, best_out = 0, zero(T)
+        for d in 1:D
+            is_per_svec[d] && continue
+            o_lo = mins_f[d] - pos[d]
+            o_hi = pos[d] - maxs_f[d]
+            o_lo > best_out && (best_tag = 2d - 1; best_out = o_lo)
+            o_hi > best_out && (best_tag = 2d; best_out = o_hi)
+        end
+        best_tag > 0 && return best_tag
+        # not outside a non-periodic face (only possible outside a periodic axis): the nearest face plane
         best_tag, best_d = 1, T(Inf)
         for d in 1:D
             is_per_svec[d] && continue
