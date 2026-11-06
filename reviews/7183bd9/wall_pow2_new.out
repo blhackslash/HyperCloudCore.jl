@@ -1,0 +1,16 @@
+Float32 power-of-two walls: 637 configurations, lost 0, duplicated 0, wall without a point on it 86
+[-1, -0.7] Ns=105713 ulp/dx=0.042 n=105714 (exp 105714) onlo=0 onhi=1 first point +0.021 dx from lo, last -0.004 dx from hi, md=0.987
+[-1, -0.7] Ns=107147 ulp/dx=0.043 n=107148 (exp 107148) onlo=0 onhi=1 first point +0.021 dx from lo, last -0.004 dx from hi, md=0.979
+[-1, -0.7] Ns=220320 ulp/dx=0.088 n=220321 (exp 220321) onlo=0 onhi=1 first point +0.044 dx from lo, last -0.009 dx from hi, md=0.963
+[-1, -0.7] Ns=213451 ulp/dx=0.085 n=213452 (exp 213452) onlo=0 onhi=1 first point +0.042 dx from lo, last -0.008 dx from hi, md=0.975
+[-1, -0.7] Ns=201940 ulp/dx=0.080 n=201941 (exp 201941) onlo=0 onhi=1 first point +0.040 dx from lo, last -0.008 dx from hi, md=0.963
+[-1, -0.5] Ns=388675 ulp/dx=0.093 n=388676 (exp 388676) onlo=0 onhi=1 first point +0.046 dx from lo, last +0.000 dx from hi, md=0.973
+[-1, -0.5] Ns=346374 ulp/dx=0.083 n=346375 (exp 346375) onlo=0 onhi=1 first point +0.041 dx from lo, last +0.000 dx from hi, md=0.991
+[-1, -0.5] Ns=119322 ulp/dx=0.028 n=119323 (exp 119323) onlo=0 onhi=1 first point +0.014 dx from lo, last +0.000 dx from hi, md=0.981
+[-1, -0.5] Ns=195597 ulp/dx=0.047 n=195598 (exp 195598) onlo=0 onhi=1 first point +0.023 dx from lo, last +0.000 dx from hi, md=0.979
+[-1, -0.5] Ns=169182 ulp/dx=0.040 n=169183 (exp 169183) onlo=0 onhi=1 first point +0.020 dx from lo, last +0.000 dx from hi, md=0.988
+[-1, -0.5] Ns=327161 ulp/dx=0.078 n=327162 (exp 327162) onlo=0 onhi=1 first point +0.039 dx from lo, last +0.000 dx from hi, md=0.975
+[-1, -0.5] Ns=113968 ulp/dx=0.027 n=113969 (exp 113969) onlo=0 onhi=1 first point +0.014 dx from lo, last +0.000 dx from hi, md=0.992
+[-1, -0.5] Ns=178798 ulp/dx=0.043 n=178799 (exp 178799) onlo=0 onhi=1 first point +0.021 dx from lo, last +0.000 dx from hi, md=0.980
+[-1, -0.5] Ns=377869 ulp/dx=0.090 n=377870 (exp 377870) onlo=0 onhi=1 first point +0.045 dx from lo, last +0.000 dx from hi, md=0.991
+[-1, -0.3] Ns=278397 ulp/dx=0.047 n=278398 (exp 278398) onlo=0 onhi=1 first point +0.024 dx from lo, last +0.005 dx from hi, md=0.972

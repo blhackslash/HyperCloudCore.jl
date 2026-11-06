@@ -1,0 +1,16 @@
+Float32 power-of-two walls: 637 configurations, lost 0, duplicated 35, wall without a point on it 0
+[-1, -0.7] Ns=243288 ulp/dx=0.097 n=243290 (exp 243289) onlo=1 onhi=1 first point +0.000 dx from lo, last -0.010 dx from hi, md=0.000
+[-1, -0.5] Ns=390937 ulp/dx=0.093 n=390940 (exp 390938) onlo=1 onhi=1 first point +0.000 dx from lo, last +0.000 dx from hi, md=0.000
+[-1, -0.5] Ns=388675 ulp/dx=0.093 n=388678 (exp 388676) onlo=1 onhi=1 first point +0.000 dx from lo, last +0.000 dx from hi, md=0.000
+[-1, -0.5] Ns=381672 ulp/dx=0.091 n=381675 (exp 381673) onlo=1 onhi=1 first point +0.000 dx from lo, last +0.000 dx from hi, md=0.000
+[-1, -0.5] Ns=346374 ulp/dx=0.083 n=346376 (exp 346375) onlo=1 onhi=1 first point +0.000 dx from lo, last +0.000 dx from hi, md=0.000
+[-1, -0.5] Ns=357025 ulp/dx=0.085 n=357028 (exp 357026) onlo=1 onhi=1 first point +0.000 dx from lo, last +0.000 dx from hi, md=0.000
+[-1, -0.5] Ns=360136 ulp/dx=0.086 n=360139 (exp 360137) onlo=1 onhi=1 first point +0.000 dx from lo, last +0.000 dx from hi, md=0.000
+[-1, -0.5] Ns=340322 ulp/dx=0.081 n=340324 (exp 340323) onlo=1 onhi=1 first point +0.000 dx from lo, last +0.000 dx from hi, md=0.000
+[-1, -0.5] Ns=327161 ulp/dx=0.078 n=327163 (exp 327162) onlo=1 onhi=1 first point +0.000 dx from lo, last +0.000 dx from hi, md=0.000
+[-1, -0.5] Ns=364403 ulp/dx=0.087 n=364406 (exp 364404) onlo=1 onhi=1 first point +0.000 dx from lo, last +0.000 dx from hi, md=0.000
+[-1, -0.5] Ns=399019 ulp/dx=0.095 n=399022 (exp 399020) onlo=1 onhi=1 first point +0.000 dx from lo, last +0.000 dx from hi, md=0.000
+[-1, -0.5] Ns=359280 ulp/dx=0.086 n=359283 (exp 359281) onlo=1 onhi=1 first point +0.000 dx from lo, last +0.000 dx from hi, md=0.000
+[-1, -0.5] Ns=377869 ulp/dx=0.090 n=377872 (exp 377870) onlo=1 onhi=1 first point +0.000 dx from lo, last +0.000 dx from hi, md=0.000
+[-2, -1.5] Ns=204308 ulp/dx=0.097 n=204311 (exp 204309) onlo=1 onhi=1 first point +0.000 dx from lo, last +0.000 dx from hi, md=0.000
+[-2, -1.3] Ns=288739 ulp/dx=0.098 n=288741 (exp 288740) onlo=1 onhi=1 first point +0.000 dx from lo, last -0.020 dx from hi, md=0.000
