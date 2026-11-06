@@ -81,17 +81,17 @@
 
         @testset "KA kernels whose work-group limit is below the configured size" begin
             # Private memory grows with the state size (2-D BGK with 36 components: PoCL allows 231 work-items for
-            # the flux kernel); a static work-group size of 256 used to throw. A dynamically indexed 4096-vector
-            # limits this body to fewer than 256 work-items on PoCL.
-            wide_body!(i, out, k) = (v = SVector{4096, Float64}(ntuple(j -> Float64(i + j), Val(4096)));
-                                     out[i] = v[mod1(i * k, 4096)]; nothing)
+            # the flux kernel); a static work-group size of 256 used to throw. Which kernels hit their limit depends on
+            # the CPU and the PoCL build, so the test configures a size above any device's limit (2^20 work-items):
+            # every launch then exceeds the kernel's limit and takes the fallback.
+            wide_body!(i, out, k) = (out[i] = Float64(i * k); nothing)
             out = zeros(1000)
-            ka  = KABackend(HyperCloudCore.KA.CPU())                        # workgroupsize 256
-            @test ka.workgroupsize == 256
+            @test KABackend(HyperCloudCore.KA.CPU()).workgroupsize == 256   # the default
+            ka  = KABackend(HyperCloudCore.KA.CPU(); workgroupsize = 2^20)
             for _ in 1:2                                                    # the fallback is remembered
                 fill!(out, 0)
                 foreach_particle(wide_body!, ka, length(out), (out, 7))
-                @test out == [Float64(i + mod1(7i, 4096)) for i in 1:length(out)]
+                @test out == [Float64(7i) for i in 1:length(out)]
             end
             @test any(k -> k[3] === typeof(wide_body!), HyperCloudCore._TUNED_WORKGROUP)
             @test !HyperCloudCore._is_workgroup_size_error(ArgumentError("other")) &&
