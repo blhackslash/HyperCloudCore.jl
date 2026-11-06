@@ -99,7 +99,7 @@ end
     vk(r) = HyperCloudCore.limiter_phi(VenkatakrishnanLimiter(:hard), r)
     @test all(r -> isapprox(vk(r), (r^2 + 2r) / (r^2 + r + 2); rtol = 4eps()), (0.0, 1e-3, 0.5, 1.0, 1.5, 7.0, 1e3, 1e7))
     @test vk(-2.0) == 0 && vk(1f20) ≈ 1f0 && vk(Inf32) == 1f0 && vk(1f20) ≈ Float32(vk(1e20))
-    # (through `_update_phi` the ratio is now bounded by 1 / 16ε: increments below that share of the local range are skipped)
+    # (through `_update_phi` the ratio is now bounded by about 1 / 8ε: increments at round-off level of u_i and the bound are skipped)
     @test !isnan(HyperCloudCore._update_phi(VenkatakrishnanLimiter(:hard), ones(State{1, Float32}), f32(1f-11), f32(0), f32(1f9), f32(-1f9))[1])
     # the 1-D limiters are rejected when a scheme of another dimension is built (it used to fail inside the kernel)
     @test_throws ArgumentError MUSCL(Float64, 2, 1, 2, MinmodLimiter(:hard), RusanovFlux())

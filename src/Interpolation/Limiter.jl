@@ -70,15 +70,18 @@ end
 end
 
 # Tighten the bounding coefficient of every equation with one reconstructed interface increment. Increments at
-# round-off level of the local data (`|u_i|` and the neighbourhood range) are left alone, relative to that scale
-# rather than absolute, so a profile of height 1e-13 is limited like one of height 1.
+# round-off level of `u_i` and of the bound they point to are left alone: relative to that scale rather than
+# absolute, so a profile of height 1e-13 is limited like one of height 1. The bound the increment points to, not the
+# whole local range: at a near-vacuum minimum next to O(1) data (`u_i ≈ u_min ≈ 0`, `u_max = 1`) a range-relative
+# cut-off let round-off-level slopes take Float32 interface values below zero.
 @inline function _update_phi(strategy, phi::State{M, T}, delta_recon::State{M, T}, f_i::State{M, T},
                              u_max::State{M, T}, u_min::State{M, T}) where {M, T}
     return State{M, T}(ntuple(Val(M)) do m
         recon_m = delta_recon[m]
-        tol_m   = 16 * eps(T) * max(abs(f_i[m]), u_max[m] - u_min[m])
+        bound   = recon_m > zero(T) ? u_max[m] : u_min[m]
+        tol_m   = 16 * eps(T) * max(abs(f_i[m]), abs(bound))
         if abs(recon_m) > tol_m
-            r = recon_m > zero(T) ? (u_max[m] - f_i[m]) / recon_m : (u_min[m] - f_i[m]) / recon_m
+            r = (bound - f_i[m]) / recon_m
             min(phi[m], limiter_phi(strategy, r))
         else
             phi[m]

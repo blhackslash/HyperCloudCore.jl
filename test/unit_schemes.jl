@@ -461,18 +461,22 @@ end
     dt_host = minimum(begin
             lam_i = 1 + 9 * pgc.rhos[i][1]
             s = sum(abs(dw[k][1]) * max(lam_i, 1 + 9 * pgc.rhos[nbc.indices[k]][1]) for k in nbc.ranges[i])
-            s > 1e-14 ? 1 / s : Inf
+            s > floatmin() ? 1 / s : Inf
         end for i in 1:pgc.meta.N if !pgc.core.is_boundary[i])
     @test isapprox(dt_c, dt_host; rtol = 1e-12)
     @test 0.5 * dt_i <= dt_c <= 2 * dt_i
     @test get_time_step(pgc, eqc, interp; cached_weights = false) == dt_i     # the opt-out assembles the fit as before
     @test (@allocated get_time_step(pgc, eqc, interp)) < 8192
-    # No particle restricts the step (zero wave speeds): Inf, reported once
+    # No particle restricts the step (zero wave speeds): Inf, without a warning (a field at rest; drivers decide);
+    # very slow waves still restrict it (the former absolute cut-off 1e-14 of Σ|c|λ gave Inf for λ ≲ 1e-15)
     struct StandStill <: HyperbolicPDE{1, 1, Float64} end
     HyperCloudCore.max_eigenvalue(::StandStill, U::State{1, Float64}, d::Int) = 0.0
-    HyperCloudCore._WARNED_INF_DT[] = false
-    @test (@test_logs (:warn, r"no particle restricts") get_time_step(pgc, StandStill(), interp)) == Inf
     @test (@test_logs get_time_step(pgc, StandStill(), interp)) == Inf
+    struct Creeping <: HyperbolicPDE{1, 1, Float64} end
+    HyperCloudCore.max_eigenvalue(::Creeping, U::State{1, Float64}, d::Int) = 1e-20
+    struct UnitSpeed <: HyperbolicPDE{1, 1, Float64} end
+    HyperCloudCore.max_eigenvalue(::UnitSpeed, U::State{1, Float64}, d::Int) = 1.0
+    @test get_time_step(pgc, Creeping(), interp) ≈ 1e20 * get_time_step(pgc, UnitSpeed(), interp) rtol = 1e-12
 end
 
 @testset "Limiters, WENO weights and the upwind speed are scale invariant" begin
@@ -510,7 +514,61 @@ end
     end
     @test upw(1e-20, 3e-20) ≈ (0.5e-40 + 4.5e-40) / 2 - 2e-20 * 2e-20 / 2 rtol = 1e-12    # s = 2e-20 (secant)
     @test upw(1e-20, 3e-20) == 2.0^-264 * upw(2.0^132 * 1e-20, 2.0^132 * 3e-20)
-    @test upw(1.0, 1.0 + 1e-10) ≈ 0.5 + 0.5e-10 - 0.5 * 1e-10 rtol = 1e-12                 # Jacobian at u_L = 1
+    # Which speed is taken: a flux F = u whose Jacobian is reported as 7 (only to tell the branches apart). States
+    # 1e-10 apart near 1 are below √ε |u|: Jacobian (s = 7); 1e-6 apart: secant (s = 1)
+    struct TwoSpeeds <: HyperbolicPDE{1, 1, Float64} end
+    HyperCloudCore.flux(::TwoSpeeds, U::State{1, Float64}) = Flux{1, 1, Float64}((U,))
+    HyperCloudCore.velocity(::TwoSpeeds, U::State{1, Float64}, d::Int) = SMatrix{1, 1, Float64}(7.0)
+    upw2(uL, uR) = (fL = Flux{1, 1, Float64}((State{1, Float64}(uL),)); fR = Flux{1, 1, Float64}((State{1, Float64}(uR),));
+                    UpwindFlux()(fL, fR, fL, fR, TwoSpeeds())[1][1])
+    @test upw2(1.0, 1.0 + 1e-10) ≈ (2 + 1e-10) / 2 - 7 * 1e-10 / 2 rtol = 1e-15
+    @test upw2(1.0, 1.0 + 1e-6) ≈ (2 + 1e-6) / 2 - 1e-6 / 2 rtol = 1e-15
+    # Float32 WENO: the offset relative to the indicators normalised by max(u_i², IS_C) keeps the weights scale free
+    # (an offset 1e-12 max(u_i², IS_C) underflows below |u| ≈ 1e-13 in Float32: deviations of 1.4e-4 to 4.2e-4 of the
+    # peak at 2^-50). Bitwise while u² and the indicators stay normal numbers (box, wide Gaussian); within 5e-8 where
+    # they underflow (Gaussian tails below 1e-21, the zero-slope points of a sine)
+    pg32 = ParticleGrid(get_rectangular_domain(Float32, (-1.0,), (1.0,); is_periodic = true), (2f0 / 60,),
+                        ExponentialWeightFunction(1f0, 2.5f0 * 2f0 / 60), 1)
+    eq32 = LinearAdvection(((1f0,),), Float32)
+    w32  = WENO(Float32, 1, 1, 2)
+    ib32 = HyperCloudCore.InteractionBuffer{1, 1, Float32}()
+    update_size!(ib32, length(pg32.neighbor.indices))
+    fill!(view(pg32.core.particle_orders, 1:pg32.meta.N), 2)
+    function weno_div(a, f)
+        for i in 1:pg32.meta.N; pg32.rhos[i] = State{1, Float32}(a * Float32(f(pg32.core.positions[i][1]))); end
+        return [w32(eq32, i, pg32.rhos[i], pg32.neighbor.ranges[i], pg32, pg32.rhos, ib32, EPD1())[1] for i in 1:pg32.meta.N]
+    end
+    s50 = Float32(2.0^-50)
+    for f in (box, x -> exp(-x^2 / 0.2))
+        @test weno_div(s50, f) == s50 .* weno_div(1f0, f)
+    end
+    for f in (x -> sinpi(x), x -> exp(-x^2 / 0.02))
+        d1 = weno_div(1f0, f)
+        @test maximum(abs.(weno_div(s50, f) ./ s50 .- d1)) <= 1f-6 * maximum(abs.(d1))
+    end
+end
+
+@testset "Limiters keep Float32 reconstructions positive at near-vacuum minima" begin
+    # u = 1e-9 at every 7th particle, 1 elsewhere: at such a minimum the gradient is at round-off level. A cut-off
+    # relative to the whole local range (16 eps · 1) let it through and took 22 interface values below zero (down to
+    # -4e-7); relative to u_i and the bound the increment points to (u_min ≈ 0), it is limited
+    N  = 100
+    pg = ParticleGrid(get_rectangular_domain(Float32, (-1.0,), (1.0,); is_periodic = true), (2f0 / N,),
+                      ExponentialWeightFunction(1f0, 2.5f0 * 2f0 / N), 1)
+    n  = pg.meta.N
+    for i in 1:n
+        pg.rhos[i] = State{1, Float32}(mod(round(Int, (pg.core.positions[i][1] + 1) * N / 2), 7) == 3 ? 1f-9 : 1f0)
+    end
+    nb = pg.neighbor
+    ib = HyperCloudCore.InteractionBuffer{1, 1, Float32}()
+    update_size!(ib, length(nb.indices))
+    for lim in (BarthJespersenLimiter(:hard), VenkatakrishnanLimiter(:hard))
+        m = MUSCL(Float32, 1, 1, 2, lim, RusanovFlux())
+        update_size!(m, n)
+        fill!(view(pg.core.particle_orders, 1:n), 2)
+        for i in 1:n; update_content!(m, i, pg.rhos[i], nb.ranges[i], pg, pg.rhos, ib); end
+        @test all(i -> all(k -> pg.rhos[i][1] + m.gradients[i][1][1] * 0.5f0 * nb.distances[k][1] >= 0, nb.ranges[i]), 1:n)
+    end
 end
 
 @testset "Limited reconstructions stay in the local bounds" begin

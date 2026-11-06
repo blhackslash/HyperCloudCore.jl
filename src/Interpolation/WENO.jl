@@ -101,11 +101,13 @@ function (weno::WENO{D, M, T, MAX_ORDER, DIV_ORDER, INTERPS})(
         weight = k <= D ? dx2 : dx4 
         smoothC += (resC[k] .* resC[k]) * weight
     end
-    # Offset of the smoothness indicators relative to the local data (`u_i²` and the central indicator), not an
-    # absolute 1e-12: the weights then do not depend on the scale of `u` (a profile of height 1e-13 is blended like
-    # one of height 1). `floatmin` only keeps a locally zero field finite.
-    e_tol = T(1e-12) .* max.(f_i .* f_i, smoothC) .+ floatmin(T)
-    aC    = smoothC .+ e_tol
+    # The indicators normalised by the local data, s² = max(u_i², IS_C), with the offset 1e-12 relative to it rather
+    # than an absolute 1e-12: the weights then do not depend on the scale of `u` (a profile of height 1e-13 is
+    # blended like one of height 1, also in Float32, where a relative offset 1e-12 s² itself would underflow). A
+    # locally zero field (s = 0) takes s = 1.
+    s2  = max.(f_i .* f_i, smoothC)
+    s2  = ifelse.(s2 .> zero(T), s2, one(T))
+    aC  = smoothC ./ s2 .+ T(1e-12)
 
     div_total = zero(State{M, T})
 
@@ -152,7 +154,7 @@ function (weno::WENO{D, M, T, MAX_ORDER, DIV_ORDER, INTERPS})(
         # --- 3. Apply Non-Linear Weights ---
         # β = ½ / (IS + ε)², normalised: w_S = β_S / (β_S + β_C) = 1 / (1 + (a_S / a_C)²). The ratio form cannot
         # overflow or underflow to Inf/Inf, which the squared offsets of a tiny field would.
-        q  = (smoothS .+ e_tol) ./ aC
+        q  = (smoothS ./ s2 .+ T(1e-12)) ./ aC
         wS = one(T) ./ (one(T) .+ q .* q)
         wC = one(T) .- wS
 
