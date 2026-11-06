@@ -433,7 +433,7 @@ end
     HyperCloudCore.max_eigenvalue(::FastWhereHigh, U::State{1, Float64}, d::Int) = 1 + 9 * U[1]
     Nc = 60; dxc = 2.0 / Nc
     pgc = ParticleGrid(get_rectangular_domain(Float64, (-1.0,), (1.0,); is_periodic = false,
-                                              bc_map = Dict{Int, AbstractBoundaryCondition}(1 => FixedDirichlet())),
+                                              bc_map = Dict{Int, AbstractBoundaryCondition}(t => FixedDirichlet() for t in 1:2)),
                        (dxc,), ExponentialWeightFunction(1.0, 2.5dxc), 1)
     eqc = FastWhereHigh()
     interp = MUSCL(Float64, 1, 1, 3, NoLimiter(), RusanovFlux())
@@ -1022,7 +1022,7 @@ end
         # A merge with the wall particle of a FixedDirichlet box: the remap used to write the ghosts too (0.95 →
         # 0.9529 at x = -0.05), which changed the Dirichlet data for good. Ghost states and volumes stay now, and
         # Σ V U over the interior is exact.
-        bc   = Dict{Int, AbstractBoundaryCondition}(1 => FixedDirichlet())
+        bc   = Dict{Int, AbstractBoundaryCondition}(t => FixedDirichlet() for t in 1:2)
         geom = get_rectangular_domain(Float64, (0.0,), (1.0,); bc_map = bc)
         dx   = 0.05
         pg   = ParticleGrid(geom, (dx,), ExponentialWeightFunction(1.0, 2.5dx), 1)
@@ -1045,7 +1045,7 @@ end
         # estimator also changes ghost volumes, whose content change used to be put onto the interior (interior
         # content off by ~1e-3 of the total in 1-D and 2-D); it stays with the ghosts now.
         for (D, n) in ((1, 20), (2, 16)), est in (nothing, ShepardVolumes())
-            bcD   = Dict{Int, AbstractBoundaryCondition}(t => FixedDirichlet() for t in (D == 1 ? (1,) : (1, 2, 3, 4)))
+            bcD   = Dict{Int, AbstractBoundaryCondition}(t => FixedDirichlet() for t in 1:2D)
             geomD = get_rectangular_domain(Float64, ntuple(_ -> 0.0, D), ntuple(_ -> 1.0, D); bc_map = bcD)
             h     = 1 / n
             pgD   = ParticleGrid(geomD, ntuple(_ -> h, D), ExponentialWeightFunction(1.0, 2.5h), 1;

@@ -48,7 +48,7 @@ const device_backend = ROCBackend()
             function make_pg_bc(bc)
                 dx   = 2.0 / N
                 geom = get_rectangular_domain(Float64, (-1.0,), (1.0,); is_periodic = false,
-                                              bc_map = Dict{Int, AbstractBoundaryCondition}(1 => bc))
+                                              bc_map = Dict{Int, AbstractBoundaryCondition}(1 => bc, 2 => bc))
                 return set_ic!(ParticleGrid(geom, (dx,), ExponentialWeightFunction(1.0, 2.5dx), 1), x -> exp(-(x + 0.5)^2 / 0.02))
             end
             mood = MOOD(EPD1(), MOODu1(1e-6))

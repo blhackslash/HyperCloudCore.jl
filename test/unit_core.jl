@@ -245,11 +245,42 @@ end
         ghosts = [i for i in 1:pg.meta.N if pg.core.is_boundary[i]]
         @test !isempty(ghosts)
         @test all(i -> pg.core.tags[i] == (pg.core.positions[i][2] < 0 ? 3 : 4), ghosts)   # 29 of 120 were 1 or 2
-        # 1-D: both walls carry tag 1, so a tag-2 entry is dead (documented, warned)
+        # 1-D: the left wall carries tag 1, the right wall 2 (both carried 1 up to 0.7.9, so a tag-2 entry, e.g. an
+        # outflow at the right end of a Sod tube, was dead); a map with only tag 1 leaves the right wall uncovered
         bc1 = Dict{Int, AbstractBoundaryCondition}(1 => FixedDirichlet(), 2 => OutflowBC())
         geom1 = get_rectangular_domain(Float64, (0.0,), (1.0,); bc_map = bc1)
-        @test_logs (:warn, r"no boundary particle carries tag\(s\) \[2\]") ParticleGrid(geom1, (0.1,), ExponentialWeightFunction(1.0, 0.25), 1)
-        @test_logs ParticleGrid(geom1, (0.1,), ExponentialWeightFunction(1.0, 0.25), 1)       # once per session
+        pg1 = @test_logs ParticleGrid(geom1, (0.1,), ExponentialWeightFunction(1.0, 0.25), 1)
+        @test all(i -> !pg1.core.is_boundary[i] || pg1.core.tags[i] == (pg1.core.positions[i][1] < 0.5 ? 1 : 2), 1:pg1.meta.N)
+        geom1b = get_rectangular_domain(Float64, (0.0,), (1.0,); bc_map = Dict{Int, AbstractBoundaryCondition}(1 => OutflowBC()))
+        @test_logs (:warn, r"tag\(s\) \[2\] have no condition") ParticleGrid(geom1b, (0.1,), ExponentialWeightFunction(1.0, 0.25), 1)
+        @test_logs ParticleGrid(geom1b, (0.1,), ExponentialWeightFunction(1.0, 0.25), 1)       # once per session
+        # 3-D: faces 1/2 (x), 3/4 (y), 5/6 (z): the face a ghost is outside of, at edges and corners the one it is
+        # farthest outside of (lower tag on ties); periodic z: no 5, 6
+        for per in (false, (false, false, true))
+            g3  = get_rectangular_domain(Float64, (0.0, 0.0, 0.0), (1.0, 1.0, 1.0); is_periodic = per)
+            pg3 = ParticleGrid(g3, (0.125, 0.125, 0.125), ExponentialWeightFunction(1.0, 0.3), 1)
+            function face(x)
+                best, bo = 0, 0.0
+                for d in 1:3
+                    per isa Tuple && per[d] && continue
+                    -x[d] > bo && (best = 2d - 1; bo = -x[d])
+                    x[d] - 1 > bo && (best = 2d; bo = x[d] - 1)
+                end
+                return best
+            end
+            gh = [i for i in 1:pg3.meta.N if pg3.core.is_boundary[i]]
+            @test all(i -> pg3.core.tags[i] == face(pg3.core.positions[i]), gh)
+            @test sort(unique(pg3.core.tags[gh])) == (per === false ? collect(1:6) : collect(1:4))
+        end
+        # 2-D: a ghost outside only the right wall gets tag 2 also next to the bottom plane (the nearest-plane rule
+        # gave it 3: 66 of 276 ghosts of this grid had another wall's tag)
+        g2  = get_rectangular_domain(Float64, (0.0, 0.0), (1.0, 1.0))
+        pg2 = ParticleGrid(g2, (0.05, 0.05), ExponentialWeightFunction(1.0, 0.125), 1)
+        gh2 = [i for i in 1:pg2.meta.N if pg2.core.is_boundary[i]]
+        outside(x) = (x[1] < 0, x[1] > 1, x[2] < 0, x[2] > 1)
+        single = filter(i -> count(outside(pg2.core.positions[i])) == 1, gh2)
+        @test !isempty(single) && all(i -> pg2.core.tags[i] == findfirst(outside(pg2.core.positions[i])), single)
+        @test any(i -> pg2.core.positions[i][1] > 1 && pg2.core.positions[i][2] < 0.1, single)   # right wall, near the bottom
         # 2-D box with only the left/right walls mapped: the bottom/top particles keep their state
         geom2 = get_rectangular_domain(Float64, (0.0, 0.0), (1.0, 1.0);
                                        bc_map = Dict{Int, AbstractBoundaryCondition}(1 => OutflowBC(), 2 => OutflowBC()))
@@ -485,7 +516,7 @@ end
     N  = 60
     dx = 2.0 / N
     make_pg_bc(bc) = ParticleGrid(get_rectangular_domain(Float64, (-1.0,), (1.0,); is_periodic = false,
-                                                         bc_map = Dict{Int, AbstractBoundaryCondition}(1 => bc)),
+                                                         bc_map = Dict{Int, AbstractBoundaryCondition}(1 => bc, 2 => bc)),
                                   (dx,), ExponentialWeightFunction(1.0, 2.5dx), 1)
     eq     = make_advection_1d()
     interp = MUSCL(Float64, 1, 1, 3, NoLimiter(), RusanovFlux())
@@ -520,6 +551,23 @@ end
         buf2 = fill(State{1, Float64}(99.0), pg2.meta.N)
         HyperCloudCore.apply_boundary_conditions!(pg2, buf2, ts, eq, 0.0)
         @test all(buf2[i] == pg2.rhos[i] for i in 1:pg2.meta.N)
+    end
+
+    @testset "Different conditions on the two walls of an interval (tags 1 and 2)" begin
+        # The Sod-tube map: Dirichlet on the left, outflow on the right. Up to 0.7.9 both walls carried tag 1, so both
+        # were Dirichlet and the outflow entry was dead.
+        bc = Dict{Int, AbstractBoundaryCondition}(1 => FixedDirichlet(), 2 => OutflowBC())
+        pg = set_ic!(ParticleGrid(get_rectangular_domain(Float64, (-1.0,), (1.0,); bc_map = bc), (dx,),
+                                  ExponentialWeightFunction(1.0, 2.5dx), 1), x -> x)
+        n   = pg.meta.N
+        x   = i -> pg.core.positions[i][1]
+        buf = fill(State{1, Float64}(99.0), n)
+        for i in interior_indices(pg); buf[i] = pg.rhos[i]; end
+        HyperCloudCore.apply_boundary_conditions!(pg, buf, ts, eq, 0.0)
+        x_hi = maximum(x, interior_indices(pg))
+        for i in findall(view(pg.core.is_boundary, 1:n))
+            @test buf[i][1] == (x(i) < 0 ? x(i) : x_hi)        # left: the initial state; right: the outermost interior
+        end
     end
 
     @testset "Backends agree with boundary conditions" begin

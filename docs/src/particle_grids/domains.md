@@ -20,7 +20,15 @@ A `GeometricDomain` describes the physical problem region and nothing else: its 
 get_rectangular_domain(T, mins, maxs; bc_map = Dict(), is_periodic = false)
 ```
 
-`is_periodic` is either one `Bool` for all axes or an `NTuple{D,Bool}`. Tags in 2-D are assigned by the nearest edge: 1 left, 2 right, 3 bottom, 4 top; the edges of a periodic axis are ignored (a channel periodic in x has only the tags 3 and 4). In 1-D and 3-D every boundary point has tag 1: both walls of an interval get the same condition, so `Dict(1 => FixedDirichlet(), 2 => OutflowBC())` applies Dirichlet on both walls in 1-D.
+`is_periodic` is either one `Bool` for all axes or an `NTuple{D,Bool}`. Boundary points get the tag of the face they lie outside of: `2d - 1` for the lower and `2d` for the upper face of axis `d`; outside several faces (the edges and corners of the ghost band) the one they are farthest outside of, the lower tag on ties. The faces of a periodic axis are ignored. (Up to 0.7.9 the 2-D tag was that of the nearest face *plane*, also measured from inside the box, so ghosts outside one wall close to another plane carried the other wall's tag.)
+
+| D | tags |
+|:--|:-----|
+| 1 | 1 left (`x = min`), 2 right |
+| 2 | 1 left, 2 right, 3 bottom, 4 top (a channel periodic in x has only 3 and 4) |
+| 3 | 1/2 at `x = min/max`, 3/4 at `y`, 5/6 at `z` |
+
+Up to version 0.7.9, 1-D and 3-D boxes tagged every boundary point 1, so `Dict(1 => bc)` covered both walls of an interval (and every face of a box) and a tag-2 entry was dead. Such a map now covers only the left wall (the x-min face), and the constructor warns that the other tags have no condition: write `Dict(1 => bc, 2 => bc)` (`Dict(t => bc for t in 1:6)` in 3-D). For `FixedDirichlet` that is the same as before. For `OutflowBC` in 3-D it is not exactly the same at the edges and corners of the ghost band: each tag is resolved on its own, and a ghost takes its donor from the interior and from the already resolved ghosts of its own tag only (2–5 % of the ghosts of a cube get different states than with one tag for all faces).
 
 Boundary particles whose tag has no entry in `bc_map` keep their state (like a Dirichlet condition), and an entry whose tag no particle carries does nothing. When a non-empty `bc_map` and the tags of the boundary particles do not match, the `ParticleGrid` constructor warns (once per combination and session). An empty `bc_map` freezes every boundary particle without a warning.
 
