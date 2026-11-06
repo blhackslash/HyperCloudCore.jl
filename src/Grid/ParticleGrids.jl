@@ -361,12 +361,14 @@ first-derivative weights of the divergence fit at particle `i` (degree `_diverge
 - Every neighbour enters with the pair speed `max(λ_i, λ_j)`, boundary particles included: a fast inflow state
   limits the step of its interior neighbours before it is inside (the first-order coefficients of a particle
   are `|c_ij| λ_pair`, so this is the local-extremum-diminishing bound).
-- If the interpolator keeps the per-slot weights of its divergence fit for the current geometry
-  (`_cfl_slot_weights`, a `MUSCL` after its first right-hand side), they are used and no moment matrix is
-  factorised (50–100× cheaper); `cached_weights = false` always assembles and factorises the Taylor fit of
-  degree `_divergence_degree(main_grad)` per particle (`_cfl_body!`), as every call did before. The two differ
-  where the fits differ: for degree-5 (odd-order) divergence fits the weights in use sum to about 1.8× the
-  Taylor fit's, i.e. the cached estimate is that much smaller; for degrees ≤ 3 they agree.
+- If the interpolator keeps the per-slot weights of its divergence fit (`_cfl_slot_weights`, a `MUSCL`), its
+  geometry caches are refreshed (`prepare_geometry!`, a no-op when current) and those weights are used: no moment
+  matrix is factorised (50–100× cheaper), and they are the weights of the fit each particle uses, also where the
+  neighbour-count safeguard lowers its degree (1-D MUSCL3 with `R = 2.5Δx`: degree 2, a 2.3× larger step than the
+  degree-3 fit gave before). `cached_weights = false` always assembles and factorises the Taylor fit of degree
+  `_divergence_degree(main_grad)` (the full degree) per particle (`_cfl_body!`). The two differ where the fits
+  differ: for degree-5 (odd-order) divergence fits the weights in use sum to about 1.8× the Taylor fit's, i.e. the
+  cached estimate is that much smaller; for degrees ≤ 3 on stencils that carry them they agree.
 - A particle restricts the step only if `Σ_j Σ_d |c_ij,d| λ_pair > 0` (any positive value, no absolute cut-off):
   particles without neighbours or without a solvable fit, with zero wave speeds, and with non-finite (NaN) states
   or speeds do not. `Inf` (an empty grid, or no restricting particle) means that nothing limits the step: a driver
@@ -385,6 +387,9 @@ first-derivative weights of the divergence fit at particle `i` (degree `_diverge
     fill!(view(dt_buffer, 1:pg.meta.N), T(Inf))
 
     nb = pg.neighbor
+    # The per-slot weights of the fit in use: the interpolator's geometry caches are refreshed first (a no-op if they
+    # are current; the stepper does it at its first right-hand side anyway), so already the first step sees them
+    cached_weights && prepare_geometry!(main_grad, pg)
     sw = cached_weights ? _cfl_slot_weights(main_grad, pg) : nothing
     if sw === nothing
         degree = _divergence_degree(main_grad)

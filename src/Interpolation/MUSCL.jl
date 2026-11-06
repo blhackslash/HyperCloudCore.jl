@@ -72,8 +72,8 @@ Computes the divergence of the flux at particle `i`. Note that `MUSCL` relies on
 - `limiter`: The assigned slope limiter.
 - `flux`: The associated numerical flux function (`NF`).
 - `gradients`: A pre-allocated vector storing the reconstructed, limited spatial gradients for all particles.
-- `grad_weights`, `div_weights`: cached inverse MLS moment matrices (`MLSWeights`) of the full-order reconstruction and divergence fits, refreshed by `prepare_geometry!` when the grid geometry changes.
-- `dweights`: per-slot derivative weights of the full-degree divergence fit, used by the streamed divergence and, through their signs, by [`AlignedRusanovFlux`](@ref) (refreshed with the divergence cache; `get_time_step` uses them too, so every scheme keeps them).
+- `grad_weights`, `div_weights`: cached inverse MLS moment matrices (`MLSWeights`) of the full-order reconstruction and divergence fits, refreshed by `prepare_geometry!` when the grid geometry changes. The divergence fit of each particle has the degree its stencil carries at full order (`_divergence_index`; zero-padded where the neighbour-count safeguard lowers it).
+- `dweights`: per-slot derivative weights of the cached divergence fit, used by the streamed divergence and, through their signs, by [`AlignedRusanovFlux`](@ref) (refreshed with the divergence cache; `get_time_step` uses them too, so every scheme keeps them).
 - `mweights`: per-slot moment-correction weights `e^d_ij ≥ 0` of a first-order scheme with `moment_correction` (refreshed with `dweights`; empty otherwise).
 - `streamed`: `Val(true)` if the flux pass accumulates the divergence with `dweights` instead of writing the flux differences to the per-slot buffer and fitting them afterwards (keyword `streamed` of the constructor, see [Streamed divergence](@ref)).
 - `moment`: `Val(true)` for `moment_correction`.
@@ -164,11 +164,19 @@ MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER}(interps, limiter, flux, gradients, g
 # A streamed scheme never touches the per-slot flux buffers of the stepper.
 @inline uses_slot_buffers(m::MUSCL) = !_streamed(m)
 
-function prepare_geometry!(muscl::MUSCL, pg::ParticleGrid)
+# The divergence degree of a particle at full order: the full-degree fit, or the degree the neighbour-count safeguard
+# of `_divergence_index` lowers it to on a small stencil (1-D MUSCL3 with R = 2.5Δx: degree 2 instead of 3).
+struct _FullOrderDivDegree{DO, D, MAX_ORDER} end
+@inline (::_FullOrderDivDegree{DO, D, MO})(num_nb::Int) where {DO, D, MO} = _divergence_index(Val(DO), Val(D), MO, num_nb) - 1
+
+function prepare_geometry!(muscl::MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER}, pg::ParticleGrid) where {D, M, T, B_LEN, MAX_ORDER, DIV_ORDER}
     update_weights!(muscl.grad_weights, pg)
     wd = muscl.div_weights
     v0 = wd.version[]
-    wd === muscl.grad_weights || update_weights!(wd, pg)
+    # Every particle's divergence fit at full order is cached, also where the safeguard lowers its degree: the
+    # flux pass then hits the cache, and `dweights` (streamed divergence, aligned flux, CFL estimate) are the weights
+    # of the fit in use
+    wd === muscl.grad_weights || update_weights!(wd, pg, _FullOrderDivDegree{DIV_ORDER, D, MAX_ORDER}())
     # the per-slot weights serve the streamed divergence, the aligned flux, the moment correction and the
     # CFL estimate (`_cfl_slot_weights`): kept for every scheme
     if v0 != wd.version[] || length(muscl.dweights) < length(pg.neighbor.indices)
@@ -391,7 +399,8 @@ function (muscl::MUSCL{D, M, T, B_LEN, MAX_ORDER, DIV_ORDER})(
     eff_order_i = pg.core.particle_orders[i]
     div_idx = _divergence_index(Val(DIV_ORDER), Val(D), eff_order_i, length(nb_slice))
     wd      = muscl.div_weights
-    cached  = is_current(wd, pg) && wd.ok[i] && div_idx == _full_div_idx(Val(MAX_ORDER), Val(DIV_ORDER), Val(D))
+    # the cache holds every particle's fit at full order, of the degree its stencil carries (`_FullOrderDivDegree`)
+    cached  = is_current(wd, pg) && wd.ok[i] && div_idx == _divergence_index(Val(DIV_ORDER), Val(D), MAX_ORDER, length(nb_slice))
 
     # Without the cached fit the aligned flux needs the weights of the dynamic fit in every slot, so it takes the
     # per-slot path also when the scheme is buffered (same fit as `compute_dynamic_divergence`).

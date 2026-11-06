@@ -502,12 +502,17 @@ end
 @inline _fit_basis(::Val{true}, ::Val{IO}, d) where {IO} = _intercept_basis(Val(IO), d)
 
 """
-    update_weights!(w::MLSWeights, pg::ParticleGrid)
+    update_weights!(w::MLSWeights, pg::ParticleGrid[, degree_of])
 
 Recomputes the inverse moment matrices for the current neighbour lists, distances and weights of `pg` unless
 they are current already. One MLS factorisation per particle (parallel).
+
+With `degree_of` (a bits callable: neighbour count → fit degree `≤ IO`), particle `i` gets the fit of degree
+`degree_of(length(ranges[i]))`, its inverse moment matrix zero-padded to `B_LEN × B_LEN`. The basis is graded
+(`_generate_exponents`: all terms of degree `q` before those of degree `q + 1`), so the padded inverse applied to the
+full basis is exactly the degree-`q` fit: one cache serves particles whose stencils carry different degrees.
 """
-function update_weights!(w::MLSWeights{B_LEN, IO, T}, pg::ParticleGrid{D, M, T}) where {B_LEN, IO, T, D, M}
+function update_weights!(w::MLSWeights{B_LEN, IO, T}, pg::ParticleGrid{D, M, T}, degree_of = nothing) where {B_LEN, IO, T, D, M}
     is_current(w, pg) && return w
     N  = pg.meta.N
     nb = pg.neighbor
@@ -515,7 +520,7 @@ function update_weights!(w::MLSWeights{B_LEN, IO, T}, pg::ParticleGrid{D, M, T})
     ensure_capacity!(w.ok, N)
     invL = one(T) / minimum(pg.meta.dx)
     C = Val(_has_intercept(w))
-    foreach_particle(_moment_body!, get_backend(), N, (w.inv_moment, w.ok, nb.ranges, nb.distances, nb.weights, invL, Val(IO), C))
+    foreach_particle(_moment_body!, get_backend(), N, (w.inv_moment, w.ok, nb.ranges, nb.distances, nb.weights, invL, Val(IO), C, degree_of))
     w.invL[]    = invL
     s = build_scale_factors(Val(D), Val(IO), invL)
     w.scales[]  = _has_intercept(w) ? vcat(SVector{1, T}(one(T)), s) : s
@@ -523,10 +528,36 @@ function update_weights!(w::MLSWeights{B_LEN, IO, T}, pg::ParticleGrid{D, M, T})
     return w
 end
 
-# Kernel body (see Backend.jl): inverse moment matrix of particle `i`.
-@inline function _moment_body!(i, inv_moment, ok, ranges, dists, wts, invL, val_io, val_c)
+# Kernel body (see Backend.jl): inverse moment matrix of particle `i` (of the degree `degree_of` gives, padded).
+@inline function _moment_body!(i, inv_moment, ok, ranges, dists, wts, invL, val_io, val_c, ::Nothing)
     inv_moment[i], ok[i] = _inverse_moment(ranges[i], dists, wts, invL, val_io, inv_moment[i], val_c)
     return nothing
+end
+@inline function _moment_body!(i, inv_moment, ok, ranges, dists, wts, invL, val_io, val_c, degree_of)
+    rg = ranges[i]
+    inv_moment[i], ok[i] = _padded_inverse_moment(degree_of(length(rg)), rg, dists, wts, invL, val_io, inv_moment[i], val_c)
+    return nothing
+end
+
+# The inverse moment matrix of the degree-`q` fit (`q ≤ IO`) in the top-left block of a `B × B` matrix (static
+# dispatch over the degrees: a runtime `Val(q)` would be a dynamic dispatch, which kernels cannot do).
+@generated function _padded_inverse_moment(q::Int, rg, dists::AbstractVector{SVector{D, T}}, wts, invL, ::Val{IO},
+                                           template::SMatrix{B, B, T}, ::Val{C}) where {D, T, IO, B, C}
+    expr = :(_inverse_moment(rg, dists, wts, invL, Val($IO), template, Val($C)))
+    for qq in (IO - 1):-1:1
+        Bq = length(_generate_exponents(D, qq)) + (C ? 1 : 0)
+        expr = :(q == $qq ? _pad_moment(_inverse_moment(rg, dists, wts, invL, Val($qq), zero(SMatrix{$Bq, $Bq, T, $(Bq * Bq)}), Val($C)),
+                                        template) : $expr)
+    end
+    return expr
+end
+@inline function _pad_moment(res::Tuple{SMatrix{b, b, T}, Bool}, ::SMatrix{B, B, T}) where {b, B, T}
+    Mi = res[1]
+    P  = SMatrix{B, B, T, B * B}(ntuple(Val(B * B)) do k
+        r, c = (k - 1) % B + 1, (k - 1) ÷ B + 1
+        (r <= b && c <= b) ? Mi[r, c] : zero(T)
+    end)
+    return (P, res[2])
 end
 
 # Inverse of the moment matrix of one particle (the same fit as `_mls_solve`, regularised only if the stencil
