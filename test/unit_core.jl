@@ -536,6 +536,23 @@ end
         @test all(buf2[i] == pg2.rhos[i] for i in 1:pg2.meta.N)
     end
 
+    @testset "Different conditions on the two walls of an interval (tags 1 and 2)" begin
+        # The Sod-tube map: Dirichlet on the left, outflow on the right. Up to 0.7.9 both walls carried tag 1, so both
+        # were Dirichlet and the outflow entry was dead.
+        bc = Dict{Int, AbstractBoundaryCondition}(1 => FixedDirichlet(), 2 => OutflowBC())
+        pg = set_ic!(ParticleGrid(get_rectangular_domain(Float64, (-1.0,), (1.0,); bc_map = bc), (dx,),
+                                  ExponentialWeightFunction(1.0, 2.5dx), 1), x -> x)
+        n   = pg.meta.N
+        x   = i -> pg.core.positions[i][1]
+        buf = fill(State{1, Float64}(99.0), n)
+        for i in interior_indices(pg); buf[i] = pg.rhos[i]; end
+        HyperCloudCore.apply_boundary_conditions!(pg, buf, ts, eq, 0.0)
+        x_hi = maximum(x, interior_indices(pg))
+        for i in findall(view(pg.core.is_boundary, 1:n))
+            @test buf[i][1] == (x(i) < 0 ? x(i) : x_hi)        # left: the initial state; right: the outermost interior
+        end
+    end
+
     @testset "Backends agree with boundary conditions" begin
         dt = 0.4dx
         function run(backend, bc)
