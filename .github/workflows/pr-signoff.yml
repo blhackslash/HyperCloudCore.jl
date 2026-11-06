@@ -1,0 +1,16 @@
+name: PR-signoff
+
+# Checks the AI declaration ticked in the template of each pull request into the default branch.
+on:
+  pull_request_target:
+    branches: ["main"]
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  pr-signoff:
+    uses: industrial-mathematics-group/.github/.github/workflows/pr-signoff.yml@main

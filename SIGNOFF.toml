@@ -1,4 +1,4 @@
-# AI declarations (migrated from version 1 by 'aidecl migrate').
+# AI declarations of the files, checked by aisignoff (migrated from aidecl and from format version 1).
 # Scheme: https://github.com/industrial-mathematics-group/.github/blob/main/.github/CONTRIBUTING.md#ai-assisted-contributions
 version = 3
 exclude = ["reviews/**"]   # committed AI reviews (CONTRIBUTING.md) need no declaration
@@ -67,3 +67,12 @@ AI-Review = "A2"
 Assisted-by = ["Claude (Anthropic), claude-opus-5-5"]
 AI-Reviewed-by = ["Claude Opus 5.5 (Anthropic), new sessions without the generating conversation (reviews/)"]
 Reviewed-by = ["blhackslash <dev@blackslash.win>"]
+
+[[annotations]]
+path = [".github/workflows/file-signoff.yml", ".github/workflows/pr-signoff.yml", ".github/workflows/signoff-badges.yml"]
+AI-Generation = "G3"
+Assisted-by = "Claude Opus 5.5 (Anthropic)"
+AI-Review = "A1"
+AI-Reviewed-by = "Claude Opus 5.5 (Anthropic), same session"
+Human-Review = "TODO"
+Reviewed-by = "TODO"
