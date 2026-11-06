@@ -92,7 +92,7 @@ function adapt_particles!(pg::ParticleGrid{D, M, T}, ad::ParticleAdaptivity{T}, 
     nothing_done = (inserted = 0, removed = 0, mass_residual = zero(State{M, T}))
     pg.meta.N == 0 && return nothing_done
     _has_adapt_candidates(pg, ad) || return nothing_done
-    mass0 = _interior_mass(pg)
+    mass0 = interior_mass(pg)
 
     on_host = parent(pg.rhos) isa Array
     hg = on_host ? pg : device_grid(Array, pg)            # the event work is serial: on a host copy of a device grid
@@ -129,7 +129,7 @@ function adapt_particles!(pg::ParticleGrid{D, M, T}, ad::ParticleAdaptivity{T}, 
     pg.neighbor(pg)
     changed === nothing || _reestimate_volumes!(pg, hg, ad.volume_estimator, changed)
 
-    return (inserted = length(new_pos), removed = n_removed, mass_residual = _interior_mass(pg) - mass0)
+    return (inserted = length(new_pos), removed = n_removed, mass_residual = interior_mass(pg) - mass0)
 end
 
 """
@@ -216,9 +216,9 @@ their content change stays with them (it used to be moved onto the interior, i.e
 function _reestimate_volumes!(pg::ParticleGrid{D, M, T}, hg::ParticleGrid{D, M, T}, est::VolumeEstimator,
                               changed::Dict{Int, Tuple{State{M, T}, State{M, T}}}) where {D, M, T}
     N = pg.meta.N
-    m_remap = _interior_mass(pg)
+    m_remap = interior_mass(pg)
     update_volumes!(pg, est)
-    ε = m_remap - _interior_mass(pg)
+    ε = m_remap - interior_mass(pg)
     (isempty(changed) || iszero(ε)) && return nothing
 
     on_host = hg === pg
