@@ -328,8 +328,10 @@ end
 # The direction that sorts the interface states of slot `k`: the distance for every flux but
 # `AlignedRusanovFlux`, which uses the signs of `w_k`, the divergence weights the slot's flux difference is
 # multiplied with, on the pairs where either particle is below the full order and on every pair of a
-# first-order scheme (K = 1) (`below`). The rule is symmetric in the pair, so both sides evaluate the same
-# flux; elsewhere the geometric sorting keeps the error constant of the plain flux.
+# first-order scheme (K = 1) (`below`). Whether the aligned sorting applies is symmetric in the pair, the
+# orientation is not: `i` uses sign(c_ij), `j` sign(c_ji), which agree only where the two weights have
+# opposite signs (1-D, lattices; not every slot of a jittered 2-D cloud). Elsewhere the geometric sorting keeps
+# the error constant of the plain flux.
 @inline _dissipation_direction(::NumericalFluxFunction, w_k, dist_k, below::Bool) = dist_k
 @inline _dissipation_direction(::AlignedRusanovFlux, w_k, dist_k, below::Bool) = below ? sign.(w_k) : dist_k
 

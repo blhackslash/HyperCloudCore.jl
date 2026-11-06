@@ -12,8 +12,10 @@ No Voronoi tessellation is built or stored. $V_i = \int_\Omega \phi_i\,\mathrm d
 
 | Estimator | Shape functions | Evaluation | Quadrature order | Cost |
 |---|---|---|---|---|
-| `ShepardVolumes(; sweeps = 1)` | $\phi_i(x) = w(\lvert x - x_i\rvert) / \sum_k w(\lvert x - x_k\rvert)$ | particle-based, no lattice | 2 on quasi-uniform clouds; biased where the spacing varies | one neighbour sweep per `sweep` (kernel) |
-| `MLSVolumes(P; samples_per_dx = 2)` | MLS reproducing-kernel functions of degree $P$ | background lattice over $\Omega$ | $P + 1$ on any cloud | lattice points × neighbours (serial, host) |
+| `ShepardVolumes(; sweeps = 1)` | $\phi_i(x) = w(\lvert x - x_i\rvert) / \sum_k w(\lvert x - x_k\rvert)$ | particle-based, no lattice | exact ($\Delta x^D$) on a uniform periodic lattice; not convergent on jittered or stretched clouds; 1 on bounded boxes | one neighbour sweep per `sweep` (kernel) |
+| `MLSVolumes(P; samples_per_dx = 2)` | MLS reproducing-kernel functions of degree $P$ | background lattice over $\Omega$ | about $P + 1$ on periodic clouds for $P \ge 1$ (also jittered); on bounded boxes 2 ($P = 0, 1$) and 1 ($P = 2$) | lattice points × neighbours (serial, host) |
+
+The orders are those of $\sum_i V_i f(x_i) \to \int_\Omega f$, measured in 1-D ($R = 2.5\Delta x$, $N = 40 \dots 320$, smooth $f$). On a periodic cloud there are no ghosts. On a bounded box the ghost particles outside $\Omega$ get volumes too: the final renormalisation to $\sum V = \lvert\Omega\rvert$ runs over all particles (MLS clamps the negative ghost volumes to zero first, which costs its exactness), so the interior volumes sum to less than $\lvert\Omega\rvert$ (by 4 % at $h = 1/160$ with Shepard) and the discrete mass $\sum V U$ includes the ghost content, which the boundary conditions set. Shepard on a jittered periodic cloud: error about $2\cdot 10^{-3}$ at 30 % jitter for every $N$; MLS$(P \ge 1)$ converges there at order 2–4.
 
 **Shepard** starts from the kernel-density volume $V_i \propto 1/S_i$, $S_i = w(0) + \sum_j w_{ij}$, applies `sweeps` partition-of-unity sweeps $V_i \leftarrow \sum_j (w_{ij}/S_j)\,V_j$ (which preserve $\sum V$), and renormalises to $|\Omega|$. On a uniform periodic cloud it reproduces $V_i = \Delta x^D$ exactly. It needs a kernel that is bounded at zero distance; with `InverseWeightFunction` the volumes fall back to $|\Omega|/N$ with a warning.
 
@@ -73,6 +75,8 @@ Two corrections follow:
 
 1. **Residual.** The stored content of a removed particle, $V_r U_r$, is not exactly $\int \phi_r^{\text{old}} \tilde U$. The difference is spread over the affected particles in proportion to their new volumes, so $\sum V U$ is preserved to round-off.
 2. **Repair.** Each affected particle is clipped to the bounds of its old neighbourhood, and the clipped content is redistributed to affected particles that still have room. This enforces the discrete maximum principle while keeping the sum exact; if no room is left, the remainder is spread by volume and the bounds are violated by that remainder.
+
+**Boundary particles** (the ghosts of a non-periodic box) are not remapped: their states are boundary data (`FixedDirichlet` restores them from `pg.rhos`, `OutflowBC` overwrites them at the next stage), so an event next to a wall leaves their states and volumes as they are. Their shape functions still change near the event; that swept share is left out of the balance, so the residual step puts it onto the interior particles and $\sum V U$ over the interior (and over all particles) is preserved exactly. (Up to version 0.7.9 the ghosts were remapped like interior particles, which changed Dirichlet data permanently.) Events only start at interior particles, and insertions need two interior particles.
 
 Then the particle arrays are compacted/extended, the neighbour lists are rebuilt, and new particles start at the scheme's maximum order. The remap is second-order accurate in smooth regions (linear reconstruction, averaged over the new shape function's support).
 

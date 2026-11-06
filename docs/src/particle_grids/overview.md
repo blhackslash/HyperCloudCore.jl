@@ -54,7 +54,7 @@ A particle is never its own neighbour. For moving grids, `refresh_geometry!` rec
 
 ## Reordering
 
-`pg.reorder(pg)` sorts particles along a Morton Z-curve (2-D/3-D) or by coordinate (1-D) to improve cache locality, then permutes `positions`, `is_boundary`, `tags`, `particle_orders`, `volumes`, `rhos` and `curvatures` in place. It is skipped when the permutation is already the identity. Reordering invalidates the neighbour lists and every per-particle buffer held by a time stepper, so call it **between** time steps and run `pg.neighbor(pg)` afterwards.
+`pg.reorder(pg)` sorts particles along a Morton Z-curve (2-D/3-D) or by coordinate (1-D) to improve cache locality, then permutes the active range `1:N` of `positions`, `is_boundary`, `tags`, `particle_orders`, `volumes`, `rhos` and `curvatures` in place (the buffers may be longer after growth) and bumps `pg.meta.geometry_version`. It is skipped when the permutation is already the identity. Reordering invalidates the neighbour lists and every per-particle buffer held by a time stepper, so call it **between** time steps and run `pg.neighbor(pg)` afterwards.
 
 ## CFL time step
 

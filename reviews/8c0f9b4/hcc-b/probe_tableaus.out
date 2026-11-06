@@ -1,0 +1,30 @@
+== SSP coefficients Float64 vs Float32
+RK1_Euler_Tableau        C64 = 1.0000000000001  C32 = 1.0000000000001  rel diff = 0.0
+RK2_SSP_Tableau          C64 = 1.0000000000001  C32 = 1.0000000000001  rel diff = 0.0
+RK2_Ralston_Tableau      C64 = 0.5000000000004  C32 = 0.49999998509923926  rel diff = 2.980232149949305e-8
+RK3_SSP_Tableau          C64 = 1.0000000000001  C32 = 1.0000000000001  rel diff = 0.0
+RK4_Classical_Tableau    C64 = 0.0  C32 = 0.0  rel diff = 0.0
+RK4_SSP_Tableau          C64 = 1.5081800491902944  C32 = 1.5031552016588605  rel diff = 0.0033317292150440263
+== R(inf) of implicit parts, stiff accuracy
+IMEX_Euler_Tableau       R(-1e8) = 9.99999993922529e-9  stiffly accurate: true  A diag: [0.0, 1.0]
+IMEX_ARS233_Tableau      R(-1e8) = -0.7320507797227811  stiffly accurate: false  A diag: [0.0, 0.7886751345948128, 0.7886751345948128]
+IMEX_ARS222_Tableau      R(-1e8) = -4.828426702907507e-8  stiffly accurate: true  A diag: [0.0, 0.29289321881345254, 0.29289321881345254]
+IMEX_PRSSP3_Tableau      R(-1e8) = -4.828426769520888e-8  stiffly accurate: false  A diag: [0.29289321881345254, 0.29289321881345254, 0.29289321881345254]
+IMEX_SSP2332_Tableau     R(-1e8) = -4.999999503318975e-8  stiffly accurate: true  A diag: [0.25, 0.25, 0.3333333333333333]
+== explicit stability R_E(z) at imaginary axis (|R(iy)|) for small y (dissipation)
+IMEX_Euler_Tableau       |R(0.5i)| = 1.118033988749895 |R(1i)| = 1.4142135623730951
+IMEX_ARS233_Tableau      |R(0.5i)| = 0.9976099911510732 |R(1i)| = 0.97182531580755
+IMEX_ARS222_Tableau      |R(0.5i)| = 1.0077822185373186 |R(1i)| = 1.118033988749895
+IMEX_PRSSP3_Tableau      |R(0.5i)| = 0.9976099911510732 |R(1i)| = 0.97182531580755
+IMEX_SSP2332_Tableau     |R(0.5i)| = 1.0026548959027617 |R(1i)| = 1.044163673845139
+== order through scalar ODE: u' = -u*cos(t) [explicit] - lam*(u - sin(t)) [implicit], IMEX by hand with stage times from c_t
+IMEX_Euler_Tableau       implicit times from ct: EOC = 0.99
+IMEX_Euler_Tableau       implicit times from c: EOC = 0.99
+IMEX_ARS233_Tableau      implicit times from ct: EOC = 2.95
+IMEX_ARS233_Tableau      implicit times from c: EOC = 2.95
+IMEX_ARS222_Tableau      implicit times from ct: EOC = 2.0
+IMEX_ARS222_Tableau      implicit times from c: EOC = 2.0
+IMEX_PRSSP3_Tableau      implicit times from ct: EOC = 1.99
+IMEX_PRSSP3_Tableau      implicit times from c: EOC = 1.69
+IMEX_SSP2332_Tableau     implicit times from ct: EOC = 2.01
+IMEX_SSP2332_Tableau     implicit times from c: EOC = 2.01

@@ -75,6 +75,17 @@ is estimated from the degree-4 stencil and slightly too large; and the radius mu
 neighbours for the reconstruction, $B(D, o - 1)$, or particles drop to first order (see the pre-gather pass
 below).
 
+**Known limitation (cached weights and CFL degree vs the neighbour-count safeguard).** The cached divergence
+weights (`div_weights`, `dweights`) and the degree the CFL estimate uses (`_divergence_degree`) are those of the
+*full* divergence degree, even where `_divergence_index` lowers the degree because the stencil has too few
+neighbours. There the cache is never hit (every RHS assembles and factorises the fit of the lower degree, and the
+aligned/streamed paths take the dynamic per-slot weights), and the time step comes from weights the scheme does not
+use: in 1-D MUSCL3 with $R = 2.5\Delta x$ (every particle fits degree 2) $\sum |c_{ij}|\,\Delta x$ is 1.500 for the
+CFL estimate against 0.644 for the fit in use, i.e. the step is 2.3 times smaller than the CFL number implies;
+MUSCL5 with $R = 3.5\Delta x$: 1.6 times smaller; MUSCL5 with $R = 2.5\Delta x$: slightly *larger* (1.475 vs 1.500,
+the cached degree-5 fit is under-determined there). Changing it would change the time step of default
+configurations, so it is left as is for now.
+
 ## The two passes
 
 1. **Pre-gather (`update_content!`).** Fits the reconstruction at the particle's current order and stores the (limited) coefficients in `gradients[i]`. If the neighbourhood has fewer than $B(D, k-1)$ neighbours, the particle's order is set to 1 **in `particle_orders`**, so MOOD and the EPD rules see the starved particle as first order.
@@ -97,7 +108,13 @@ high-degree weights overshoot (12 % on a box profile with `div_order = 5`).
 `dweights`, kept with the divergence cache) on every pair where one of the two particles is below the full order, and on
 every pair of a first-order scheme (order 1, where no particle can be below the full order: with the geometric sorting its
 degree-1 weights on a jittered cloud with `R = 2.5Δx` give about 2 % negative first-order coefficients, down to −0.57). The
-rule is symmetric in the pair, and elsewhere the flux is the plain one. The signs are those of the weights the particle
+choice of the pairs is symmetric, and elsewhere the flux is the plain one. The orientation is not pair-symmetric: particle
+$i$ sorts axis $d$ by $\operatorname{sign} c_{ij,d}$ and particle $j$ by $\operatorname{sign} c_{ji,d}$, which agree only where
+the two weights have opposite signs. That is the case in 1-D and on lattices; on jittered 2-D clouds 0.4–2.5 % of the
+$\sum \lvert c\rvert$ mass sits on (pair, axis) entries with same-sign weights (jitter 0.2–0.4, $K = 1$ with $R = 2.5\Delta x$ and
+degree 3 with $R = 3.5\Delta x$), where the two sides use opposite dissipation signs, a pair defect on top of the
+face-vector mismatch. The local-extremum-diminishing property of each particle's own update needs only its own weights
+and is unaffected. The signs are those of the weights the particle
 multiplies the slot's flux difference with: `dweights` on the cached full-degree fit, and the weights of the dynamic fit
 for a particle off the cached path (a degree lowered by the neighbour-count safeguard, e.g. in 1-D with `R = 2.5Δx` and
 `div_order = 3`, a lower particle order with `div_order = 0`, or no cached factorisation). With the aligned flux such a

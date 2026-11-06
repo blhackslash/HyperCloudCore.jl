@@ -242,7 +242,7 @@ end
     dists     = get_distances(pg)
     h  = minimum(pg.meta.dx)
     h2 = h^2
-    near_sq = (_U2_RATIO_RADIUS * h)^2
+    near_sq = (T(_U2_RATIO_RADIUS) * h)^2
     for d in 1:D
         curve_idx = D + d
         c_i = grad_vec[p_idx][curve_idx]

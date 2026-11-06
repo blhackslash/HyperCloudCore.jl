@@ -20,7 +20,9 @@ A `GeometricDomain` describes the physical problem region and nothing else: its 
 get_rectangular_domain(T, mins, maxs; bc_map = Dict(), is_periodic = false)
 ```
 
-`is_periodic` is either one `Bool` for all axes or an `NTuple{D,Bool}`. Tags in 2-D are assigned by the nearest edge: 1 left, 2 right, 3 bottom, 4 top. In 1-D and 3-D every boundary point has tag 1.
+`is_periodic` is either one `Bool` for all axes or an `NTuple{D,Bool}`. Tags in 2-D are assigned by the nearest edge: 1 left, 2 right, 3 bottom, 4 top; the edges of a periodic axis are ignored (a channel periodic in x has only the tags 3 and 4). In 1-D and 3-D every boundary point has tag 1: both walls of an interval get the same condition, so `Dict(1 => FixedDirichlet(), 2 => OutflowBC())` applies Dirichlet on both walls in 1-D.
+
+Boundary particles whose tag has no entry in `bc_map` keep their state (like a Dirichlet condition), and an entry whose tag no particle carries does nothing. When a non-empty `bc_map` and the tags of the boundary particles do not match, the `ParticleGrid` constructor warns (once per combination and session). An empty `bc_map` freezes every boundary particle without a warning.
 
 ### Spherical
 
@@ -34,8 +36,8 @@ A disc (2-D) or ball (3-D); every exterior point gets tag 1.
 
 When a `ParticleGrid` is constructed, the domain is wrapped in a `ComputationalDomain`, and points are generated as follows:
 
-1. **Canvas.** On non-periodic axes the bounding box is extended by $\lceil R/\Delta x_{\max}\rceil$ spacings on each side to host ghost particles. As soon as *any* axis is periodic, no padding is added on any axis.
-2. **Lattice.** A Cartesian lattice with spacing `nominal_dx` (plus optional jitter `randomness`) covers the canvas. A non-periodic axis gets `round(L/dx) + 1` points, endpoints included. A periodic axis gets `round(L/dx)` points, because the endpoint coincides with the start point after wrapping.
+1. **Canvas.** On non-periodic axes the bounding box is extended by $\lceil R/\Delta x_d\rceil$ spacings of that axis on each side to host ghost particles, i.e. at least $R$ on every axis; periodic axes get no padding. (Up to version 0.7.9 every axis got $\lceil R/\Delta x_{\max}\rceil$ spacings, which left the band thinner than $R$ on the finer axis of an anisotropic grid.)
+2. **Lattice.** A Cartesian lattice with spacing `nominal_dx` (plus optional jitter `randomness`) covers the canvas. A non-periodic axis gets `round(L/dx) + 1` points, endpoints included: lattice points within round-off ($\sqrt{\varepsilon}\,\Delta x$) of a wall are put on the wall exactly before the jitter is added, so both walls are interior. A periodic axis gets `round(L/dx)` points, because the endpoint coincides with the start point after wrapping.
 3. **Narrow band.** Lattice points outside the physical region are kept only if they lie within $R + \Delta x_{\max}$ of an interior point. These become the boundary (ghost) particles.
 4. **Tags.** `get_tag` sets `tags` and `is_boundary = (tag != 0)`.
 

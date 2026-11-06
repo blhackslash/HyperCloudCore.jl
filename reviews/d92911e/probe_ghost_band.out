@@ -1,0 +1,52 @@
+Float64 dx=(0.02, 0.01) per=(false, false): interior 10201, reference count 36, interior with a different count: 0; layers (3, 5) (ceil(R/dx_d) = (3, 5))
+Test Summary:                              | Pass  Total  Time
+Float64 dx=(0.02, 0.01) per=(false, false) |    2      2  3.2s
+Float64 dx=(0.1, 0.05) per=(false, false): interior 441, reference count 36, interior with a different count: 0; layers (3, 5) (ceil(R/dx_d) = (3, 5))
+Test Summary:                             | Pass  Total  Time
+Float64 dx=(0.1, 0.05) per=(false, false) |    2      2  0.0s
+Float64 dx=(0.05, 0.0125) per=(false, false): interior 1701, reference count 74, interior with a different count: 0; layers (3, 10) (ceil(R/dx_d) = (3, 10))
+Test Summary:                                | Pass  Total  Time
+Float64 dx=(0.05, 0.0125) per=(false, false) |    2      2  0.0s
+Float64 dx=(0.05, 0.02) per=(false, false): interior 1071, reference count 46, interior with a different count: 0; layers (3, 6) (ceil(R/dx_d) = (3, 6))
+Test Summary:                              | Pass  Total  Time
+Float64 dx=(0.05, 0.02) per=(false, false) |    2      2  0.0s
+Float64 dx=(0.05, 0.02) per=(true, false): interior 1020, reference count 46, interior with a different count: 0; layers (0, 6) (ceil(R/dx_d) = (0, 6))
+Test Summary:                             | Pass  Total  Time
+Float64 dx=(0.05, 0.02) per=(true, false) |    2      2  0.0s
+Float64 dx=(0.02, 0.05) per=(false, true): interior 1020, reference count 46, interior with a different count: 0; layers (6, 0) (ceil(R/dx_d) = (6, 0))
+Test Summary:                             | Pass  Total  Time
+Float64 dx=(0.02, 0.05) per=(false, true) |    2      2  0.0s
+Float64 dx=(0.1, 0.05, 0.025) per=(false, false, false): interior 2541, reference count 470, interior with a different count: 0; layers (3, 5, 10) (ceil(R/dx_d) = (3, 5, 10))
+Test Summary:                                           | Pass  Total  Time
+Float64 dx=(0.1, 0.05, 0.025) per=(false, false, false) |    2      2  1.6s
+Float64 dx=(0.1, 0.05, 0.025) per=(true, false, false): interior 2310, reference count 470, interior with a different count: 0; layers (0, 5, 10) (ceil(R/dx_d) = (0, 5, 10))
+Test Summary:                                          | Pass  Total  Time
+Float64 dx=(0.1, 0.05, 0.025) per=(true, false, false) |    2      2  0.1s
+Float32 dx=(0.02, 0.01) per=(false, false): interior 10201, reference count 36, interior with a different count: 0; layers (3, 5) (ceil(R/dx_d) = (3, 5))
+Test Summary:                              | Pass  Total  Time
+Float32 dx=(0.02, 0.01) per=(false, false) |    2      2  1.5s
+Float32 dx=(0.1, 0.05) per=(false, false): interior 441, reference count 36, interior with a different count: 0; layers (3, 5) (ceil(R/dx_d) = (3, 5))
+Test Summary:                             | Pass  Total  Time
+Float32 dx=(0.1, 0.05) per=(false, false) |    2      2  0.0s
+Float32 dx=(0.05, 0.0125) per=(false, false): interior 1701, reference count 74, interior with a different count: 0; layers (3, 10) (ceil(R/dx_d) = (3, 10))
+Test Summary:                                | Pass  Total  Time
+Float32 dx=(0.05, 0.0125) per=(false, false) |    2      2  0.0s
+Float32 dx=(0.05, 0.02) per=(false, false): interior 1071, reference count 46, interior with a different count: 0; layers (3, 6) (ceil(R/dx_d) = (3, 6))
+Test Summary:                              | Pass  Total  Time
+Float32 dx=(0.05, 0.02) per=(false, false) |    2      2  0.0s
+Float32 dx=(0.05, 0.02) per=(true, false): interior 1020, reference count 46, interior with a different count: 0; layers (0, 6) (ceil(R/dx_d) = (0, 6))
+Test Summary:                             | Pass  Total  Time
+Float32 dx=(0.05, 0.02) per=(true, false) |    2      2  0.0s
+Float32 dx=(0.02, 0.05) per=(false, true): interior 1020, reference count 46, interior with a different count: 0; layers (6, 0) (ceil(R/dx_d) = (6, 0))
+Test Summary:                             | Pass  Total  Time
+Float32 dx=(0.02, 0.05) per=(false, true) |    2      2  0.0s
+Float32 dx=(0.1, 0.05, 0.025) per=(false, false, false): interior 2541, reference count 470, interior with a different count: 0; layers (3, 5, 10) (ceil(R/dx_d) = (3, 5, 10))
+Test Summary:                                           | Pass  Total  Time
+Float32 dx=(0.1, 0.05, 0.025) per=(false, false, false) |    2      2  1.3s
+Float32 dx=(0.1, 0.05, 0.025) per=(true, false, false): interior 2310, reference count 470, interior with a different count: 0; layers (0, 5, 10) (ceil(R/dx_d) = (0, 5, 10))
+Test Summary:                                          | Pass  Total  Time
+Float32 dx=(0.1, 0.05, 0.025) per=(true, false, false) |    2      2  0.1s
+Float32 dx=(0.02f0, 0.01f0) R=2.5·max dx: layers (3, 5), R/dx_d = (2.5, 5.0), (R/maxdx)*(maxdx/dx) in Float32 = (2.5f0, 5.0f0)
+Float32 dx=(0.03f0, 0.01f0) R=2.0·max dx: layers (2, 6), R/dx_d = (2.0, 6.0), (R/maxdx)*(maxdx/dx) in Float32 = (2.0f0, 6.0f0)
+Float32 dx=(0.1f0, 0.025f0) R=2.5·max dx: layers (3, 10), R/dx_d = (2.5, 10.0), (R/maxdx)*(maxdx/dx) in Float32 = (2.5f0, 10.0f0)
+Float32 dx=(0.07f0, 0.01f0) R=3.0·max dx: layers (3, 21), R/dx_d = (3.0, 21.00000055879356), (R/maxdx)*(maxdx/dx) in Float32 = (3.0f0, 21.0f0)

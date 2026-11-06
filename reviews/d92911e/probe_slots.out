@@ -1,0 +1,53 @@
+Test Summary:            | Pass  Total  Time
+D=1 Float64 per=true row |    8      8  5.0s
+Test Summary:             | Pass  Total  Time
+D=1 Float64 per=true slot |    8      8  1.0s
+Test Summary:             | Pass  Total  Time
+D=1 Float64 per=false row |    8      8  0.0s
+Test Summary:              | Pass  Total  Time
+D=1 Float64 per=false slot |    8      8  0.0s
+Test Summary:            | Pass  Total  Time
+D=1 Float32 per=true row |    8      8  2.7s
+Test Summary:             | Pass  Total  Time
+D=1 Float32 per=true slot |    8      8  0.9s
+Test Summary:             | Pass  Total  Time
+D=1 Float32 per=false row |    8      8  0.0s
+Test Summary:              | Pass  Total  Time
+D=1 Float32 per=false slot |    8      8  0.0s
+Test Summary:            | Pass  Total  Time
+D=2 Float64 per=true row |    8      8  2.0s
+Test Summary:             | Pass  Total  Time
+D=2 Float64 per=true slot |    8      8  0.8s
+Test Summary:             | Pass  Total  Time
+D=2 Float64 per=false row |    8      8  0.0s
+Test Summary:              | Pass  Total  Time
+D=2 Float64 per=false slot |    8      8  0.0s
+Test Summary:            | Pass  Total  Time
+D=2 Float32 per=true row |    8      8  1.7s
+Test Summary:             | Pass  Total  Time
+D=2 Float32 per=true slot |    8      8  0.9s
+Test Summary:             | Pass  Total  Time
+D=2 Float32 per=false row |    8      8  0.0s
+Test Summary:              | Pass  Total  Time
+D=2 Float32 per=false slot |    8      8  0.0s
+Test Summary:            | Pass  Total  Time
+D=3 Float64 per=true row |    4      4  2.2s
+Test Summary:             | Pass  Total  Time
+D=3 Float64 per=true slot |    4      4  0.9s
+Test Summary:             | Pass  Total  Time
+D=3 Float64 per=false row |    4      4  0.1s
+Test Summary:              | Pass  Total  Time
+D=3 Float64 per=false slot |    4      4  0.1s
+Test Summary:            | Pass  Total  Time
+D=3 Float32 per=true row |    4      4  1.8s
+Test Summary:             | Pass  Total  Time
+D=3 Float32 per=true slot |    4      4  1.0s
+Test Summary:             | Pass  Total  Time
+D=3 Float32 per=false row |    4      4  0.0s
+Test Summary:              | Pass  Total  Time
+D=3 Float32 per=false slot |    4      4  0.1s
+cases: Dict(:cases => 80, :exact => 80)
+N = 40000, events = 184: _slots_after_events 0.6 ms, 379 KiB; _detect_events 0.73 ms; whole adapt_particles! 72.1 ms
+slot-major frozen: no error, N = 51
+Test Summary:                                  | Pass  Total  Time
+slot-major + reserve!: error before the change |    1      1  0.5s

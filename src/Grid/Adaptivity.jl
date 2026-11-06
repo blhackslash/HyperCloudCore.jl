@@ -75,7 +75,10 @@ Detects holes and clusters, applies the conservative remap for every event on th
 changes the particle set, and rebuilds the neighbour lists. `max_order` is the scheme's maximum
 consistency order (new particles start there, and `exclude_reduced_order` compares against it).
 Requires valid neighbour lists and volumes (`update_volumes!`). `mass_residual` is the change of
-`total_mass` over the call, which should be at round-off level.
+`total_mass` over the call, which should be at round-off level. Merges and insertions involve interior
+particles only (no insertion between an interior particle and a ghost). On a grid whose buffers
+`reserve!` froze, a `CapacityError` is thrown before the grid is changed: the particle buffers and the neighbour
+slots the new particle set needs (`_slots_after_events`) are checked before the first remap.
 
 The event work (detection, remap, compaction) is serial and runs on the host. On a grid built with
 `device_grid` a kernel first checks whether any neighbour pair violates the spacing rules; only then
@@ -95,6 +98,16 @@ function adapt_particles!(pg::ParticleGrid{D, M, T}, ad::ParticleAdaptivity{T}, 
 
     events = _detect_events(hg, ad, max_order)
     isempty(events) && return nothing_done
+    # Capacity first: the remaps below rewrite states and volumes in place, so a `CapacityError` (buffers frozen
+    # by `reserve!`) thrown by `_apply_topology!` would leave the grid in a non-conservative intermediate state
+    N_new = N + sum(ev -> length(ev.added) - length(ev.removed), events)
+    if N_new > N
+        ensure_capacity!(hg, N_new)
+        on_host || ensure_capacity!(pg, N_new)
+    end
+    # ... and the neighbour slots the search after the topology change will need (in the layout of `pg`)
+    total_nb, max_nb = _slots_after_events(hg, events)
+    ensure_capacity!(pg.neighbor, _slot_capacity(eltype(pg.neighbor.ranges), total_nb, max_nb, N_new))
 
     remove_mask = hg.shared.bit_buffer
     fill!(view(remove_mask, 1:N), false)
@@ -115,6 +128,51 @@ function adapt_particles!(pg::ParticleGrid{D, M, T}, ad::ParticleAdaptivity{T}, 
     changed === nothing || _reestimate_volumes!(pg, hg, ad.volume_estimator, changed)
 
     return (inserted = length(new_pos), removed = n_removed, mass_residual = total_mass(pg) - mass0)
+end
+
+"""
+    _slots_after_events(pg, events) -> (total, max_nb)
+
+Neighbour slots of the particle set after `events` (old particles minus the removed ones, plus the added ones):
+the total and the largest count per particle, from the current neighbour lists and cell list, without changing
+anything. Removed particles leave the lists of their neighbours; an added particle gets every surviving or added
+particle within `R` and joins their lists. Distances are compared with a slightly larger radius, so the count is
+an upper bound (round-off at exactly `R`).
+"""
+function _slots_after_events(pg::ParticleGrid{D, M, T}, events) where {D, M, T}
+    N, nb = pg.meta.N, pg.neighbor
+    R_sq  = pg.meta.R^2 * (1 + 16 * eps(T))
+    L, Li = pg.domain.L_wrap, pg.domain.invL_wrap
+    removed = Set{Int}(r for ev in events for r in ev.removed)
+    added   = [x for ev in events for x in ev.added]
+    delta   = Dict{Int, Int}()                                    # change of the count of a surviving particle
+    for r in removed, k in nb.ranges[r]
+        j = nb.indices[k]
+        j in removed || (delta[j] = get(delta, j, 0) - 1)
+    end
+    total, max_nb = 0, 0
+    idx, dvec = Int[], Space{D, T}[]
+    for (a, xa) in enumerate(added)
+        c = 0
+        for k in 1:_collect_near!(pg, xa, R_sq, idx, dvec)
+            j = idx[k]
+            j in removed && continue
+            c += 1
+            delta[j] = get(delta, j, 0) + 1
+        end
+        for (b, xb) in enumerate(added)
+            b != a && sum(abs2, _wrapped_diff(xb, xa, L, Li)) <= R_sq && (c += 1)
+        end
+        total += c
+        max_nb = max(max_nb, c)
+    end
+    for i in 1:N
+        i in removed && continue
+        n = length(nb.ranges[i]) + get(delta, i, 0)
+        total += n
+        max_nb = max(max_nb, n)
+    end
+    return total, max_nb
 end
 
 # The particles the remaps wrote, with their DMP bounds, by index of the compacted cloud (survivors keep their
@@ -177,7 +235,7 @@ end
 """
     _has_adapt_candidates(pg, ad) -> Bool
 
-`true` if some interior particle has a neighbour pair that could trigger an event: closer than
+`true` if some interior particle has an interior neighbour that could trigger an event: closer than
 `min_gap` (merge) or farther than `max_gap` with an empty midpoint (insertion). A superset of what
 `_detect_events` selects (which also spaces events apart and skips the shock band). One kernel and one
 reduction, on the grid's backend.
@@ -205,7 +263,7 @@ end
             d2 = sum(abs2, dists[k])
             if d2 < min_gap_sq
                 isb[j] || (found = true)
-            elseif d2 > max_gap_sq
+            elseif d2 > max_gap_sq && !isb[j]
                 mid   = _wrap_coords(pos[i] + dists[k] / 2, is_per, Lv, mins)
                 empty = true
                 for k2 in ranges[i]
@@ -306,7 +364,9 @@ function _detect_events(pg::ParticleGrid{D, M, T}, ad::ParticleAdaptivity{T}, ma
             for k in nb.ranges[i]
                 j = nb.indices[k]
                 d2 = sum(abs2, nb.distances[k])
-                (j > i && !touched[j] && d2 > max_gap_sq) || continue
+                # Not towards a ghost (as for merges): the midpoint may lie outside the domain, and the new
+                # particle would be flagged interior there, out of reach of the boundary conditions
+                (j > i && !isb[j] && !touched[j] && d2 > max_gap_sq) || continue
                 mid = _wrap_point(pg, pos[i] + nb.distances[k] / 2)
                 empty = true
                 for k2 in nb.ranges[i]
@@ -363,6 +423,11 @@ function _remap_event!(pg::ParticleGrid{D, M, T}, ad::ParticleAdaptivity{T}, ev:
     @inbounds for l in 1:n_loc; lmap[loc_idx[l]] = l; end
     is_removed = falses(n_loc)
     for r in ev.removed; is_removed[lmap[r]] = true; end
+    # Boundary (ghost) particles are not remapped: their states are boundary data (`FixedDirichlet` restores them
+    # from `pg.rhos`, `OutflowBC` overwrites them), so the remap must not write them. Their swept share is left out
+    # of the balance below, which then puts it onto the interior particles: Σ V U over the interior is exact.
+    isb      = pg.core.is_boundary
+    is_fixed = [isb[loc_idx[l]] for l in 1:n_loc]
 
     # 2. Limited linear reconstruction data of the old solution on the local set
     grads = Vector{SVector{D, State{M, T}}}(undef, n_loc)
@@ -455,6 +520,7 @@ function _remap_event!(pg::ParticleGrid{D, M, T}, ad::ParticleAdaptivity{T}, ev:
     # 4. New volumes and contents; exact residual correction
     V_before = zero(T); m_before = zero(State{M, T})
     @inbounds for l in 1:n_loc
+        is_fixed[l] && continue
         j = loc_idx[l]
         V_before += V[j]; m_before += V[j] * U[j]
     end
@@ -462,7 +528,7 @@ function _remap_event!(pg::ParticleGrid{D, M, T}, ad::ParticleAdaptivity{T}, ev:
     mn = zeros(State{M, T}, n_loc + n_add)
     V_after = zero(T); m_after = zero(State{M, T})
     @inbounds for l in 1:n_loc
-        is_removed[l] && continue
+        (is_removed[l] || is_fixed[l]) && continue
         j = loc_idx[l]
         Vn[l] = max(V[j] + δV[l], T(1e-12) * V[j])
         mn[l] = V[j] * U[j] + δm[l]
@@ -476,15 +542,15 @@ function _remap_event!(pg::ParticleGrid{D, M, T}, ad::ParticleAdaptivity{T}, ev:
     V_after > 0 || error("Remap produced no volume at $(ev.center); increase samples_per_dx.")
     εV, εm = V_before - V_after, m_before - m_after
     @inbounds for l in 1:(n_loc + n_add)
-        (l <= n_loc && is_removed[l]) && continue
+        (l <= n_loc && (is_removed[l] || is_fixed[l])) && continue
         frac  = Vn[l] / V_after
         mn[l] += frac * εm
         Vn[l] += frac * εV
     end
 
     # 5. DMP repair on the affected set (conservative redistribution)
-    aff = Int[]                                         # local ids of survivors + added
-    for l in 1:n_loc; is_removed[l] || push!(aff, l); end
+    aff = Int[]                                         # local ids of interior survivors + added
+    for l in 1:n_loc; (is_removed[l] || is_fixed[l]) || push!(aff, l); end
     for a in 1:n_add; push!(aff, n_loc + a); end
     Un  = [mn[l] / Vn[l] for l in aff]
     lo_a = Vector{State{M, T}}(undef, length(aff)); hi_a = similar(lo_a)

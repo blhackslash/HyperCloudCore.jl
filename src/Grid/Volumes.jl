@@ -13,13 +13,22 @@ export VolumeEstimator, ShepardVolumes, MLSVolumes, update_volumes!, domain_volu
 # No Voronoi tessellation is stored or built; only the scalar V_i lives on `pg.core.volumes`.
 #
 #   ShepardVolumes   φ_i(x) = w(|x−x_i|) / Σ_k w(|x−x_k|).   Particle-based evaluation, one
-#                    neighbour sweep, second order on quasi-uniform clouds. Default, cheap enough
-#                    to recompute after every step of a moving grid, but biased (independently of
-#                    the resolution) where the spacing varies, i.e. on moving grids.
+#                    neighbour sweep. Default, cheap enough to recompute after every step of a moving
+#                    grid. V_i = Δx^D on a uniform periodic lattice (the rectangle rule); otherwise
+#                    biased, independently of the resolution, where the spacing varies (moving grids,
+#                    jittered clouds), and first order on bounded boxes (see below).
 #   MLSVolumes{P}    φ_i = reproducing-kernel (MLS) shape functions of degree P, integrated on a
-#                    throwaway background lattice. Σ V_i q(x_i) = ∫ q exactly for polynomials q of
-#                    degree ≤ P (up to the lattice error), i.e. a quadrature of order P+1. Costs a
-#                    serial lattice sweep (3–20 time steps when re-estimated every step).
+#                    throwaway background lattice. Σ_i φ_i(y) q(x_i) = q(y) for polynomials q of
+#                    degree ≤ P, so the quadrature would be of order P+1; measured, that holds on
+#                    periodic clouds for P ≥ 1 (P = 0: first order on jittered clouds), not on bounded
+#                    boxes (below). Costs a serial lattice sweep (3–20 time steps when re-estimated
+#                    every step).
+#
+# Bounded boxes: the ghost particles outside Ω get volumes too, and the final renormalisation to
+# Σ V = |Ω| runs over all particles, ghosts included (MLS clamps negative ghost volumes to zero
+# first). Σ V f is therefore first order (Shepard; MLS P = 2) or second order (MLS P = 0, 1), and the
+# discrete mass Σ V U includes the (boundary-condition driven) ghost content. Measured orders of
+# Σ V f against ∫_Ω f (1-D, R = 2.5Δx, N = 40…320, docs/src/particle_grids/volumes.md).
 
 abstract type VolumeEstimator end
 
@@ -31,7 +40,10 @@ partition-of-unity smoothing sweeps `V_i ← Σ_j (w_ij / S_j) V_j` (which prese
 and a final renormalisation to `Σ V = |Ω|`. Requires a kernel that is finite at zero distance
 (`ExponentialWeightFunction`; `InverseWeightFunction` is not suitable).
 
-Accurate on (quasi-)uniform clouds. On a cloud whose spacing varies smoothly (a moving grid) `S_i` is a
+Exact (`V_i = Δx^D`) on a uniform periodic lattice. On a bounded box the quadrature `Σ V_i f(x_i)` is first
+order, since the ghost particles get volumes too and the renormalisation runs over all particles. On a jittered
+periodic cloud it does not converge reliably (error about 2e-3 for N = 40…320 at 30 % jitter). On a cloud
+whose spacing varies smoothly (a moving grid) `S_i` is a
 lattice sum over a fixed number of neighbours, which is not proportional to the local density, so
 `Σ V_i f(x_i)` has a bias that depends on the local stretch and does **not** shrink with the resolution
 (−2e-3 for a smooth profile on a grid stretched by ±50 %, at every N); use [`MLSVolumes`](@ref) where the
@@ -49,7 +61,11 @@ ShepardVolumes(; sweeps::Int = 1) = ShepardVolumes(sweeps)
 midpoint rule on a background lattice with `samples_per_dx` points per particle spacing (the
 lattice is not stored). `P = 0` is the background-integrated Shepard partition.
 
-A consistent quadrature on any cloud (the discrete mass of a moving grid converges), but the lattice sweep
+The shape functions reproduce polynomials of degree `P`, and on periodic clouds the quadrature `Σ V_i f(x_i)`
+converges at about order `P + 1` for `P ≥ 1`, also on jittered and moving clouds (the discrete mass of a moving
+grid converges; `P = 0` is first order on jittered clouds). On a bounded box the ghost particles take part in the
+renormalisation, and their negative volumes are clamped to zero first: measured order 2 for `P = 0, 1` and 1 for
+`P = 2`. The lattice sweep
 is a serial host loop: as the re-estimation of a moving grid it costs about 3 (1-D) to 20 (2-D) explicit time
 steps of a low-order scheme. On a device grid it runs on a host copy (only the volumes are copied back).
 """

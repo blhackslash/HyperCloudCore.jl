@@ -17,8 +17,8 @@ special case `a == 0`, `b == 0` (see `RKButcherTableau`).
 For an explicit tableau with a positive SSP coefficient ([`ssp_coefficient`](@ref): `RK1_Euler`, `RK2_SSP`,
 `RK2_Ralston` (`C = 1/2`), `RK3_SSP`, `RK4_SSP`) the time stepper checks the forward Euler substeps of the
 canonical Shu–Osher form, of which every stage is a convex combination; that is rigorous for any SSP method.
-For the others (`RK4_Classical`, the IMEX tableaus) it checks the stage candidates, which has no theoretical
-backing.
+For the others (`RK4_Classical` and every IMEX tableau, also those with an SSP explicit part: `ssp_coefficient` is
+0 for any tableau with an implicit part) it checks the stage candidates, which has no theoretical backing.
 """
 struct IMEXButcherTableau{T, MA <: AbstractMatrix{T}, VA <: AbstractVector{T}}
     a::MA
@@ -113,7 +113,7 @@ function RK2_SSP_Tableau(::Type{T}) where {T}
     return RKButcherTableau(A, T[1/2, 1/2], T[0.0, 1.0])
 end
 
-"2-stage, 2nd-order Ralston (not SSP)."
+"2-stage, 2nd-order Ralston: minimal truncation error, SSP with coefficient `C = 1/2` (half that of SSP-RK2)."
 function RK2_Ralston_Tableau(::Type{T}) where {T}
     A = T[0.0 0.0;
           2/3 0.0]
@@ -181,29 +181,59 @@ function IMEX_ARS233_Tableau(::Type{T}, γ::T = T((3.0 + sqrt(3.0)) / 6.0)) wher
     return IMEXButcherTableau(A, At, c, c, b, b)
 end
 
-"Ascher-Ruuth-Spiteri ARS(2,2,2): 2 stages, 2nd order (not SSP)."
+"""
+    IMEX_ARS222_Tableau(T[, γ])
+
+Ascher–Ruuth–Spiteri ARS(2,2,2) (Appl. Numer. Math. 25, 1997): three stages, the first of them explicit
+(`Y₁ = Uⁿ`), order 2 for the explicit part, the implicit part and their coupling; the implicit part is
+L-stable (stiffly accurate, `b = A[3, :]`). Not SSP.
+
+    implicit                     explicit
+    0 | 0    0    0              0 | 0    0    0
+    γ | 0    γ    0              γ | γ    0    0
+    1 | 0    1-γ  γ              1 | δ    1-δ  0
+      | 0    1-γ  γ                | δ    1-δ  0
+
+with `γ = 1 − 1/√2`, `δ = 1 − 1/(2γ)`. Order 2 needs `γ = 1 ± 1/√2`; another `γ` gives a first-order scheme.
+"""
 function IMEX_ARS222_Tableau(::Type{T}, γ::Union{T, Nothing} = nothing) where {T}
-    g = isnothing(γ) ? T(1.0 - 1.0 / sqrt(2.0)) : γ
-    δ = T(1.0 - 1.0 / (2.0 * g))
-    At = T[0.0 0.0; g 0.0]
-    A  = T[g 0.0; 1.0-g g]
-    return IMEXButcherTableau(A, At, T[g, 1.0], T[0.0, g], T[1.0-g, g], T[δ, 1.0-δ])
+    g = isnothing(γ) ? T(1 - 1 / sqrt(2)) : γ
+    δ = 1 - 1 / (2g)
+    A  = T[0 0     0;
+           0 g     0;
+           0 1 - g g]
+    At = T[0 0     0;
+           g 0     0;
+           δ 1 - δ 0]
+    c  = T[0, g, 1]
+    return IMEXButcherTableau(A, At, c, copy(c), T[0, 1 - g, g], T[δ, 1 - δ, 0])
 end
 
-"Pareschi-Russo SSP3(3,3,3): 3rd-order, SSP explicit part."
+"""
+    IMEX_PRSSP3_Tableau(T)
+
+Pareschi–Russo SSP3(3,3,2) (J. Sci. Comput. 25, 2005): three stages, SSP-RK3 (Shu–Osher) explicit part, an
+L-stable diagonally implicit part with `γ = 1 − 1/√2`, and the same weights `b = b̃ = (1/6, 1/6, 2/3)`.
+**Order 2** as an IMEX pair (the explicit part alone is order 3); a three-stage implicit part with these
+weights cannot be order 3.
+
+    implicit                          explicit
+    γ   | γ      0  0                 0   | 0    0    0
+    1-γ | 1-2γ   γ  0                 1   | 1    0    0
+    1/2 | 1/2-γ  0  γ                 1/2 | 1/4  1/4  0
+
+The name is kept for compatibility (builder key `:PRSSP3`).
+"""
 function IMEX_PRSSP3_Tableau(::Type{T}) where {T}
-    γ = T(0.24169906235535784649)
-    At = T[0.0  0.0  0.0;
-           1.0  0.0  0.0;
-           0.25 0.25 0.0]
-    A = zeros(T, 3, 3)
-    A[1, 1] = γ
-    A[2, 1] = T(1.0 - 2.0γ);  A[2, 2] = γ
-    A[3, 1] = T(((1.0 - γ) / (1.0 - 2.0γ) - 1.0 / (12.0γ)) / 2.0)
-    A[3, 2] = T((1.0 / (12.0γ * (1.0 - 2.0γ))) / 2.0)
-    A[3, 3] = γ
-    b = T[1/6, 1/6, 2/3]
-    return IMEXButcherTableau(A, At, T[γ, 1.0-γ, 0.5], T[0.0, 1.0, 0.5], b, b)
+    γ  = T(1 - 1 / sqrt(2))
+    At = T[0    0    0;
+           1    0    0;
+           1//4 1//4 0]
+    A  = T[γ         0 0;
+           1 - 2γ    γ 0;
+           1//2 - γ  0 γ]
+    b  = T[1//6, 1//6, 2//3]
+    return IMEXButcherTableau(A, At, T[γ, 1 - γ, 1//2], T[0, 1, 1//2], b, copy(b))
 end
 
 "SSP2(3,3,2): 2nd-order, SSP explicit part, L-stable implicit part."

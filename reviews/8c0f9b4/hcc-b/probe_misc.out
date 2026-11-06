@@ -1,0 +1,7 @@
+degree 4 with exactly B = 4 neighbours: 40 particles, max |div(x) - 1| = 0.00831255450611934
+Test Summary:                                 | Pass  Total  Time
+Central/Upwind safeguard counts the intercept |    1      1  4.2s
+Venkat phi(1f20) = NaN  phi(1e20) = 1.0
+_update_phi Float32, increment 1e-11, bounds ±1e9: Float32[NaN]
+Test Summary:                                        | Pass  Total  Time
+Venkatakrishnan phi in Float32 overflows for large r |    1      1  0.2s
