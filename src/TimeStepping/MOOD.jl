@@ -97,7 +97,9 @@ end
     MOODu1{T} <: MOODCriterion
 
 Discrete Maximum Principle: flags a particle whose candidate leaves the extrema of its
-neighbourhood (padded by `d`).
+neighbourhood (padded by `d`). A component whose neighbourhood range is below `d³` is never flagged: a guard for
+exactly constant states (it carries state units cubed, so it is only a numerical cut-off; with `d ∝ Δx^D` it lies far
+below any resolved variation).
 """
 struct MOODu1{T} <: MOODCriterion
     d::T
@@ -172,6 +174,7 @@ end
 # `neighbour_fs` is slot-indexed: the neighbour states of the previous stage (`neighbour_states(U_prev, pg)`).
 @inline function _dmp_fails(δ::T, rho_i::State{M, T}, nb_slice, newRho::State{M, T}, neighbour_fs) where {M, T}
     minU, maxU = findLocalExtrema(rho_i, nb_slice, neighbour_fs)
+    # `δ³`: skip an (exactly) constant stencil; a numerical cut-off, not a dimensional bound (see `MOODu1`)
     for m in 1:M
         if abs(maxU[m] - minU[m]) >= δ^3 && (newRho[m] < minU[m] - δ || newRho[m] > maxU[m] + δ)
             return true

@@ -1,0 +1,61 @@
+T=Float32 f_i=1.0e-8 u_min=1.0e-8 u_max=1 delta=-1.0e-7: phi = -0.0, limited interface value = 1.0e-8
+T=Float32 f_i=0.0 u_min=0.0 u_max=1 delta=-1.0e-6: phi = -0.0, limited interface value = 0.0
+T=Float64 f_i=1.0e-17 u_min=1.0e-17 u_max=1 delta=-1.0e-15: phi = -0.0, limited interface value = 1.0e-17
+T=Float64 f_i=0.0 u_min=0.0 u_max=1 delta=-1.0e-15: phi = -0.0, limited interface value = 0.0
+T=Float32 N=50 MUSCL2 BarthJespersenLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float32 N=50 MUSCL2 VenkatakrishnanLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float32 N=50 MUSCL3 BarthJespersenLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float32 N=50 MUSCL3 VenkatakrishnanLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float32 N=64 MUSCL2 BarthJespersenLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float32 N=64 MUSCL2 VenkatakrishnanLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float32 N=64 MUSCL3 BarthJespersenLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float32 N=64 MUSCL3 VenkatakrishnanLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float32 N=100 MUSCL2 BarthJespersenLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float32 N=100 MUSCL2 VenkatakrishnanLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float32 N=100 MUSCL3 BarthJespersenLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float32 N=100 MUSCL3 VenkatakrishnanLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float32 N=128 MUSCL2 BarthJespersenLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float32 N=128 MUSCL2 VenkatakrishnanLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float32 N=128 MUSCL3 BarthJespersenLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float32 N=128 MUSCL3 VenkatakrishnanLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float32 N=200 MUSCL2 BarthJespersenLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float32 N=200 MUSCL2 VenkatakrishnanLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float32 N=200 MUSCL3 BarthJespersenLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float32 N=200 MUSCL3 VenkatakrishnanLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float32 N=400 MUSCL2 BarthJespersenLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float32 N=400 MUSCL2 VenkatakrishnanLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float32 N=400 MUSCL3 BarthJespersenLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float32 N=400 MUSCL3 VenkatakrishnanLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float32 N=1000 MUSCL2 BarthJespersenLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float32 N=1000 MUSCL2 VenkatakrishnanLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float32 N=1000 MUSCL3 BarthJespersenLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float32 N=1000 MUSCL3 VenkatakrishnanLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float64 N=50 MUSCL2 BarthJespersenLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float64 N=50 MUSCL2 VenkatakrishnanLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float64 N=50 MUSCL3 BarthJespersenLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float64 N=50 MUSCL3 VenkatakrishnanLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float64 N=64 MUSCL2 BarthJespersenLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float64 N=64 MUSCL2 VenkatakrishnanLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float64 N=64 MUSCL3 BarthJespersenLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float64 N=64 MUSCL3 VenkatakrishnanLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float64 N=100 MUSCL2 BarthJespersenLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float64 N=100 MUSCL2 VenkatakrishnanLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float64 N=100 MUSCL3 BarthJespersenLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float64 N=100 MUSCL3 VenkatakrishnanLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float64 N=128 MUSCL2 BarthJespersenLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float64 N=128 MUSCL2 VenkatakrishnanLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float64 N=128 MUSCL3 BarthJespersenLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float64 N=128 MUSCL3 VenkatakrishnanLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float64 N=200 MUSCL2 BarthJespersenLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float64 N=200 MUSCL2 VenkatakrishnanLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float64 N=200 MUSCL3 BarthJespersenLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float64 N=200 MUSCL3 VenkatakrishnanLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float64 N=400 MUSCL2 BarthJespersenLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float64 N=400 MUSCL2 VenkatakrishnanLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float64 N=400 MUSCL3 BarthJespersenLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float64 N=400 MUSCL3 VenkatakrishnanLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float64 N=1000 MUSCL2 BarthJespersenLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float64 N=1000 MUSCL2 VenkatakrishnanLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float64 N=1000 MUSCL3 BarthJespersenLimiter: max undershoot below local min = 0.0, negative interface values = 0
+T=Float64 N=1000 MUSCL3 VenkatakrishnanLimiter: max undershoot below local min = 0.0, negative interface values = 0
+fixed tolerance: bitwise scaled = true, extrema (-4.537572583052042e-42, 1.0)

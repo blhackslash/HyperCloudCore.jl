@@ -1,0 +1,6 @@
+┌ Warning: MOOD accepted 37 inadmissible candidate(s) at first order in the step at t = 0.0 (dt = 0.0008595762523223397): the first-order update itself is not admissible there, e.g. a CFL number above the positivity limit. Reported once per stepper; `mood_inadmissible(ts)` gives the count of each step.
+└ @ HyperCloudCore /workspace/julia/HyperCloudDev/HyperCloudCore.jl/.claude/worktrees/numerics/src/TimeStepping/TimeSteppers.jl:558
+N = 40000, threads 8: step 7.26 ms, one count 0.005 ms (x4 checkpoints = 0.29 % of the step), allocated 624 bytes, inadmissible 1405
+┌ Warning: MOOD accepted 121 inadmissible candidate(s) at first order in the step at t = 0.0 (dt = 0.0002427210177483822): the first-order update itself is not admissible there, e.g. a CFL number above the positivity limit. Reported once per stepper; `mood_inadmissible(ts)` gives the count of each step.
+└ @ HyperCloudCore /workspace/julia/HyperCloudDev/HyperCloudCore.jl/.claude/worktrees/numerics/src/TimeStepping/TimeSteppers.jl:558
+N = 490000, threads 8: step 134.53 ms, one count 0.098 ms (x4 checkpoints = 0.29 % of the step), allocated 640 bytes, inadmissible 1890

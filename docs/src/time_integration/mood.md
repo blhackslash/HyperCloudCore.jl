@@ -99,6 +99,8 @@ Some properties of this loop:
 
 After the step, `mood_flags(ts)[i]` is `true` for every particle whose order MOOD lowered at some point during the step (for plotting and diagnostics).
 
+A particle that is flagged at order 1 cannot drop further: its candidate is accepted. If it is not admissible (`is_admissible`, a negative pressure or a NaN), the run continues with that state; the stepper warns the first time and `mood_inadmissible(ts)` counts such candidates per step (with an SSP tableau the checked candidates are the Euler substeps). Causes: a time step above the positivity limit of the first-order scheme, or a first-order scheme that is not positive on the cloud at all (the geometric Rusanov dissipation on an irregular cloud; [`AlignedRusanovFlux`](@ref) is local-extremum-diminishing).
+
 ## Writing your own
 
 A criterion is a subtype of `MOODCriterion` plus a functor on the `MOOD` wrapper:

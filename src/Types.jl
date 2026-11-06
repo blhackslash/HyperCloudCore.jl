@@ -153,7 +153,7 @@ abstract type AbstractSourceTerm end
 Source term evaluated explicitly during the explicit Runge-Kutta or IMEX explicit stages.
 
 # API Requirements
-- Must implement `evaluate_sources(st::AbstractExplicitSourceTerm, f_i, i, pg, t) -> State{M, T}`.
+- Must implement `evaluate_source(st::AbstractExplicitSourceTerm, f_i, i, pg, t) -> State{M, T}`.
 """
 abstract type AbstractExplicitSourceTerm <: AbstractSourceTerm end
 
@@ -164,7 +164,7 @@ Source term evaluated implicitly via stiff solvers during IMEX integration.
 
 # API Requirements
 - Must implement `implicit_solve(st::AbstractImplicitSourceTerm, f_i, dt, i, pg, t) -> State{M, T}`.
-- Must implement `pre_solve_updates!(st, current_Y_i, pg, t)` for global pre-computations.
+- May implement `pre_solve_update!(st, current_Y_i, pg, t)` for global pre-computations (default: nothing).
 """
 abstract type AbstractImplicitSourceTerm <: AbstractSourceTerm end
 

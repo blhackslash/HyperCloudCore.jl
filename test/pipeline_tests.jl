@@ -112,6 +112,25 @@ end
     end
 end
 
+# ---- 2c. Jittered clouds keep the orders of the fits ----
+
+@testset "EOC on a jittered 1-D cloud (20 % jitter)" begin
+    # The lattice tests above see symmetric stencils, on which even-degree fits gain an order. On a jittered cloud
+    # (measured N = 200 → 400): Central2 1.76, Central4 3.34, MUSCL3 1.99, MUSCL4 3.00 (Central3 = Central4: both fit
+    # degree 3).
+    shared  = merge(BASE_1D, Dict(:Time_stepper => :RK4, :Grid_randomness_factor => (0.2,)))
+    methods = Dict{Symbol, Any}(
+        :central2 => Dict(:Scheme_name => :Central, :Flux_name => :Rusanov, :Scheme_order => 2),
+        :central4 => Dict(:Scheme_name => :Central, :Flux_name => :Rusanov, :Scheme_order => 4),
+        :muscl3 => muscl(3), :muscl4 => muscl(4))
+    sim = run_suite(shared, methods; varied = Dict(:Grid_Ns => [(200,), (400,)]))
+    for (key, lo, hi) in ((:central2, 1.5, 2.5), (:central4, 3.0, 4.2), (:muscl3, 1.7, 2.7), (:muscl4, 2.7, 4.0))
+        @testset "$key" begin
+            @test lo < eoc(sim(key; Grid_Ns = (200,)), sim(key; Grid_Ns = (400,))) < hi
+        end
+    end
+end
+
 # ---- 3. Boundedness on a discontinuity: MOOD and VK bound, unlimited does not
 
 @testset "Boundedness on a box (MOOD, VK limiter vs unlimited)" begin

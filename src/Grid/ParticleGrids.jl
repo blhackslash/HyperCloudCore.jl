@@ -374,7 +374,11 @@ first-derivative weights of the divergence fit at particle `i` (degree `_diverge
   degree `_divergence_degree(main_grad)` per particle (`_cfl_body!`), as every call did before. The two differ
   where the fits differ: for degree-5 (odd-order) divergence fits the weights in use sum to about 1.8× the
   Taylor fit's, i.e. the cached estimate is that much smaller; for degrees ≤ 3 they agree.
-- Returns `Inf` for an empty grid or for particles without neighbours / without a solvable fit.
+- A particle restricts the step only if `Σ_j Σ_d |c_ij,d| λ_pair > 0` (any positive value, no absolute cut-off):
+  particles without neighbours or without a solvable fit, with zero wave speeds, and with non-finite (NaN) states
+  or speeds do not. `Inf` (an empty grid, or no restricting particle) means that nothing limits the step: a driver
+  that caps it to the end time jumps there in one step, which is right for a field at rest and wrong after a blow-up;
+  check the states (HyperCloud's driver stops on non-finite states).
 """
 @inline function get_time_step(pg::ParticleGrid{D, M, T}, eq::HyperbolicPDE, main_grad; cached_weights::Bool = true) where {D, M, T}
     # 1. Graceful exit for empty grids
@@ -394,10 +398,10 @@ first-derivative weights of the divergence fit at particle `i` (degree `_diverge
         invL   = one(T) / minimum(pg.meta.dx)
         foreach_particle(_cfl_body!, get_backend(), pg.meta.N,
             (dt_buffer, pg.core.is_boundary, nb.ranges, nb.indices, pg.rhos, eq, degree, Val(D), get_distances(pg), get_weights(pg),
-             invL, T(1e-14), one(T) / D))
+             invL, floatmin(T), one(T) / D))
     else
         foreach_particle(_cfl_weights_body!, get_backend(), pg.meta.N,
-            (dt_buffer, pg.core.is_boundary, nb.ranges, nb.indices, pg.rhos, eq, sw, Val(D), T(1e-14), one(T) / D))
+            (dt_buffer, pg.core.is_boundary, nb.ranges, nb.indices, pg.rhos, eq, sw, Val(D), floatmin(T), one(T) / D))
     end
 
     # 2. Provide init=T(Inf) to prevent any future reduction errors

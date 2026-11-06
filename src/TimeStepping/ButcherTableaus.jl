@@ -78,9 +78,27 @@ The SSP coefficient `C` of an explicit tableau: the largest `r` for which the ca
 last row) has no negative coefficient. Then every stage and the final update are
 `Y_i = v_i Uⁿ + Σ_j α_ij (Y_j + (Δt/C) F(Y_j))`, convex combinations of `Uⁿ` and the forward Euler substeps
 `Y_j + (Δt/C) F(Y_j)`. `0` for tableaus that are not SSP (classical RK4) and for IMEX tableaus (non-zero
-implicit part). Computed by bisection on the host (accurate to about 1e-10).
+implicit part). Computed by bisection on the host (accurate to about 1e-10). A rounded copy of a built-in tableau
+(e.g. `RK4_SSP_Tableau(Float32)`) gets the coefficient of its `Float64` original: the rounded coefficients alone
+would give `C = 1.5032` instead of 1.5082 for SSPRK(5,4), a coefficient that is zero by construction rounding to
+a tiny negative one.
 """
-function ssp_coefficient(bt::IMEXButcherTableau)
+function ssp_coefficient(bt::IMEXButcherTableau{T}) where {T}
+    if T !== Float64 && !any(!iszero, bt.a)
+        for f in _SSP_BUILTIN_EXPLICIT
+            ref = f(Float64)
+            _is_rounded_copy(bt, ref) && return _ssp_coefficient(ref)
+        end
+    end
+    return _ssp_coefficient(bt)
+end
+
+function _is_rounded_copy(bt::IMEXButcherTableau{T}, ref::IMEXButcherTableau{Float64}) where {T}
+    num_stages(bt) == num_stages(ref) || return false
+    return all(T.(ref.a_t) .== bt.a_t) && all(T.(ref.b_t) .== bt.b_t) && all(T.(ref.c_t) .== bt.c_t)
+end
+
+function _ssp_coefficient(bt::IMEXButcherTableau)
     any(!iszero, bt.a) && return 0.0
     s = num_stages(bt)
     K = zeros(s + 1, s + 1)
@@ -140,9 +158,10 @@ end
 """
     RK4_SSP_Tableau(T)
 
-SSPRK(5,4) of Spiteri and Ruuth (SIAM J. Numer. Anal. 40, 2002): five stages, order 4, the optimal
-four-stage-free SSP coefficient `C ≈ 1.508` (SSP-RK3 has `C = 1`, so it allows a 1.5 times larger step per
-stage, i.e. about the same cost per unit time as RK4 with the SSP guarantee). The Butcher form of the
+SSPRK(5,4) of Spiteri and Ruuth (SIAM J. Numer. Anal. 40, 2002): five stages, order 4, with the optimal SSP
+coefficient among five-stage fourth-order methods, `C ≈ 1.508` (four stages cannot be SSP at order 4; SSP-RK3 has
+`C = 1`). The effective coefficient per stage is `C / 5 ≈ 0.30` against `1/3` for SSP-RK3, so it costs about 10 %
+more per unit time than SSP-RK3, for one order more. The Butcher form of the
 published Shu–Osher coefficients; the order conditions up to 4 hold to round-off.
 """
 function RK4_SSP_Tableau(::Type{T}) where {T}
@@ -243,3 +262,6 @@ function IMEX_SSP2332_Tableau(::Type{T}) where {T}
     b  = T[1/3, 1/3, 1/3]
     return IMEXButcherTableau(A, At, T[0.25, 0.25, 1.0], T[0.0, 0.5, 1.0], b, b)
 end
+
+# Built-in explicit tableaus whose rounded copies take the SSP coefficient of the Float64 original (`ssp_coefficient`)
+const _SSP_BUILTIN_EXPLICIT = (RK1_Euler_Tableau, RK2_SSP_Tableau, RK2_Ralston_Tableau, RK3_SSP_Tableau, RK4_SSP_Tableau)
