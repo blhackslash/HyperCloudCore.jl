@@ -48,7 +48,9 @@ Executes a proximity-optimized spatial reordering of the entire particle grid to
 - Bypasses the memory mutation entirely if the permutation buffer is already sorted.
 - Permutes the active range `1:N` of the positions, boundary flags, tags, orders, state vectors, curvatures and volumes
   (the buffers may be longer than `N` after growth), and bumps `pg.meta.geometry_version`.
-- Host only. The neighbour lists are stale afterwards: run `pg.neighbor(pg)` before the next step.
+- Host only. The neighbour lists are stale afterwards: run `pg.neighbor(pg)` before the next step. Per-particle data
+  outside the grid, such as a stepper's `mood_flags`, keep the old order until they are next written.
+- 3-D keys have 10 bits per axis: beyond 1024 particles per axis, particles in the same key cell keep their order.
 """
 function (rd::ReorderData{D})(pg::ParticleGrid{D}) where {D}
     N = pg.meta.N
@@ -66,28 +68,20 @@ function (rd::ReorderData{D})(pg::ParticleGrid{D}) where {D}
     # 2. Extract domain boundaries from the bins (removed from meta)
     mins = pg.bins.mins
     extents = pg.bins.maxs .- mins
-    
+    # Integer key in 0:top of coordinate `x` on axis `d` (scaled in the grid's float type)
+    key(x, d, top) = UInt32(clamp(floor((x - mins[d]) / extents[d] * oftype(x, top)), 0, top))
+
     # 3. Sort using the Morton Curve
     if D == 1
         # 1D is naturally perfectly local
         sort!(view(p, 1:N), by = i -> pos[i][1], alg=QuickSort)
-        
+
     elseif D == 2
-        sort!(view(p, 1:N), by = i -> begin
-            # Normalize to 16-bit integers
-            nx = UInt32(clamp(floor(((pos[i][1] - mins[1]) / extents[1]) * 65535.0), 0, 65535))
-            ny = UInt32(clamp(floor(((pos[i][2] - mins[2]) / extents[2]) * 65535.0), 0, 65535))
-            morton_2D(nx, ny)
-        end, alg=QuickSort)
-        
+        sort!(view(p, 1:N), by = i -> morton_2D(key(pos[i][1], 1, 65535), key(pos[i][2], 2, 65535)), alg=QuickSort)
+
     else # D == 3
-        sort!(view(p, 1:N), by = i -> begin
-            # Normalize to 10-bit integers
-            nx = UInt32(clamp(floor(((pos[i][1] - mins[1]) / extents[1]) * 1023.0), 0, 1023))
-            ny = UInt32(clamp(floor(((pos[i][2] - mins[2]) / extents[2]) * 1023.0), 0, 1023))
-            nz = UInt32(clamp(floor(((pos[i][3] - mins[3]) / extents[3]) * 1023.0), 0, 1023))
-            morton_3D(nx, ny, nz)
-        end, alg=QuickSort)
+        sort!(view(p, 1:N), by = i -> morton_3D(key(pos[i][1], 1, 1023), key(pos[i][2], 2, 1023), key(pos[i][3], 3, 1023)),
+              alg=QuickSort)
     end
     
     # Check if already mostly sorted to prevent unnecessary memory writes
@@ -98,7 +92,7 @@ function (rd::ReorderData{D})(pg::ParticleGrid{D}) where {D}
     perm = view(p, 1:N)
     for x in (pg.core.positions, pg.core.is_boundary, pg.core.tags, pg.core.particle_orders, pg.rhos, pg.curvatures,
               pg.core.volumes)
-        length(x) >= N || continue
+        @assert length(x) >= N "per-particle buffer shorter than the particle count"
         v = view(parent(x), 1:N)
         v .= v[perm]
     end

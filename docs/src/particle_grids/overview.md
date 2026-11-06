@@ -21,7 +21,7 @@ pg = ParticleGrid(geom, nominal_dx, weight_func, M;
 | `mover::GridMover` | Grid velocity model; `NoGridMover()` keeps the particles fixed (see [Moving Grids (ALE)](@ref)). |
 | `volume_estimator::VolumeEstimator` | How `pg.core.volumes` is computed; `ShepardVolumes()` by default (see [Particle Volumes and Adaptivity](@ref)). |
 
-The constructor generates the point cloud, runs a neighbour search, reorders the particles along a space-filling curve, searches again on the reordered cloud, and computes the particle volumes.
+The constructor generates the point cloud, reorders the particles along a space-filling curve (this needs only the positions and the canvas box), runs the neighbour search once on the reordered cloud, and computes the particle volumes.
 
 ## Internal structure
 
