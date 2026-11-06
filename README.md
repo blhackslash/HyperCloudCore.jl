@@ -13,9 +13,9 @@
 [![Human review](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/industrial-mathematics-group/HyperCloudCore.jl/badges/ai-human-review.json)](https://github.com/industrial-mathematics-group/.github/blob/main/.github/CONTRIBUTING.md#h-human-review)
 [![AI review](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/industrial-mathematics-group/HyperCloudCore.jl/badges/ai-review.json)](https://github.com/industrial-mathematics-group/.github/blob/main/.github/CONTRIBUTING.md#a-ai-review)
 
-![AI generation](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/industrial-mathematics-group/HyperCloudCore.jl/badges/aidecl-generation.json)
-![Human review](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/industrial-mathematics-group/HyperCloudCore.jl/badges/aidecl-human-review.json)
-![AI review](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/industrial-mathematics-group/HyperCloudCore.jl/badges/aidecl-ai-review.json)
+![AI generation](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/industrial-mathematics-group/HyperCloudCore.jl/badges/aisignoff-generation.json)
+![Human review](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/industrial-mathematics-group/HyperCloudCore.jl/badges/aisignoff-human-review.json)
+![AI review](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/industrial-mathematics-group/HyperCloudCore.jl/badges/aisignoff-ai-review.json)
 
 </div>
 
