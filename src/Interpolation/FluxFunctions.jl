@@ -113,7 +113,9 @@ struct AlignedRusanovFlux <: NumericalFluxFunction end
 """
     (upwind::UpwindFlux)(f_L, f_R, F_L, F_R, eq) -> Flux{D, M, T}
 
-Evaluates the numerical flux using the upwind scheme. Dispatches to `RusanovFlux` for general systems (`M > 1`), or exact scalar upwinding when `M == 1`.
+Evaluates the numerical flux using the upwind scheme. Dispatches to `RusanovFlux` for general systems (`M > 1`); for
+scalars (`M == 1`) it is the Murman–Roe flux with the secant speed, without an entropy fix: a transonic rarefaction
+of a convex flux (Burgers with `u_L < 0 < u_R`) can stay as a stationary expansion shock.
 
 # Arguments
 - `f_L`: Reconstructed left states across all spatial dimensions.

@@ -26,7 +26,7 @@ with $\Delta x = \min_d \Delta x_d$. Only the first derivatives enter: the fit's
 w_S = \frac{\beta_S}{\beta_S + \beta_C}, \quad w_C = \frac{\beta_C}{\beta_S + \beta_C},
 ```
 
-with $\epsilon = 10^{-12}$, applied per state component. The divergence is
+with $\epsilon = 10^{-12} \max(u_i^2, IS_C)$ (plus `floatmin(T)`, which only keeps an identically zero field finite), applied per state component. The offset is relative to the local data, so the weights do not depend on the scale of $u$: a profile of height $10^{-13}$ is blended like one of height 1 (an absolute $10^{-12}$ blended it half and half). The code evaluates $w_S = 1/(1 + q^2)$ with $q = (IS_S + \epsilon)/(IS_C + \epsilon)$, the same weights without squared offsets that could underflow. The divergence is
 
 ```math
 \nabla\cdot F_i \approx \sum_d v_d \left( w_S\, (\partial_d u)_{S_d} + w_C\, (\partial_d u)_C \right),
