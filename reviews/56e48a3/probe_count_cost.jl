@@ -1,0 +1,17 @@
+# Cost of _count_inadmissible per checkpoint vs a whole MOOD step (2-D, MUSCL2 VK, MOOD EPD1 + U1)
+include(joinpath(@__DIR__, "common.jl"))
+eq = Adv{2, Float64}(SVector(1.0, 0.5))
+for n in (200, 700)
+    pg = grid2d(n; jitter = 0.2)
+    setic!(pg, x -> (abs(x[1] - 0.5) < 0.2 && abs(x[2] - 0.5) < 0.2) ? 1.0 : 0.0)
+    m  = MUSCL(Float64, 2, 1, 2, VenkatakrishnanLimiter(:hard), RusanovFlux())
+    ts = GeneralRKTimeStepper(eq, m, MOOD(EPD1(), MOODu1(1e-6)), RK3_SSP_Tableau(Float64))
+    dt = 0.4 * get_time_step(pg, eq, m)
+    ts(eq, pg, 0.0, dt); ts(eq, pg, dt, dt)
+    HCC._count_inadmissible(eq, pg, pg.rhos)
+    tstep  = minimum(@elapsed(ts(eq, pg, 0.0, dt)) for _ in 1:5)
+    tcount = minimum(@elapsed(HCC._count_inadmissible(eq, pg, pg.rhos)) for _ in 1:20)
+    alloc  = @allocated HCC._count_inadmissible(eq, pg, pg.rhos)
+    println("N = $(pg.meta.N), threads $(Threads.nthreads()): step $(round(tstep * 1e3; digits = 2)) ms, one count $(round(tcount * 1e3; digits = 3)) ms ",
+            "(x4 checkpoints = $(round(400 * tcount / tstep; digits = 2)) % of the step), allocated $alloc bytes, inadmissible $(mood_inadmissible(ts))")
+end

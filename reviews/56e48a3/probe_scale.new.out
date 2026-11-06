@@ -1,0 +1,41 @@
+Float64 MUSCL3 VK box jitter=0.0: 2^-50: bitwise, 2^-100: bitwise, 2^40: bitwise; O(1) sum|u| = 17.0, min -6.638420519292883e-47, max 1.0000000000000002
+Float64 MUSCL3 VK box jitter=0.3: 2^-50: bitwise, 2^-100: bitwise, 2^40: bitwise; O(1) sum|u| = 18.35564646292583, min -7.426238839432377e-52, max 1.0000000000000002
+Float64 MUSCL3 VK gauss jitter=0.0: 2^-50: bitwise, 2^-100: bitwise, 2^40: bitwise; O(1) sum|u| = 5.317361552716547, min -3.03363388126499e-39, max 0.8744397704943331
+Float64 MUSCL3 VK gauss jitter=0.3: 2^-50: bitwise, 2^-100: bitwise, 2^40: bitwise; O(1) sum|u| = 5.249099443256936, min 5.227516613113949e-37, max 0.8880513315499029
+Float64 MUSCL3 BJsoft box jitter=0.0: 2^-50: bitwise, 2^-100: bitwise, 2^40: bitwise; O(1) sum|u| = 17.176683666492902, min -0.051839293238052045, max 1.0518393801049626
+Float64 MUSCL3 BJsoft box jitter=0.3: 2^-50: bitwise, 2^-100: bitwise, 2^40: bitwise; O(1) sum|u| = 18.565275768318553, min -0.05195424575776369, max 1.0507206865473717
+Float64 MUSCL3 BJsoft gauss jitter=0.0: 2^-50: bitwise, 2^-100: bitwise, 2^40: bitwise; O(1) sum|u| = 5.317772834739521, min -0.00014204359566226328, max 0.9161904804542272
+Float64 MUSCL3 BJsoft gauss jitter=0.3: 2^-50: bitwise, 2^-100: bitwise, 2^40: bitwise; O(1) sum|u| = 5.249993423537949, min -0.0004768150681352864, max 0.9190220393997826
+Float64 MUSCL2 Minmod box jitter=0.0: 2^-50: bitwise, 2^-100: bitwise, 2^40: bitwise; O(1) sum|u| = 17.0, min -1.701590013001116e-24, max 0.9999998854234937
+Float64 MUSCL2 Minmod box jitter=0.3: 2^-50: bitwise, 2^-100: bitwise, 2^40: bitwise; O(1) sum|u| = 18.139889767689347, min -3.0955049971819337e-12, max 1.0000644443668134
+Float64 MUSCL2 Minmod gauss jitter=0.0: 2^-50: bitwise, 2^-100: bitwise, 2^40: bitwise; O(1) sum|u| = 5.317361552716549, min 2.551910305535522e-27, max 0.7400418552769027
+Float64 MUSCL2 Minmod gauss jitter=0.3: 2^-50: bitwise, 2^-100: bitwise, 2^40: bitwise; O(1) sum|u| = 5.224573909724519, min -1.7163149196456834e-11, max 0.7459563845651102
+Float64 MUSCL2 Superbee box jitter=0.0: 2^-50: bitwise, 2^-100: bitwise, 2^40: bitwise; O(1) sum|u| = 17.15643992892241, min -0.031374559597235605, max 1.0313745529571317
+Float64 MUSCL2 Superbee box jitter=0.3: 2^-50: bitwise, 2^-100: bitwise, 2^40: bitwise; O(1) sum|u| = 18.279238989463693, min -0.02567008534425352, max 1.0237118869410455
+Float64 MUSCL2 Superbee gauss jitter=0.0: 2^-50: bitwise, 2^-100: bitwise, 2^40: bitwise; O(1) sum|u| = 5.4801635089485154, min -0.02847407950373551, max 0.7964947712092799
+Float64 MUSCL2 Superbee gauss jitter=0.3: 2^-50: bitwise, 2^-100: bitwise, 2^40: bitwise; O(1) sum|u| = 5.3475591858511216, min -0.024961706287689813, max 0.7918898610105747
+Float64 WENO2 box jitter=0.0: 2^-50: bitwise, 2^-100: bitwise, 2^40: bitwise; O(1) sum|u| = 17.00000517464496, min 0.0, max 1.000000271827192
+Float64 WENO2 box jitter=0.3: 2^-50: bitwise, 2^-100: bitwise, 2^40: bitwise; O(1) sum|u| = 18.3085497564375, min -2.9507363188252756e-12, max 1.0000000872097679
+Float64 WENO2 gauss jitter=0.0: 2^-50: bitwise, 2^-100: bitwise, 2^40: bitwise; O(1) sum|u| = 5.726976231893342, min -3.975505260280113e-20, max 0.920752716265746
+Float64 WENO2 gauss jitter=0.3: 2^-50: bitwise, 2^-100: bitwise, 2^40: bitwise; O(1) sum|u| = 5.5523183806374545, min -2.550318343362841e-6, max 0.9158632688771274
+Float32 MUSCL3 VK box jitter=0.0: 2^-50: bitwise, 2^40: max rel dev 2.2420775429197073e-44; O(1) sum|u| = 18.0, min -2.124484e-33, max 1.0000001
+Float32 MUSCL3 VK box jitter=0.3: 2^-50: max rel dev 1.262177448353619e-29, 2^40: max rel dev 1.401298464324817e-45; O(1) sum|u| = 17.823856, min -2.8048945e-22, max 1.0000001
+Float32 MUSCL3 VK gauss jitter=0.0: 2^-50: max rel dev 3.2145696701767354e-30, 2^40: max rel dev 2.802596928649634e-45; O(1) sum|u| = 5.317361, min -3.034213e-39, max 0.87444025
+Float32 MUSCL3 VK gauss jitter=0.3: 2^-50: max rel dev 2.524354896707238e-29, 2^40: bitwise; O(1) sum|u| = 5.1740956, min 2.3484687e-35, max 0.9034661
+Float32 MUSCL3 BJsoft box jitter=0.0: 2^-50: bitwise, 2^40: bitwise; O(1) sum|u| = 18.176683, min -0.051839303, max 1.051839
+Float32 MUSCL3 BJsoft box jitter=0.3: 2^-50: bitwise, 2^40: bitwise; O(1) sum|u| = 18.081005, min -0.08010753, max 1.0673634
+Float32 MUSCL3 BJsoft gauss jitter=0.0: 2^-50: bitwise, 2^40: bitwise; O(1) sum|u| = 5.317772, min -0.00014204299, max 0.91619086
+Float32 MUSCL3 BJsoft gauss jitter=0.3: 2^-50: bitwise, 2^40: bitwise; O(1) sum|u| = 5.1777124, min -0.00034814418, max 0.9474482
+Float32 MUSCL2 Minmod box jitter=0.0: 2^-50: max rel dev 1.4483753021340385e-30, 2^40: max rel dev 0.0; O(1) sum|u| = 18.0, min -3.5829348e-14, max 1.0
+Float32 MUSCL2 Minmod box jitter=0.3: 2^-50: bitwise, 2^40: bitwise; O(1) sum|u| = 17.989986, min -8.736521e-9, max 1.0000812
+Float32 MUSCL2 Minmod gauss jitter=0.0: 2^-50: max rel dev 1.262177448353619e-29, 2^40: bitwise; O(1) sum|u| = 5.317362, min 2.5518358e-27, max 0.7400419
+Float32 MUSCL2 Minmod gauss jitter=0.3: 2^-50: bitwise, 2^40: bitwise; O(1) sum|u| = 5.275872, min -1.8910673e-13, max 0.74005455
+Float32 MUSCL2 Superbee box jitter=0.0: 2^-50: bitwise, 2^40: bitwise; O(1) sum|u| = 18.156439, min -0.031374466, max 1.0313747
+Float32 MUSCL2 Superbee box jitter=0.3: 2^-50: bitwise, 2^40: bitwise; O(1) sum|u| = 18.108564, min -0.024112688, max 1.0246938
+Float32 MUSCL2 Superbee gauss jitter=0.0: 2^-50: bitwise, 2^40: bitwise; O(1) sum|u| = 5.4801626, min -0.02847401, max 0.79649484
+Float32 MUSCL2 Superbee gauss jitter=0.3: 2^-50: bitwise, 2^40: bitwise; O(1) sum|u| = 5.4019094, min -0.026689252, max 0.7954695
+Float32 WENO2 box jitter=0.0: 2^-50: max rel dev 4.9133202992379665e-5, 2^40: max rel dev 1.9174072448373324e-20; O(1) sum|u| = 17.999996, min -4.192678e-17, max 1.0000001
+Float32 WENO2 box jitter=0.3: 2^-50: max rel dev 0.00012916326522827148, 2^40: max rel dev 1.2505646888145553e-20; O(1) sum|u| = 17.784605, min -1.2718506e-15, max 1.0000004
+Float32 WENO2 gauss jitter=0.0: 2^-50: max rel dev 0.0001332610845565796, 2^40: max rel dev 2.220446049250313e-16; O(1) sum|u| = 5.7269745, min -5.9974317e-20, max 0.92075324
+Float32 WENO2 gauss jitter=0.3: 2^-50: max rel dev 0.00010100752115249634, 2^40: max rel dev 4.174178364069192e-18; O(1) sum|u| = 5.7007523, min -0.002604565, max 0.9199517
+2-D MUSCL3 VK jittered box 2^-50: bitwise; O(1) min -0.05079371582370921 max 1.0512223478876443
