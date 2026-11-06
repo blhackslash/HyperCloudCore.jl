@@ -74,8 +74,10 @@ end
 Detects holes and clusters, applies the conservative remap for every event on the old topology,
 changes the particle set, and rebuilds the neighbour lists. `max_order` is the scheme's maximum
 consistency order (new particles start there, and `exclude_reduced_order` compares against it).
-Requires valid neighbour lists and volumes (`update_volumes!`). `mass_residual` is the change of
-`total_mass` over the call, which should be at round-off level. Merges and insertions involve interior
+Requires valid neighbour lists and volumes (`update_volumes!`). `mass_residual` is the change of the interior
+content `Σ V U` (boundary particles excluded) over the call, which should be at round-off level; with a
+`volume_estimator` the ghosts' content changes with their re-estimated volumes, so `total_mass` (which includes
+them) does not stay exact on grids with walls. Merges and insertions involve interior
 particles only (no insertion between an interior particle and a ghost). On a grid whose buffers
 `reserve!` froze, a `CapacityError` is thrown before the grid is changed: the particle buffers and the neighbour
 slots the new particle set needs (`_slots_after_events`) are checked before the first remap.
@@ -90,7 +92,7 @@ function adapt_particles!(pg::ParticleGrid{D, M, T}, ad::ParticleAdaptivity{T}, 
     nothing_done = (inserted = 0, removed = 0, mass_residual = zero(State{M, T}))
     pg.meta.N == 0 && return nothing_done
     _has_adapt_candidates(pg, ad) || return nothing_done
-    mass0 = total_mass(pg)
+    mass0 = _interior_mass(pg)
 
     on_host = parent(pg.rhos) isa Array
     hg = on_host ? pg : device_grid(Array, pg)            # the event work is serial: on a host copy of a device grid
@@ -127,7 +129,7 @@ function adapt_particles!(pg::ParticleGrid{D, M, T}, ad::ParticleAdaptivity{T}, 
     pg.neighbor(pg)
     changed === nothing || _reestimate_volumes!(pg, hg, ad.volume_estimator, changed)
 
-    return (inserted = length(new_pos), removed = n_removed, mass_residual = total_mass(pg) - mass0)
+    return (inserted = length(new_pos), removed = n_removed, mass_residual = _interior_mass(pg) - mass0)
 end
 
 """
@@ -208,13 +210,15 @@ steps use, and the states stay the remap's up to that small correction. Keeping 
 (`U_i ← V_i^remap U_i / V_i^est`) would also be exact, but the remap's volumes (integrals of the Shepard partition)
 and an estimator's differ by several percent per particle near an event, which that would put into the states.
 `hg` is the host grid of the event work (`pg` itself on the host, its host copy for a device grid).
+Only the interior content is restored: the estimator also changes the volumes of ghost particles near an event, and
+their content change stays with them (it used to be moved onto the interior, i.e. across the wall).
 """
 function _reestimate_volumes!(pg::ParticleGrid{D, M, T}, hg::ParticleGrid{D, M, T}, est::VolumeEstimator,
                               changed::Dict{Int, Tuple{State{M, T}, State{M, T}}}) where {D, M, T}
     N = pg.meta.N
-    m_remap = total_mass(pg)
+    m_remap = _interior_mass(pg)
     update_volumes!(pg, est)
-    ε = m_remap - total_mass(pg)
+    ε = m_remap - _interior_mass(pg)
     (isempty(changed) || iszero(ε)) && return nothing
 
     on_host = hg === pg
@@ -329,11 +333,15 @@ function _detect_events(pg::ParticleGrid{D, M, T}, ad::ParticleAdaptivity{T}, ma
     fill!(view(touched, 1:N), false)
 
     idx, dvec = Int[], Space{D, T}[]
-    # Shock band: particles whose order was lowered, plus everything their remap could touch
+    # Shock band: particles whose order was lowered, plus every particle whose events could reach them. A remap
+    # changes its whole local set (radius `R(1 + 2√D) + dx` around the event centre: residual correction and DMP
+    # repair), and the centre lies within `R/2` of the particle that starts the event. `4R` (the former radius)
+    # covers that in 1-D only.
+    band = max(4R, R * (T(3) / 2 + 2 * sqrt(T(D))) + dx)
     if ad.exclude_reduced_order
         for i in 1:N
             if !isb[i] && 0 < orders[i] < max_order   # 0 = never set (fresh grid), not a drop
-                n = _collect_near!(pg, pos[i], (4R)^2, idx, dvec)
+                n = _collect_near!(pg, pos[i], band^2, idx, dvec)
                 for k in 1:n; touched[idx[k]] = true; end
             end
         end
@@ -606,7 +614,12 @@ function _dmp_repair!(U::Vector{State{M, T}}, V::Vector{T}, lo::Vector{State{M, 
                 excess += V[p] * (u - lo[p][m]); Um[p][m] = lo[p][m]
             end
         end
-        abs(excess) <= eps(T) && continue
+        # Round-off relative to the set's content (an absolute eps(T) dropped real excesses of small-volume sets)
+        scale = zero(T)
+        for p in 1:n
+            scale += V[p] * max(abs(hi[p][m]), abs(lo[p][m]))
+        end
+        abs(excess) <= 4 * eps(T) * scale && continue
         room = zero(T)
         for p in 1:n
             room += excess > 0 ? V[p] * (hi[p][m] - Um[p][m]) : V[p] * (Um[p][m] - lo[p][m])
