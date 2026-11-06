@@ -32,7 +32,7 @@ end
 An upwind numerical interface flux evaluator.
 
 # Details
-- **Scalar Systems (`M = 1`)**: Evaluates the Rankine-Hugoniot shock speed `s = |ΔF / Δu|`. If states are nearly coincident (`|Δu| < 1e-14`), it extracts the wave speed directly from the scalar flux Jacobian.
+- **Scalar Systems (`M = 1`)**: the Murman–Roe flux `½ (F_L + F_R) - ½ s (u_R - u_L)` with the Rankine-Hugoniot (secant) speed `s = |ΔF / Δu|`, i.e. dissipation `|s|` from the secant, not an exact Riemann solution (it admits expansion shocks at sonic points). If the states nearly coincide (`|Δu| ≤ √ε max(|u_L|, |u_R|)`, relative to the states), it takes the wave speed from the scalar flux Jacobian at `u_L`.
 - **Vector Systems (`M > 1`)**: Automatically falls back to dispatching `RusanovFlux`
 """
 struct UpwindFlux <: NumericalFluxFunction end
@@ -135,8 +135,10 @@ end
     
     return Flux{D, 1, T}(ntuple(Val(D)) do d
         du = f_R[d][1] - f_L[d][1]
-        
-        if abs(du) < T(1e-14)
+
+        # The secant loses digits as the states approach each other (`ΔF` is accurate to `ε |F|`): below
+        # `√ε max(|u_L|, |u_R|)` the Jacobian at `u_L` is as close to the secant as the secant is to itself
+        if abs(du) <= sqrt(eps(T)) * max(abs(f_L[d][1]), abs(f_R[d][1]))
             # Extract the scalar speed from the 1x1 Jacobian SMatrix
             s = abs(velocity(eq, f_L[d], d)[1, 1])
         else

@@ -32,7 +32,7 @@ Upwind divergence interpolator for evaluating flux derivatives in hyperbolic PDE
 
 Evaluates the divergence at particle `i`. The behavior dispatched depends on the underlying `Algorithm`:
 - **Classic Algorithm**: Computes interface fluxes via standard Riemann solver logic and non-conservative jump evaluation. Dynamically degrades interpolation order based on neighbor count.
-- **Tiwari Algorithm**: Evaluates one-sided directional stencils masked by the advection velocity sign, calculating the divergence dimension-by-dimension.
+- **Tiwari Algorithm**: Evaluates one-sided directional stencils masked by the advection velocity sign, calculating the divergence dimension-by-dimension. A direction whose upwind side has fewer than `D` neighbours (a grid edge without ghost layers on the inflow side) contributes zero: the particle keeps its value along that direction, a frozen-inflow condition, rather than a fit on downwind data.
 - **Praveen Algorithm**: Uses a strictly first-order, stateless approach computing upwind fluxes via local moment matrices and edge normal/tangential velocities.
 
 # Fields
@@ -213,7 +213,9 @@ function (upwind::UpwindDivergence{2, 1, T, MAX_ORDER, DIV_ORDER, B_LEN, INTERPS
         N_s += w_k * (dist_s * dist_s')
     end
     
-    if abs(det(N_s)) < T(1e-14); return zero(State{1, T}); end
+    # Singular (collinear) neighbourhood, relative to the size of the moment matrix (the weights carry units for
+    # `InverseWeightFunction`): det / tr² is a dimensionless conditioning measure in [0, 1/4]
+    if abs(det(N_s)) <= 4 * eps(T) * tr(N_s)^2; return zero(State{1, T}); end
 
     div = zero(State{1, T})
 
@@ -225,7 +227,7 @@ function (upwind::UpwindDivergence{2, 1, T, MAX_ORDER, DIV_ORDER, B_LEN, INTERPS
         coeff = c_s * invL
 
         hyp = norm(dist_k)
-        if hyp < T(1e-14)
+        if hyp <= eps(T) * scale
             nx, ny = one(T), zero(T)
         else
             nx, ny = dist_k[1]/hyp, dist_k[2]/hyp
