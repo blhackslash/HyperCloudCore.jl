@@ -1,5 +1,6 @@
-name: AI badge
+name: Signoff-Badges
 
+# Summarises the AI declarations of the PRs merged into the default branch as README badges.
 on:
   push:
     branches: ["main"]
@@ -9,8 +10,8 @@ permissions:
   contents: write
 
 jobs:
-  badge:
-    uses: industrial-mathematics-group/.github/.github/workflows/ai-badge.yml@main
+  signoff-badges:
+    uses: industrial-mathematics-group/.github/.github/workflows/signoff-badges.yml@main
     # with:
     #   # last commit on main declared on the previous AI review scale (A-, A0-A3), if any
     #   previous-ai-scale-until: 0123abc

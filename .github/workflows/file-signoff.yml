@@ -1,0 +1,19 @@
+name: File-signoff
+
+# Checks with aisignoff that every file is declared in SIGNOFF.toml or inline tags,
+# and publishes the file badges on pushes to the default branch.
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  file-signoff:
+    uses: industrial-mathematics-group/.github/.github/workflows/file-signoff.yml@main
+    with:
+      weight: lines            # weight the badges by lines instead of files
+    #   aisignoff-ref: v0.4.0    # pin a release of aisignoff
