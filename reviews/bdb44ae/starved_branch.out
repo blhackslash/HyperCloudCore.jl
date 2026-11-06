@@ -1,0 +1,6 @@
+D1 MUSCL3 R1.2       particles with < D+1 neighbours: 19 (min 0), ok=false: 1, dt·n = 0.68388, finite = true
+D2 MUSCL3 R1.2       particles with < D+1 neighbours: 30 (min 1), ok=false: 0, dt·n = 0.01139, finite = true
+D2 MUSCL5 R1.5       particles with < D+1 neighbours: 0 (min 4), ok=false: 0, dt·n = 0.02034, finite = true
+D1 MUSCL3 R1.2: max|branch - parent| = 2.0550361412574603e-10
+D2 MUSCL3 R1.2: max|branch - parent| = 0.005296366931532015
+D2 MUSCL5 R1.5: max|branch - parent| = 1.4432899320127035e-15

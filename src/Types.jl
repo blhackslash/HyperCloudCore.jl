@@ -10,7 +10,8 @@ export TimeStepper, MOODStrategy, MOODCriterion, Halo, MOOD, NoMOOD, NoStrategy
 Base type for Moving Least Squares (MLS) kernel weight functions.
 
 # API Requirements
-- Must be callable as `(wf::MLSWeightFunction)(r::Real) -> Real`, returning the scaling weight for a given radial distance `r`.
+- Must be callable as `(wf::MLSWeightFunction)(r²::Real) -> Real`, returning the scaling weight for a given **squared**
+  distance `r²` (the neighbour search passes squared distances, which saves a square root per pair).
 - Should track its internal cutoff/interpolation range.
 """
 abstract type MLSWeightFunction end
@@ -152,7 +153,7 @@ abstract type AbstractSourceTerm end
 Source term evaluated explicitly during the explicit Runge-Kutta or IMEX explicit stages.
 
 # API Requirements
-- Must implement `evaluate_sources(st::AbstractExplicitSourceTerm, f_i, i, pg, t) -> State{M, T}`.
+- Must implement `evaluate_source(st::AbstractExplicitSourceTerm, f_i, i, pg, t) -> State{M, T}`.
 """
 abstract type AbstractExplicitSourceTerm <: AbstractSourceTerm end
 
@@ -163,7 +164,7 @@ Source term evaluated implicitly via stiff solvers during IMEX integration.
 
 # API Requirements
 - Must implement `implicit_solve(st::AbstractImplicitSourceTerm, f_i, dt, i, pg, t) -> State{M, T}`.
-- Must implement `pre_solve_updates!(st, current_Y_i, pg, t)` for global pre-computations.
+- May implement `pre_solve_update!(st, current_Y_i, pg, t)` for global pre-computations (default: nothing).
 """
 abstract type AbstractImplicitSourceTerm <: AbstractSourceTerm end
 

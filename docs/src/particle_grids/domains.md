@@ -20,7 +20,15 @@ A `GeometricDomain` describes the physical problem region and nothing else: its 
 get_rectangular_domain(T, mins, maxs; bc_map = Dict(), is_periodic = false)
 ```
 
-`is_periodic` is either one `Bool` for all axes or an `NTuple{D,Bool}`. Tags in 2-D are assigned by the nearest edge: 1 left, 2 right, 3 bottom, 4 top; the edges of a periodic axis are ignored (a channel periodic in x has only the tags 3 and 4). In 1-D and 3-D every boundary point has tag 1: both walls of an interval get the same condition, so `Dict(1 => FixedDirichlet(), 2 => OutflowBC())` applies Dirichlet on both walls in 1-D.
+`is_periodic` is either one `Bool` for all axes or an `NTuple{D,Bool}`. Boundary points get the tag of the face they lie outside of: `2d - 1` for the lower and `2d` for the upper face of axis `d`; outside several faces (the edges and corners of the ghost band) the one they are farthest outside of, the lower tag on ties. The faces of a periodic axis are ignored. (Up to 0.7.9 the 2-D tag was that of the nearest face *plane*, also measured from inside the box, so ghosts outside one wall close to another plane carried the other wall's tag.)
+
+| D | tags |
+|:--|:-----|
+| 1 | 1 left (`x = min`), 2 right |
+| 2 | 1 left, 2 right, 3 bottom, 4 top (a channel periodic in x has only 3 and 4) |
+| 3 | 1/2 at `x = min/max`, 3/4 at `y`, 5/6 at `z` |
+
+Up to version 0.7.9, 1-D and 3-D boxes tagged every boundary point 1, so `Dict(1 => bc)` covered both walls of an interval (and every face of a box) and a tag-2 entry was dead. Such a map now covers only the left wall (the x-min face), and the constructor warns that the other tags have no condition: write `Dict(1 => bc, 2 => bc)` (`Dict(t => bc for t in 1:6)` in 3-D). For `FixedDirichlet` that is the same as before. For `OutflowBC` in 3-D it is not exactly the same at the edges and corners of the ghost band: each tag is resolved on its own, and a ghost takes its donor from the interior and from the already resolved ghosts of its own tag only (2–5 % of the ghosts of a cube get different states than with one tag for all faces).
 
 Boundary particles whose tag has no entry in `bc_map` keep their state (like a Dirichlet condition), and an entry whose tag no particle carries does nothing. When a non-empty `bc_map` and the tags of the boundary particles do not match, the `ParticleGrid` constructor warns (once per combination and session). An empty `bc_map` freezes every boundary particle without a warning.
 
@@ -37,7 +45,7 @@ A disc (2-D) or ball (3-D); every exterior point gets tag 1.
 When a `ParticleGrid` is constructed, the domain is wrapped in a `ComputationalDomain`, and points are generated as follows:
 
 1. **Canvas.** On non-periodic axes the bounding box is extended by $\lceil R/\Delta x_d\rceil$ spacings of that axis on each side to host ghost particles, i.e. at least $R$ on every axis; periodic axes get no padding. (Up to version 0.7.9 every axis got $\lceil R/\Delta x_{\max}\rceil$ spacings, which left the band thinner than $R$ on the finer axis of an anisotropic grid.)
-2. **Lattice.** A Cartesian lattice with spacing `nominal_dx` (plus optional jitter `randomness`) covers the canvas. A non-periodic axis gets `round(L/dx) + 1` points, endpoints included: lattice points within round-off ($\sqrt{\varepsilon}\,\Delta x$) of a wall are put on the wall exactly before the jitter is added, so both walls are interior. A periodic axis gets `round(L/dx)` points, because the endpoint coincides with the start point after wrapping.
+2. **Lattice.** A Cartesian lattice with spacing `nominal_dx` (plus optional jitter `randomness`) covers the canvas. A non-periodic axis gets `round(L/dx) + 1` points, endpoints included: if a wall lies on the lattice (its index `(w - canvas_min)/dx` is an integer up to the round-off of the wall, the canvas minimum and the division), that lattice point is put on the wall exactly before the jitter is added, so both walls are interior. A wall between two lattice points (an extent that is not a multiple of `dx`) is not snapped, however close. (Up to version 0.7.9 a distance tolerance did the snapping; far from the origin in Float32 it grew to almost `dx` and could put two points on a wall.) A periodic axis gets `round(L/dx)` points, because the endpoint coincides with the start point after wrapping.
 3. **Narrow band.** Lattice points outside the physical region are kept only if they lie within $R + \Delta x_{\max}$ of an interior point. These become the boundary (ghost) particles.
 4. **Tags.** `get_tag` sets `tags` and `is_boundary = (tag != 0)`.
 

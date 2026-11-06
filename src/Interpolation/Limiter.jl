@@ -69,13 +69,19 @@ end
     return u_max, u_min
 end
 
-# Tighten the bounding coefficient of every equation with one reconstructed interface increment.
+# Tighten the bounding coefficient of every equation with one reconstructed interface increment. Increments at
+# round-off level of `u_i` and of the bound they point to are left alone: relative to that scale rather than
+# absolute, so a profile of height 1e-13 is limited like one of height 1. The bound the increment points to, not the
+# whole local range: at a near-vacuum minimum next to O(1) data (`u_i ≈ u_min ≈ 0`, `u_max = 1`) a range-relative
+# cut-off let round-off-level slopes take Float32 interface values below zero.
 @inline function _update_phi(strategy, phi::State{M, T}, delta_recon::State{M, T}, f_i::State{M, T},
                              u_max::State{M, T}, u_min::State{M, T}) where {M, T}
     return State{M, T}(ntuple(Val(M)) do m
         recon_m = delta_recon[m]
-        if abs(recon_m) > T(1e-12)
-            r = recon_m > zero(T) ? (u_max[m] - f_i[m]) / recon_m : (u_min[m] - f_i[m]) / recon_m
+        bound   = recon_m > zero(T) ? u_max[m] : u_min[m]
+        tol_m   = 16 * eps(T) * max(abs(f_i[m]), abs(bound))
+        if abs(recon_m) > tol_m
+            r = (bound - f_i[m]) / recon_m
             min(phi[m], limiter_phi(strategy, r))
         else
             phi[m]
@@ -139,6 +145,18 @@ end
 # =========================================================================
 # 1D DIRECTIONAL LIMITERS (Minmod & Superbee)
 # =========================================================================
+# Sign tests instead of products: `sL * sR` underflows to zero for slopes below ~1e-154 (1e-19 in Float32)
+@inline _same_sign(a, b) = !iszero(a) && !iszero(b) && signbit(a) == signbit(b)
+
+# Minmod and Superbee limit along the 1-D stencil only: rejected when the scheme is built (the kernel-side error
+# below stays as a guard for a scheme used on a grid of another dimension)
+_check_limiter_dimension(limiter, D::Int) = nothing
+function _check_limiter_dimension(limiter::Union{SuperbeeLimiter, MinmodLimiter}, D::Int)
+    D == 1 || throw(ArgumentError("$(nameof(typeof(limiter))) is a one-dimensional limiter and cannot be used in $(D)-D; " *
+                                  "use BarthJespersenLimiter or VenkatakrishnanLimiter instead."))
+    return nothing
+end
+
 function _limit_slopes(strategy::Union{SuperbeeLimiter, MinmodLimiter}, raw_grad, nb_slice, f_i, f_neighbors,
                        pg::ParticleGrid{D}, distVec, ::Val) where {D}
     error("$(nameof(typeof(strategy))) is a one-dimensional limiter and cannot be used on a $(D)-D grid; " *
@@ -158,37 +176,35 @@ function _limit_slopes(
     
     val_L, val_R = f_i, f_i
     dist_L, dist_R = zero(T), zero(T)
-    min_dist_L, min_dist_R = T(Inf), T(Inf)
+    # Nearest neighbour on each side; (nearly) coincident particles are skipped, relative to the spacing
+    min_dist = T(1e-6) * pg.meta.dx[1]
 
     @inbounds for global_idx in nb_slice
-        dx_k = distVec[global_idx][1] 
-        
-        if dx_k > T(1e-9) && dx_k < min_dist_R
-            min_dist_R = dx_k
+        dx_k = distVec[global_idx][1]
+
+        if dx_k > min_dist && (iszero(dist_R) || dx_k < dist_R)
             val_R = f_neighbors[global_idx]
             dist_R = dx_k
-        elseif dx_k < -T(1e-9) && -dx_k < min_dist_L
-            min_dist_L = -dx_k
+        elseif dx_k < -min_dist && (iszero(dist_L) || dx_k > dist_L)
             val_L = f_neighbors[global_idx]
             dist_L = dx_k
         end
     end
 
-    slope_L = abs(dist_L) > T(1e-12) ? (f_i - val_L) / (-dist_L) : zero(State{M, T})
-    slope_R = abs(dist_R) > T(1e-12) ? (val_R - f_i) / dist_R    : zero(State{M, T})
+    slope_L = iszero(dist_L) ? zero(State{M, T}) : (f_i - val_L) / (-dist_L)
+    slope_R = iszero(dist_R) ? zero(State{M, T}) : (val_R - f_i) / dist_R
 
     phi_scale = State{M, T}(ntuple(Val(M)) do m
         sL = slope_L[m]
         sR = slope_R[m]
-        orig_slope = raw_grad[1][m] 
-        
-        if sL * sR <= zero(T)
+        orig_slope = raw_grad[1][m]
+
+        if !_same_sign(sL, sR)
             zero(T)
         else
-            r = abs(sR) < T(1e-12) ? one(T) : sL / sR
-            new_slope = limiter_phi(strategy, r) * sR
-            
-            orig_slope * new_slope <= zero(T) ? zero(T) : clamp(new_slope / orig_slope, zero(T), one(T))
+            new_slope = limiter_phi(strategy, sL / sR) * sR
+
+            _same_sign(orig_slope, new_slope) ? clamp(new_slope / orig_slope, zero(T), one(T)) : zero(T)
         end
     end)
     

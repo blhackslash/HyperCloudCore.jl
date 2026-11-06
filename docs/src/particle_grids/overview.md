@@ -21,7 +21,7 @@ pg = ParticleGrid(geom, nominal_dx, weight_func, M;
 | `mover::GridMover` | Grid velocity model; `NoGridMover()` keeps the particles fixed (see [Moving Grids (ALE)](@ref)). |
 | `volume_estimator::VolumeEstimator` | How `pg.core.volumes` is computed; `ShepardVolumes()` by default (see [Particle Volumes and Adaptivity](@ref)). |
 
-The constructor generates the point cloud, runs a neighbour search, reorders the particles along a space-filling curve, searches again on the reordered cloud, and computes the particle volumes.
+The constructor generates the point cloud, reorders the particles along a space-filling curve (this needs only the positions and the canvas box), runs the neighbour search once on the reordered cloud, and computes the particle volumes.
 
 ## Internal structure
 
@@ -64,7 +64,7 @@ A particle is never its own neighbour. For moving grids, `refresh_geometry!` rec
 \Delta t = \min_i \frac{1}{D \sum_{j} \sum_d \lvert c^{(d)}_{ij} \rvert\, \max\big(\lambda_d(U_i), \lambda_d(U_j)\big) },
 ```
 
-where $\lambda_d$ is `max_eigenvalue(eq, U, d)` and $c^{(d)}_{ij}$ are the weights of the first-derivative operator of the MLS fit at particle $i$. Every neighbour enters with the pair speed, boundary particles included, so a fast inflow state limits the step of its interior neighbours before it is inside; $\lvert c_{ij}\rvert \max(\lambda_i, \lambda_j)$ is the coefficient of neighbour $j$ in the first-order update, which makes this the local-extremum-diminishing bound. A `MUSCL` scheme whose divergence cache is current (after its first right-hand side) supplies the per-slot weights of its divergence fit and no moment matrix is factorised; otherwise the fit is assembled per particle. The fit degree is `_divergence_degree(interp)`: the consistency order for Central/WENO/Upwind, and for MUSCL the degree of its divergence fit (order − 1 for even and order for odd orders, see [MUSCL Reconstruction and Limiting](@ref)). Degrees above 4 (3 in 3-D) are clamped. Multiply the result by your CFL number.
+where $\lambda_d$ is `max_eigenvalue(eq, U, d)` and $c^{(d)}_{ij}$ are the weights of the first-derivative operator of the MLS fit at particle $i$. Every neighbour enters with the pair speed, boundary particles included, so a fast inflow state limits the step of its interior neighbours before it is inside; $\lvert c_{ij}\rvert \max(\lambda_i, \lambda_j)$ is the coefficient of neighbour $j$ in the first-order update, which makes this the local-extremum-diminishing bound. A `MUSCL` scheme supplies the per-slot weights of its cached divergence fit (`get_time_step` refreshes the cache if the geometry changed) and no moment matrix is factorised; these are the weights of the fit each particle uses, also where the neighbour-count safeguard lowers its degree. Otherwise (other schemes, or `cached_weights = false`) the fit is assembled per particle. The degree of the assembled fit is `_divergence_degree(interp)`: the consistency order for Central/WENO/Upwind, and for MUSCL the degree of its divergence fit (order − 1 for even and order for odd orders, see [MUSCL Reconstruction and Limiting](@ref)). Degrees above 4 (3 in 3-D) are clamped. Multiply the result by your CFL number.
 
 ### What the CFL number means on a point cloud
 
@@ -96,7 +96,7 @@ RK2 (SSP) and RK4, Float32/Float64, from the HyperCloud.jl example problems (202
 | 1-D Sod, 330 particles, radius 5.5 Δx | RK2 Upwind1, MUSCL2 (MOOD, VK, minmod); RK4 MUSCL4 MOOD | 1.2 | 1.5 (VK and minmod still run) |
 | 1-D linear advection, smooth | RK4 MUSCL2 … MUSCL5 | 1.5 (MUSCL2) … 3.0 (MUSCL5) | 2.0 … 4.0 |
 
-On the 2-D shock problems, the solutions at CFL 1 differ from those at CFL 0.2 by 1e-5 (limiters, first order) to a few 1e-3 (MOOD, whose order decisions shift) in relative L1 norm of the density, far below the discretisation error. CFL 0.5 – 1 is a reasonable default for shock problems in 2-D; in 1-D stay at or below 1.
+On the 2-D shock problems, the solutions at CFL 1 differ from those at CFL 0.2 by 1e-5 (limiters, first order) to a few 1e-3 (MOOD, whose order decisions shift) in relative L1 norm of the density, far below the discretisation error. CFL 0.5 – 1 is a reasonable default for shock problems in 2-D; in 1-D stay at or below 1, and below about 0.6 for a limited MUSCL3 with RK3 on a radius of 2.5 Δx. There the neighbour-count safeguard lowers the divergence fit to degree 2, whose weights are smaller than those of the degree-3 fit, so the CFL step is 2.3 times longer than up to 0.7.9 (the CFL estimate then used the unused degree-3 weights). Limited MUSCL3 with Venkatakrishnan and RK3 overshoots a square wave by 0.08 % at CFL 0.6, 0.5 % at 0.8 and 1.4 % at 1.0; MUSCL2, RK2 or MOOD keep it bounded (MOOD at some cost in accuracy).
 
 On moving grids this estimate uses the absolute wave speed $\lambda$, not the relative speed $\lvert\lambda - w\rvert$ seen by the scheme. See [Moving Grids (ALE)](@ref) for the consequences.
 

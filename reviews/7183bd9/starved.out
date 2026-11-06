@@ -1,0 +1,23 @@
+D=1 R=1.2 dx jitter=0.20 periodic=1: 52 of 200 interior particles starved
+D=1 R=1.2 dx jitter=0.20 periodic=0: 51 of 200 interior particles starved
+D=1 R=1.2 dx jitter=0.30 periodic=1: 76 of 200 interior particles starved
+D=1 R=1.2 dx jitter=0.30 periodic=0: 77 of 200 interior particles starved
+D=1 R=1.2 dx jitter=0.45 periodic=1: 103 of 200 interior particles starved
+D=1 R=1.2 dx jitter=0.45 periodic=0: 104 of 200 interior particles starved
+D=1 R=1.5 dx jitter=0.30 periodic=1: 5 of 200 interior particles starved
+D=1 R=1.5 dx jitter=0.30 periodic=0: 5 of 200 interior particles starved
+D=1 R=1.5 dx jitter=0.45 periodic=1: 32 of 200 interior particles starved
+D=1 R=1.5 dx jitter=0.45 periodic=0: 31 of 200 interior particles starved
+D=2 R=1.2 dx jitter=0.20 periodic=1: 38 of 900 interior particles starved
+D=2 R=1.2 dx jitter=0.20 periodic=0: 39 of 893 interior particles starved
+D=2 R=1.2 dx jitter=0.30 periodic=1: 96 of 900 interior particles starved
+D=2 R=1.2 dx jitter=0.30 periodic=0: 92 of 893 interior particles starved
+D=2 R=1.2 dx jitter=0.45 periodic=1: 132 of 900 interior particles starved
+D=2 R=1.2 dx jitter=0.45 periodic=0: 125 of 893 interior particles starved
+D=3 R=1.2 dx jitter=0.20 periodic=1: 6 of 1000 interior particles starved
+D=3 R=1.2 dx jitter=0.20 periodic=0: 5 of 974 interior particles starved
+D=3 R=1.2 dx jitter=0.30 periodic=1: 20 of 1000 interior particles starved
+D=3 R=1.2 dx jitter=0.30 periodic=0: 23 of 974 interior particles starved
+D=3 R=1.2 dx jitter=0.45 periodic=1: 35 of 1000 interior particles starved
+D=3 R=1.2 dx jitter=0.45 periodic=0: 35 of 974 interior particles starved
+done (configurations not listed: no starved particle)

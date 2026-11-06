@@ -1,0 +1,8 @@
+== /workspace/julia/HyperCloudDev/HyperCloudCore.jl/.claude/worktrees/boundary-tags (pulse centre at the right wall, t = 0.4)
+1=>Dirichlet, 2=>Outflow: right ghost tags [2], max|u| interior 0.899, max|u| right ghosts 0.899, interior mass 0.06446 (pulse mass at t=0: 0.1253)
+1=>Outflow only        : right ghost tags [2], max|u| interior 1.137, max|u| right ghosts 2.506e-15, interior mass 0.0673 (pulse mass at t=0: 0.1253)
+1=>Outflow, 2=>Outflow : right ghost tags [2], max|u| interior 0.899, max|u| right ghosts 0.899, interior mass 0.06446 (pulse mass at t=0: 0.1253)
+== /tmp/review_pr4/parent (pulse centre at the right wall, t = 0.4)
+1=>Dirichlet, 2=>Outflow: right ghost tags [1], max|u| interior 1.137, max|u| right ghosts 2.506e-15, interior mass 0.0673 (pulse mass at t=0: 0.1253)
+1=>Outflow only        : right ghost tags [1], max|u| interior 0.899, max|u| right ghosts 0.899, interior mass 0.06446 (pulse mass at t=0: 0.1253)
+1=>Outflow, 2=>Outflow : right ghost tags [1], max|u| interior 0.899, max|u| right ghosts 0.899, interior mass 0.06446 (pulse mass at t=0: 0.1253)

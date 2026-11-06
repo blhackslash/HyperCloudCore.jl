@@ -1,0 +1,4 @@
+test config: max_dx/dx = 6.0, 3.5f0 * ratio = 21.0
+test config: layers = 21
+Float32 sweep: 0 / 7020 with an extra layer; examples (n, ratio, R/dx, layers, expected): Any[]
+Float32 sweep, Float64 spacings: 250 / 7020 with an extra layer; examples (n, ratio, R/dx, layers, expected): Any[(53, 3, 2.0, 7, 6), (53, 3, 3.0, 10, 9), (53, 6, 2.0, 13, 12), (53, 6, 2.5, 16, 15), (53, 6, 3.0, 19, 18)]

@@ -1,0 +1,129 @@
+ERROR: LoadError: Some tests did not pass: 12 passed, 6 failed, 0 errored, 0 broken.
+in expression starting at /tmp/review_pr1/probes/probe_newtests_on_old.jl:5
+
+param2uvec / mixed constructors: Test Failed at /tmp/review_pr1/probes/probe_newtests_on_old.jl:7
+  Expression: try
+    #= /tmp/review_pr1/probes/probe_newtests_on_old.jl:7 =#
+    HC.param2uvec((1, 2.0)) isa SVector{2, Float64}
+catch
+    #= /tmp/review_pr1/probes/probe_newtests_on_old.jl:7 =#
+    false
+end
+  Stacktrace:
+   [1] top-level scope
+     @ /tmp/review_pr1/probes/probe_newtests_on_old.jl:6
+   [2] macro expansion
+     @ /opt/julia/share/julia/stdlib/v1.13/Test/src/Test.jl:1967 [inlined]
+   [3] macro expansion
+     @ /tmp/review_pr1/probes/probe_newtests_on_old.jl:7 [inlined]
+   [4] macro expansion
+     @ /opt/julia/share/julia/stdlib/v1.13/Test/src/Test.jl:1967 [inlined]
+   [5] macro expansion
+     @ /tmp/review_pr1/probes/probe_newtests_on_old.jl:7 [inlined]
+   [6] macro expansion
+     @ /opt/julia/share/julia/stdlib/v1.13/Test/src/Test.jl:758 [inlined]
+
+param2uvec / mixed constructors: Test Failed at /tmp/review_pr1/probes/probe_newtests_on_old.jl:8
+  Expression: try
+    #= /tmp/review_pr1/probes/probe_newtests_on_old.jl:8 =#
+    ExponentialWeightFunction(1.0, 0.25f0) isa ExponentialWeightFunction{Float64}
+catch
+    #= /tmp/review_pr1/probes/probe_newtests_on_old.jl:8 =#
+    false
+end
+  Stacktrace:
+   [1] top-level scope
+     @ /tmp/review_pr1/probes/probe_newtests_on_old.jl:6
+   [2] macro expansion
+     @ /opt/julia/share/julia/stdlib/v1.13/Test/src/Test.jl:1967 [inlined]
+   [3] macro expansion
+     @ /tmp/review_pr1/probes/probe_newtests_on_old.jl:7 [inlined]
+   [4] macro expansion
+     @ /opt/julia/share/julia/stdlib/v1.13/Test/src/Test.jl:1967 [inlined]
+   [5] macro expansion
+     @ /tmp/review_pr1/probes/probe_newtests_on_old.jl:8 [inlined]
+   [6] macro expansion
+     @ /opt/julia/share/julia/stdlib/v1.13/Test/src/Test.jl:758 [inlined]
+
+param2uvec / mixed constructors: Test Failed at /tmp/review_pr1/probes/probe_newtests_on_old.jl:9
+  Expression: try
+    #= /tmp/review_pr1/probes/probe_newtests_on_old.jl:9 =#
+    InverseWeightFunction(1, 0.5) isa InverseWeightFunction{Float64}
+catch
+    #= /tmp/review_pr1/probes/probe_newtests_on_old.jl:9 =#
+    false
+end
+  Stacktrace:
+   [1] top-level scope
+     @ /tmp/review_pr1/probes/probe_newtests_on_old.jl:6
+   [2] macro expansion
+     @ /opt/julia/share/julia/stdlib/v1.13/Test/src/Test.jl:1967 [inlined]
+   [3] macro expansion
+     @ /tmp/review_pr1/probes/probe_newtests_on_old.jl:7 [inlined]
+   [4] macro expansion
+     @ /opt/julia/share/julia/stdlib/v1.13/Test/src/Test.jl:1967 [inlined]
+   [5] macro expansion
+     @ /tmp/review_pr1/probes/probe_newtests_on_old.jl:9 [inlined]
+   [6] macro expansion
+     @ /opt/julia/share/julia/stdlib/v1.13/Test/src/Test.jl:758 [inlined]
+starved warning: Log Test Failed at /tmp/review_pr1/probes/probe_newtests_on_old.jl:31
+  Expression: ParticleGrid(geom, (0.025,), ExponentialWeightFunction(1.0, 1.2 * 0.025), 1; randomness = (0.2 * 0.025,), rng = MersenneTwister(3))
+  Log Pattern: (:warn, r"fewer than 2 neighbours") match_mode = :any
+  Captured Logs: 
+
+Stacktrace:
+ [1] record(ts::Test.DefaultTestSet, t::Test.LogTestFailure)
+   @ Test /opt/julia/share/julia/stdlib/v1.13/Test/src/logging.jl:166
+ [2] top-level scope
+   @ /tmp/review_pr1/probes/probe_newtests_on_old.jl:6
+ [3] macro expansion
+   @ /opt/julia/share/julia/stdlib/v1.13/Test/src/Test.jl:1967 [inlined]
+ [4] macro expansion
+   @ /tmp/review_pr1/probes/probe_newtests_on_old.jl:30 [inlined]
+ [5] macro expansion
+   @ /opt/julia/share/julia/stdlib/v1.13/Test/src/Test.jl:1967 [inlined]
+ [6] macro expansion
+   @ /tmp/review_pr1/probes/probe_newtests_on_old.jl:31 [inlined]
+
+walls + volume estimator: Test Failed at /tmp/review_pr1/probes/probe_newtests_on_old.jl:57
+  Expression: abs(inner() - c0) < 1.0e-13scale
+   Evaluated: 0.00099064743578281 < 1.5157545183880351e-13
+  Stacktrace:
+   [1] top-level scope
+     @ /tmp/review_pr1/probes/probe_newtests_on_old.jl:6
+   [2] macro expansion
+     @ /opt/julia/share/julia/stdlib/v1.13/Test/src/Test.jl:1967 [inlined]
+   [3] macro expansion
+     @ /tmp/review_pr1/probes/probe_newtests_on_old.jl:41 [inlined]
+   [4] macro expansion
+     @ /opt/julia/share/julia/stdlib/v1.13/Test/src/Test.jl:1967 [inlined]
+   [5] macro expansion
+     @ /tmp/review_pr1/probes/probe_newtests_on_old.jl:57 [inlined]
+   [6] macro expansion
+     @ /opt/julia/share/julia/stdlib/v1.13/Test/src/Test.jl:758 [inlined]
+
+walls + volume estimator: Test Failed at /tmp/review_pr1/probes/probe_newtests_on_old.jl:57
+  Expression: abs(inner() - c0) < 1.0e-13scale
+   Evaluated: 0.003484392239884282 < 1.979773234019798e-13
+  Stacktrace:
+   [1] top-level scope
+     @ /tmp/review_pr1/probes/probe_newtests_on_old.jl:6
+   [2] macro expansion
+     @ /opt/julia/share/julia/stdlib/v1.13/Test/src/Test.jl:1967 [inlined]
+   [3] macro expansion
+     @ /tmp/review_pr1/probes/probe_newtests_on_old.jl:41 [inlined]
+   [4] macro expansion
+     @ /opt/julia/share/julia/stdlib/v1.13/Test/src/Test.jl:1967 [inlined]
+   [5] macro expansion
+     @ /tmp/review_pr1/probes/probe_newtests_on_old.jl:57 [inlined]
+   [6] macro expansion
+     @ /opt/julia/share/julia/stdlib/v1.13/Test/src/Test.jl:758 [inlined]
+Test Summary:                     | Pass  Fail  Total  Time
+new tests                         |   12     6     18  9.7s
+  param2uvec / mixed constructors |          3      3  0.6s
+  wall by index (Float32 offset)  |    4            4  1.0s
+  non-divisible extent            |    1            1  0.7s
+  starved warning                 |          1      1  2.9s
+  Float32 ghost layers            |    1            1  0.0s
+  walls + volume estimator        |    6     2      8  4.5s
+RNG of the outermost testset: Xoshiro(0xa0dbbfcafcb4a37a, 0xf411e78376134b86, 0x6768e8acdd0f524b, 0xda4ab7b43752ced7, 0x7a2907a3337ec964)

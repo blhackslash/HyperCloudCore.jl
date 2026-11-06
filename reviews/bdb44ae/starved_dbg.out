@@ -1,0 +1,33 @@
+i=  4 nb=2 q=1 ok=true  dynamic 2.2904769218e+01  cached 2.2904769178e+01  rel diff 1.78e-09
+i= 37 nb=2 q=1 ok=true  dynamic -8.3074929921e+00  cached -8.3074929473e+00  rel diff 5.38e-09
+i= 50 nb=2 q=1 ok=true  dynamic 3.5290229201e+01  cached 3.5290229216e+01  rel diff 4.22e-10
+i= 51 nb=2 q=1 ok=true  dynamic -5.6266987679e+00  cached -5.6266987381e+00  rel diff 5.30e-09
+i= 58 nb=2 q=1 ok=true  dynamic -4.3490447175e+01  cached -4.3490447115e+01  rel diff 1.37e-09
+i= 72 nb=2 q=1 ok=true  dynamic -3.2288486021e+01  cached -3.2288486021e+01  rel diff 0.00e+00
+i= 74 nb=2 q=1 ok=true  dynamic 2.5203816525e+01  cached 2.5203816644e+01  rel diff 4.73e-09
+i= 78 nb=2 q=1 ok=true  dynamic -2.1159764630e+01  cached -2.1159764688e+01  rel diff 2.74e-09
+i= 79 nb=2 q=1 ok=true  dynamic 3.1149661780e+01  cached 3.1149661871e+01  rel diff 2.92e-09
+i= 89 nb=2 q=1 ok=true  dynamic 1.0267517320e+01  cached 1.0267517405e+01  rel diff 8.28e-09
+i= 92 nb=2 q=1 ok=true  dynamic -1.1379012308e+01  cached -1.1379012250e+01  rel diff 5.13e-09
+i=110 nb=2 q=1 ok=true  dynamic 2.1200998206e+01  cached 2.1200998240e+01  rel diff 1.58e-09
+i=119 nb=1 q=1 ok=true  dynamic -1.2096611497e+01  cached -1.2096611750e+01  rel diff 2.09e-08
+i=120 nb=2 q=1 ok=true  dynamic -4.3996884113e-01  cached -4.3996883546e-01  rel diff 1.29e-08
+i=126 nb=2 q=1 ok=true  dynamic -1.0820013281e+01  cached -1.7894220752e+01  rel diff 6.54e-01
+i=130 nb=1 q=1 ok=true  dynamic 9.8522984484e+00  cached 9.8522986220e+00  rel diff 1.76e-08
+i=157 nb=1 q=1 ok=true  dynamic 8.6633603821e+00  cached 8.6633601429e+00  rel diff 2.76e-08
+i=159 nb=2 q=1 ok=true  dynamic -1.0893333440e+01  cached -1.0893333390e+01  rel diff 4.58e-09
+i=162 nb=2 q=1 ok=true  dynamic -2.3496082375e+01  cached -2.3496082480e+01  rel diff 4.44e-09
+i=175 nb=1 q=1 ok=true  dynamic 1.9999407881e+01  cached 1.9999408075e+01  rel diff 9.69e-09
+i=180 nb=2 q=1 ok=true  dynamic 1.7341853088e+00  cached 1.7341853386e+00  rel diff 1.72e-08
+i=204 nb=1 q=1 ok=true  dynamic -7.7958932526e+00  cached -7.7958932526e+00  rel diff 0.00e+00
+i=206 nb=2 q=1 ok=true  dynamic -8.7493051349e+00  cached -8.7493051788e+00  rel diff 5.02e-09
+i=207 nb=2 q=1 ok=true  dynamic -1.3350517329e+01  cached -1.3350517329e+01  rel diff 0.00e+00
+i=208 nb=2 q=1 ok=true  dynamic -7.5639939397e+00  cached -7.5639940235e+00  rel diff 1.11e-08
+i=219 nb=2 q=1 ok=true  dynamic 7.2046236089e+00  cached 7.2046235791e+00  rel diff 4.14e-09
+i=236 nb=2 q=1 ok=true  dynamic -3.3676376857e+01  cached -3.3676376805e+01  rel diff 1.53e-09
+i=237 nb=2 q=1 ok=true  dynamic 1.6568304134e+00  cached 1.6568302942e+00  rel diff 7.20e-08
+i=249 nb=2 q=1 ok=true  dynamic 1.5459385797e+01  cached 1.5459385741e+01  rel diff 3.63e-09
+i=256 nb=2 q=1 ok=true  dynamic -9.6701028178e+00  cached -9.6701027943e+00  rel diff 2.43e-09
+worst rel diff over all particles: (0.6538076513701883, 126) (nb = 2)
+particle 126: offsets/dx = SVector{2, Float64}[[0.3488881129784023, -1.031740852634977], [0.9097174751776205, 0.12878113123689072]] weights [0.43948363767856774, 0.5566190611567206]
+  eigvals(N) = [9.199496293913064e-17, 0.40687330122429505, 1.5804315787744878]  plain Cholesky accepted: true

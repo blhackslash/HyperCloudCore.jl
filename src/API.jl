@@ -115,7 +115,8 @@ Evaluates the non-conservative path integral jump across an interface. Has to be
 
 # Arguments
 - `eq::HyperbolicPDE`: The physical equation system.
-- `f_L::State`, `f_R::State`: The reconstructed left and right interface states.
+- `f_L::Flux`, `f_R::Flux`: The reconstructed left and right interface states, one `State` per spatial direction
+  (as passed to the numerical flux).
 - `dist_k::Space`: The spatial distance vector between the two points.
 
 # Returns
@@ -233,6 +234,12 @@ Polynomial degree of the MLS fit used for the divergence at the maximum order (C
 Defaults to the consistency order; MUSCL overrides with `order - 1`.
 """
 @inline _divergence_degree(g::DivergenceInterpolator) = _extract_order(g)
+
+# Per-particle divergence degree for the assembled CFL estimate: `nothing` (every particle `_divergence_degree`), or a
+# bits callable `neighbour count -> degree` (MUSCL: the degree its neighbour-count safeguard lowers the fit to).
+@inline _cfl_degree_of(::DivergenceInterpolator) = nothing
+@inline _cfl_particle_degree(degree::Int, ::Nothing, num_nb::Int) = degree
+@inline _cfl_particle_degree(degree::Int, degree_of, num_nb::Int) = min(degree, degree_of(num_nb))
 
 """
     _order_reach(interp::DivergenceInterpolator, strategy::MOODStrategy) -> Int

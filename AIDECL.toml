@@ -48,10 +48,19 @@ Reviewed-by = "blhackslash <dev@blackslash.win>"
 AI-Review = "A2"
 AI-Reviewed-by = "Claude Opus 5.5 (Anthropic), new sessions without the generating conversation (reviews/)"
 
-# Changed on claude/aidecl by Claude agents to address the A2 reviews in reviews/ (and reviewed again there).
-# Human-Review: to be filled in by the responsible person (e.g. `aidecl annotate ... -H H1 --reviewed-by ...`).
+# Changed by Claude agents to address the A2 reviews in reviews/ (and reviewed again there).
 [[annotations]]
-path = ["docs/src/gpu_roadmap.md", "docs/src/particle_grids/domains.md", "docs/src/particle_grids/overview.md", "docs/src/particle_grids/volumes.md", "docs/src/spatial/central.md", "docs/src/spatial/muscl.md", "docs/src/spatial/upwind.md", "docs/src/spatial/weno.md", "docs/src/time_integration/tableaus.md", "docs/src/time_integration/time_stepper.md", "src/Backend.jl", "src/DeviceAdapt.jl", "src/Grid/Adaptivity.jl", "src/Grid/Domains.jl", "src/Grid/ParticleGrids.jl", "src/Grid/Reordering.jl", "src/Grid/Volumes.jl", "src/Interpolation/Central.jl", "src/Interpolation/FluxFunctions.jl", "src/Interpolation/Limiter.jl", "src/Interpolation/MUSCL.jl", "src/Interpolation/Upwind.jl", "src/Interpolation/WENO.jl", "src/TimeStepping/ButcherTableaus.jl", "src/TimeStepping/MOOD.jl", "src/TimeStepping/TimeSteppers.jl", "src/Utils.jl", "test/pipeline_tests.jl", "test/runtests.jl", "test/unit_backends.jl", "test/unit_core.jl", "test/unit_schemes.jl"]
+path = ["CLAUDE.md", "docs/src/gpu_roadmap.md", "docs/src/particle_grids/domains.md", "docs/src/particle_grids/overview.md", "docs/src/particle_grids/volumes.md", "docs/src/spatial/central.md", "docs/src/spatial/muscl.md", "docs/src/spatial/upwind.md", "docs/src/spatial/weno.md", "docs/src/time_integration/tableaus.md", "docs/src/time_integration/time_stepper.md", "src/Backend.jl", "src/Builders/domains.jl", "src/DeviceAdapt.jl", "src/Grid/Adaptivity.jl", "src/Grid/BoundaryConditions.jl", "src/Grid/Domains.jl", "src/Grid/MLSWeightFunctions.jl", "src/Grid/ParticleGrids.jl", "src/Grid/Reordering.jl", "src/Grid/Volumes.jl", "src/Interpolation/Central.jl", "src/Interpolation/FluxFunctions.jl", "src/Interpolation/Limiter.jl", "src/Interpolation/MUSCL.jl", "src/Interpolation/Upwind.jl", "src/Interpolation/WENO.jl", "src/TimeStepping/ButcherTableaus.jl", "src/TimeStepping/MOOD.jl", "src/TimeStepping/TimeSteppers.jl", "src/Types.jl", "src/Utils.jl", "test/gpu_tests.jl", "test/pipeline_tests.jl", "test/runtests.jl", "test/unit_backends.jl", "test/unit_core.jl", "test/unit_schemes.jl"]
+AI-Generation = "G3"
+Human-Review = "H0"
+AI-Review = "A2"
+Assisted-by = ["Claude (Anthropic), claude-opus-5-5"]
+AI-Reviewed-by = ["Claude Opus 5.5 (Anthropic), new sessions without the generating conversation (reviews/)"]
+Reviewed-by = ["blhackslash <dev@blackslash.win>"]
+
+# Further files changed by Claude agents for the A2 reviews (claude/review-numerics), reviewed again in reviews/.
+[[annotations]]
+path = ["docs/src/time_integration/mood.md", "src/API.jl", "src/Interpolation/Interpolators.jl", "src/Interpolation/MUSCL_hooks.jl", "src/Types.jl", "test/kinetic_source.jl"]
 AI-Generation = "G3"
 Human-Review = "H0"
 AI-Review = "A2"

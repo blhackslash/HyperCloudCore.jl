@@ -1,4 +1,4 @@
-export GeneralRKTimeStepper, GeneralIMEXTimeStepper, mood_flags
+export GeneralRKTimeStepper, GeneralIMEXTimeStepper, mood_flags, mood_inadmissible
 
 """
     MOODWork(storage = Array)
@@ -6,7 +6,8 @@ export GeneralRKTimeStepper, GeneralIMEXTimeStepper, mood_flags
 Scratch owned by the time stepper: `triggered` (this pass), `changed` (orders that moved, i.e. C),
 `dirty` (fluxes to recompute, C ⊕ reach), `scratch`, an `Int` order snapshot for forcing, and
 `triggered_step`, a per-step diagnostic of every particle that dropped an order (see `mood_flags`).
-The masks are `Growable` buffers with arrays of type `storage`.
+The masks are `Growable` buffers with arrays of type `storage`. `inadmissible` counts the interior candidates
+accepted while not admissible in the last step (see `mood_inadmissible`), `warned` whether that was reported.
 """
 struct MOODWork{GB <: Growable{Bool}, GI <: Growable{Int}}
     triggered::GB
@@ -16,9 +17,12 @@ struct MOODWork{GB <: Growable{Bool}, GI <: Growable{Int}}
     snapshot::GI
     triggered_step::GB
     N::Base.RefValue{Int}           # particles of the last `update_size!`: the active part of the masks
+    inadmissible::Base.RefValue{Int}
+    warned::Base.RefValue{Bool}
 end
 MOODWork(::Type{AT} = Array) where {AT <: AbstractArray} =
-    MOODWork(Growable{Bool}(AT), Growable{Bool}(AT), Growable{Bool}(AT), Growable{Bool}(AT), Growable{Int}(AT), Growable{Bool}(AT), Ref(0))
+    MOODWork(Growable{Bool}(AT), Growable{Bool}(AT), Growable{Bool}(AT), Growable{Bool}(AT), Growable{Int}(AT), Growable{Bool}(AT), Ref(0),
+             Ref(0), Ref(false))
 
 function update_size!(w::MOODWork, N::Int)
     ensure_capacity!(w.triggered, N); ensure_capacity!(w.changed, N)
@@ -106,8 +110,12 @@ The one time integrator: explicit RK and IMEX share this struct, since an explic
 `IMEXButcherTableau` with a zero implicit part (see `RKButcherTableau`). `sources` may mix explicit
 and implicit terms. With an explicit tableau (`a = 0` and `b = 0`), implicit terms are applied explicitly (their `evaluate_source`
 at every stage, weighted like the flux divergence; the constructor warns), since there is no implicit part
-to solve them with. If `pg.mover` is not `NoGridMover`, particle positions are integrated as
-additional stage variables of the same tableau (see `GridMovers.jl`).
+to solve them with; a tableau whose implicit part has a zero diagonal (e.g. `a = 0`, `b ≠ 0`) is kept as given and
+also evaluates them explicitly, with a warning. Several implicit sources are solved one after another per stage
+(`U → implicit_solve(S₁, U) → implicit_solve(S₂, ·) …`), a first-order splitting inside the stage: the stage
+relation `Y = U + Δt a_ii ΣS(Y)` holds only for a single implicit source (or commuting ones). If `pg.mover` is
+not `NoGridMover`, particle positions are integrated as additional stage variables of the same tableau (see
+`GridMovers.jl`).
 
 # Algorithm (per time step)
 Orders start at the interpolator's maximum consistency order. For each stage `i`:
@@ -197,6 +205,10 @@ struct GeneralRKTimeStepper{D, M, T, PDE <: HyperbolicPDE, G <: DivergenceInterp
             @warn "Implicit source terms given with a purely explicit tableau: they are applied explicitly, with the " *
                   "explicit weights of the tableau (no implicit solve)."
             tableau = _explicit_implicit_part(tableau)
+        elseif !isempty(implicit_sources) && all(i -> iszero(tableau.a[i, i]), 1:s)
+            # e.g. a hand-made `a = 0`, `b ≠ 0`: kept as given, but no stage solves anything either
+            @warn "Implicit source terms given with a tableau whose implicit part has a zero diagonal: they are " *
+                  "evaluated explicitly, with the implicit weights of the tableau (no implicit solve)."
         end
         bt = static_tableau(tableau, Val(s))
         states    = () -> Growable{State{M, T}}(AT)
@@ -244,6 +256,20 @@ Per-step diagnostic: `true` for every particle that dropped an order during the 
 stepper's mask over the particles of that step (the buffer behind it is over-allocated).
 """
 mood_flags(ts::GeneralRKTimeStepper) = view(parent(ts.work.triggered_step), 1:ts.work.N[])
+
+"""
+    mood_inadmissible(ts::GeneralRKTimeStepper) -> Int
+
+Per-step diagnostic: the number of interior candidates (summed over the checkpoints of the last step; with an SSP
+tableau the checked candidates are the Euler substeps) that MOOD accepted although they are not admissible
+(`is_admissible`, e.g. a negative pressure or a NaN). That happens only where the order cannot drop further
+(order 1): the first-order update itself is not admissible there, because the step is above its positivity limit
+or because the first-order scheme is not positive on the cloud (e.g. the geometric Rusanov dissipation on an
+irregular cloud; `AlignedRusanovFlux` is local-extremum-diminishing). The run goes on with the inadmissible
+(sub)step, which often ends it a few steps later. The stepper warns the first time it happens; the count is `0`
+without a MOOD criterion (`NoMOOD` checks nothing).
+"""
+mood_inadmissible(ts::GeneralRKTimeStepper) = ts.work.inadmissible[]
 
 @inline _is_moving(pg::ParticleGrid) = !(pg.mover isa NoGridMover)
 
@@ -437,13 +463,30 @@ function mood_checkpoint!(ts::GeneralRKTimeStepper{D, M, T}, eq, pg, i::Int, dt:
     while true
         target, _ = form_candidate!(ts, eq, pg, i, dt, time)
         cand = _checks_substeps(ts) ? form_substep!(ts, pg, i, dt) : target
-        detect_and_drop!(ts.mood, work, interp, pg, Y_prev, cand, full; eq = eq) || return nothing
+        if !detect_and_drop!(ts.mood, work, interp, pg, Y_prev, cand, full; eq = eq)
+            # Accepted. Flagged particles at order 1 were un-flagged by the decrement: count those still inadmissible.
+            ts.mood.criterion isa NoMOOD || (work.inadmissible[] += _count_inadmissible(eq, pg, cand, parent(work.scratch)))
+            return nothing
+        end
 
         copyto!(parent(work.dirty), 1, parent(work.changed), 1, N)
         expand_mask!(parent(work.dirty), parent(work.scratch), pg, reach)
         compute_explicit_rhs!(ts, eq, pg, ts.K_E_stages[i - 1], ts.K_X_stages[i - 1], Y_prev, t_prev, false)
         full = false
     end
+end
+
+# Interior particles whose state is not admissible: one kernel pass into the free MOOD scratch mask and a `count`
+# over it (the pattern of the other MOOD reductions; no allocation, device arrays included)
+function _count_inadmissible(eq, pg, U, flags)
+    N = pg.meta.N
+    N == 0 && return 0
+    foreach_particle(_inadmissible_body!, get_backend(), N, (flags, pg.core.is_boundary, U, eq))
+    return count(view(flags, 1:N))
+end
+@inline function _inadmissible_body!(p, flags, is_boundary, U, eq)
+    @inbounds flags[p] = !is_boundary[p] && !_admissible(eq, U[p])
+    return nothing
 end
 
 # MOOD checks the Euler substeps (an SSP tableau, a criterion that flags anything)
@@ -501,6 +544,7 @@ function (ts::GeneralRKTimeStepper{D, M, T})(eq::HyperbolicPDE, pg::ParticleGrid
     max_order = _extract_order(interp)
     fill!(view(orders, 1:N), max_order)
     fill!(view(ts.work.triggered_step, 1:N), false)
+    ts.work.inadmissible[] = 0
 
     for i in 1:s
         if i == 1
@@ -516,6 +560,13 @@ function (ts::GeneralRKTimeStepper{D, M, T})(eq::HyperbolicPDE, pg::ParticleGrid
 
     mood_checkpoint!(ts, eq, pg, s + 1, dt, time)          # uses geometry of stage s
     copyto!(pg.rhos, 1, parent(ts.rho_cand), 1, N)
+    if ts.work.inadmissible[] > 0 && !ts.work.warned[]
+        ts.work.warned[] = true
+        @warn "MOOD accepted $(ts.work.inadmissible[]) inadmissible candidate(s) at first order in the step at t = $time " *
+              "(dt = $dt): the first-order update itself is not admissible there (a step above its positivity limit, or a " *
+              "first-order scheme that is not positive on the cloud, e.g. RusanovFlux on an irregular cloud; " *
+              "AlignedRusanovFlux is). Reported once per stepper; `mood_inadmissible(ts)` gives the count of each step."
+    end
 
     if moving
         copyto!(pg.core.positions, 1, parent(ts.x_cand), 1, N)

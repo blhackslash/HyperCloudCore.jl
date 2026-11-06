@@ -32,7 +32,7 @@ end
 An upwind numerical interface flux evaluator.
 
 # Details
-- **Scalar Systems (`M = 1`)**: Evaluates the Rankine-Hugoniot shock speed `s = |ΔF / Δu|`. If states are nearly coincident (`|Δu| < 1e-14`), it extracts the wave speed directly from the scalar flux Jacobian.
+- **Scalar Systems (`M = 1`)**: the Murman–Roe flux `½ (F_L + F_R) - ½ s (u_R - u_L)` with the Rankine-Hugoniot (secant) speed `s = |ΔF / Δu|`, i.e. dissipation `|s|` from the secant, not an exact Riemann solution (it admits expansion shocks at sonic points). If the states nearly coincide (`|Δu| ≤ √ε max(|u_L|, |u_R|)`, relative to the states), it takes the wave speed from the scalar flux Jacobian at `u_L`.
 - **Vector Systems (`M > 1`)**: Automatically falls back to dispatching `RusanovFlux`
 """
 struct UpwindFlux <: NumericalFluxFunction end
@@ -83,7 +83,7 @@ a pair whose particles both have the full order it is the plain [`RusanovFlux`](
 "left" and "right" per axis by the sign of the distance). Where either particle is below the full order,
 and on every pair of a first-order scheme (`MUSCL` order 1, where no particle can be below the full order),
 the states are sorted by the sign of the particle's own divergence weight `c_ij` for that neighbour
-instead: the weight the slot's flux difference is multiplied with, from the cached full-degree fit or, for a
+instead: the weight the slot's flux difference is multiplied with, from the cached full-order fit (of the degree its stencil carries) or, for a
 particle off the cached path (a degree lowered by the neighbour-count safeguard or by `div_order = 0`, no
 cached factorisation), from its dynamic fit, solved per slot. *Where* the aligned sorting applies is
 symmetric in the pair (`below`), but the orientation is not: particle `i` sorts by `sign(c_ij,d)`,
@@ -113,7 +113,9 @@ struct AlignedRusanovFlux <: NumericalFluxFunction end
 """
     (upwind::UpwindFlux)(f_L, f_R, F_L, F_R, eq) -> Flux{D, M, T}
 
-Evaluates the numerical flux using the upwind scheme. Dispatches to `RusanovFlux` for general systems (`M > 1`), or exact scalar upwinding when `M == 1`.
+Evaluates the numerical flux using the upwind scheme. Dispatches to `RusanovFlux` for general systems (`M > 1`); for
+scalars (`M == 1`) it is the Murman–Roe flux with the secant speed, without an entropy fix: a transonic rarefaction
+of a convex flux (Burgers with `u_L < 0 < u_R`) can stay as a stationary expansion shock.
 
 # Arguments
 - `f_L`: Reconstructed left states across all spatial dimensions.
@@ -135,8 +137,10 @@ end
     
     return Flux{D, 1, T}(ntuple(Val(D)) do d
         du = f_R[d][1] - f_L[d][1]
-        
-        if abs(du) < T(1e-14)
+
+        # The secant loses digits as the states approach each other (`ΔF` is accurate to `ε |F|`): below
+        # `√ε max(|u_L|, |u_R|)` the Jacobian at `u_L` is as close to the secant as the secant is to itself
+        if abs(du) <= sqrt(eps(T)) * max(abs(f_L[d][1]), abs(f_R[d][1]))
             # Extract the scalar speed from the 1x1 Jacobian SMatrix
             s = abs(velocity(eq, f_L[d], d)[1, 1])
         else

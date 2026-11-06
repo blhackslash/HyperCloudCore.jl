@@ -105,9 +105,6 @@ NeighborData{D, T, WF}(wf::WF, ranges, indices, weights, distances, counts::VI, 
 # ---------------------------------------------------------
 struct ReorderData{D}
     permutation::Vector{Int}
-    inv_permutation::Vector{Int}
-    new_permutation_buffer::Vector{Int}
-    seen_buffer::Vector{Bool}
 end
 
 # Counting-sort cell list; see `GlobalBins(...)` in NeighborLogic.jl for the layout.
@@ -260,7 +257,7 @@ function ParticleGrid(
 
     shared = SharedBuffers{D, M, T}(Growable(zeros(State{M, T}, N)), Growable(similar(positions)), Growable(zeros(T, N)),
                                     Growable(zeros(T, N)), Growable(zeros(Bool, N)), Growable(zeros(Int, N)))
-    reorder = ReorderData{D}(collect(1:N), collect(1:N), zeros(Int, N), zeros(Bool, N))
+    reorder = ReorderData{D}(collect(1:N))
 
     bins = GlobalBins(T, comp_domain.canvas_mins, comp_domain.canvas_maxs, R, N, comp_domain.is_periodic)
     neighbors = NeighborData{D, T, typeof(weight_func)}(
@@ -276,8 +273,18 @@ function ParticleGrid(
     pg.reorder(pg)
     pg.neighbor(pg)
     update_volumes!(pg, volume_estimator)
+    _check_starved(pg)
 
     return pg
+end
+
+# An interior particle with fewer than D + 1 neighbours cannot carry even a linear fit: the schemes give it a zero
+# divergence (it is frozen) or a lower order. Usually the support radius is too small for the jitter; warn once.
+function _check_starved(pg::ParticleGrid{D}) where {D}
+    n = count(i -> !pg.core.is_boundary[i] && length(pg.neighbor.ranges[i]) < D + 1, 1:pg.meta.N)
+    n > 0 && @warn "$n interior particle(s) have fewer than $(D + 1) neighbours and cannot carry a linear fit " *
+                   "(frozen or first order); increase the support radius (R = $(pg.meta.R)) or reduce the jitter."
+    return nothing
 end
 
 # =========================================================================
@@ -361,13 +368,20 @@ first-derivative weights of the divergence fit at particle `i` (degree `_diverge
 - Every neighbour enters with the pair speed `max(λ_i, λ_j)`, boundary particles included: a fast inflow state
   limits the step of its interior neighbours before it is inside (the first-order coefficients of a particle
   are `|c_ij| λ_pair`, so this is the local-extremum-diminishing bound).
-- If the interpolator keeps the per-slot weights of its divergence fit for the current geometry
-  (`_cfl_slot_weights`, a `MUSCL` after its first right-hand side), they are used and no moment matrix is
-  factorised (50–100× cheaper); `cached_weights = false` always assembles and factorises the Taylor fit of
-  degree `_divergence_degree(main_grad)` per particle (`_cfl_body!`), as every call did before. The two differ
-  where the fits differ: for degree-5 (odd-order) divergence fits the weights in use sum to about 1.8× the
-  Taylor fit's, i.e. the cached estimate is that much smaller; for degrees ≤ 3 they agree.
-- Returns `Inf` for an empty grid or for particles without neighbours / without a solvable fit.
+- If the interpolator keeps the per-slot weights of its divergence fit (`_cfl_slot_weights`, a `MUSCL`), its
+  geometry caches are refreshed (`prepare_geometry!`, a no-op when current) and those weights are used: no moment
+  matrix is factorised (50–100× cheaper), and they are the weights of the fit each particle uses, also where the
+  neighbour-count safeguard lowers its degree (1-D MUSCL3 with `R = 2.5Δx`: degree 2, a 2.3× larger step than the
+  degree-3 fit gave before). `cached_weights = false` always assembles and factorises the Taylor fit per particle
+  (`_cfl_body!`), of degree `_divergence_degree(main_grad)`, lowered per particle by `_cfl_degree_of(main_grad)`
+  (MUSCL: the neighbour-count safeguard) to the degree in use. The two differ where the fits differ (Taylor fit vs
+  the fit with intercept): for degree-5 (odd-order) divergence fits the weights in use sum to about 1.8× the Taylor
+  fit's, i.e. the cached estimate is that much smaller; for degrees ≤ 3 they agree.
+- A particle restricts the step only if `Σ_j Σ_d |c_ij,d| λ_pair > 0` (any positive value, no absolute cut-off):
+  particles without neighbours or without a solvable fit, with zero wave speeds, and with non-finite (NaN) states
+  or speeds do not. `Inf` (an empty grid, or no restricting particle) means that nothing limits the step: a driver
+  that caps it to the end time jumps there in one step, which is right for a field at rest and wrong after a blow-up;
+  check the states (HyperCloud's driver stops on non-finite states).
 """
 @inline function get_time_step(pg::ParticleGrid{D, M, T}, eq::HyperbolicPDE, main_grad; cached_weights::Bool = true) where {D, M, T}
     # 1. Graceful exit for empty grids
@@ -381,16 +395,19 @@ first-derivative weights of the divergence fit at particle `i` (degree `_diverge
     fill!(view(dt_buffer, 1:pg.meta.N), T(Inf))
 
     nb = pg.neighbor
+    # The per-slot weights of the fit in use: the interpolator's geometry caches are refreshed first (a no-op if they
+    # are current; the stepper does it at its first right-hand side anyway), so already the first step sees them
+    cached_weights && prepare_geometry!(main_grad, pg)
     sw = cached_weights ? _cfl_slot_weights(main_grad, pg) : nothing
     if sw === nothing
         degree = _divergence_degree(main_grad)
         invL   = one(T) / minimum(pg.meta.dx)
         foreach_particle(_cfl_body!, get_backend(), pg.meta.N,
-            (dt_buffer, pg.core.is_boundary, nb.ranges, nb.indices, pg.rhos, eq, degree, Val(D), get_distances(pg), get_weights(pg),
-             invL, T(1e-14), one(T) / D))
+            (dt_buffer, pg.core.is_boundary, nb.ranges, nb.indices, pg.rhos, eq, degree, _cfl_degree_of(main_grad), Val(D),
+             get_distances(pg), get_weights(pg), invL, floatmin(T), one(T) / D))
     else
         foreach_particle(_cfl_weights_body!, get_backend(), pg.meta.N,
-            (dt_buffer, pg.core.is_boundary, nb.ranges, nb.indices, pg.rhos, eq, sw, Val(D), T(1e-14), one(T) / D))
+            (dt_buffer, pg.core.is_boundary, nb.ranges, nb.indices, pg.rhos, eq, sw, Val(D), floatmin(T), one(T) / D))
     end
 
     # 2. Provide init=T(Inf) to prevent any future reduction errors
@@ -407,12 +424,13 @@ factorise the moment matrices itself.
 @inline _cfl_slot_weights(interp, pg) = nothing
 
 # Kernel body of the CFL estimate (see Backend.jl): fit and sum of particle `i`.
-@inline function _cfl_body!(i, dt_buffer, is_boundary, ranges, indices, rhos, eq, degree, valD, dist_vec, w_vec, invL, tol, inv_dim)
+@inline function _cfl_body!(i, dt_buffer, is_boundary, ranges, indices, rhos, eq, degree, degree_of, valD, dist_vec, w_vec, invL, tol, inv_dim)
     is_boundary[i] && return nothing
     nb_slice = ranges[i]
     isempty(nb_slice) && return nothing
     Lambda = _get_Lambda(eq, rhos[i], valD)
-    sum_c  = dispatch_cfl(degree, valD, nb_slice, dist_vec, w_vec, invL, typeof(invL), rhos, indices, eq, Lambda)
+    sum_c  = dispatch_cfl(_cfl_particle_degree(degree, degree_of, length(nb_slice)), valD, nb_slice, dist_vec, w_vec, invL,
+                          typeof(invL), rhos, indices, eq, Lambda)
     sum_c > tol && (dt_buffer[i] = inv_dim / sum_c)
     return nothing
 end
@@ -440,12 +458,7 @@ end
 """
 @inline function ensure_capacity!(rd::ReorderData{D}, req_capacity::Int) where {D}
     if length(rd.permutation) < req_capacity
-        new_cap = ceil(Int, req_capacity * 1.25)
-        
-        resize!(rd.permutation, new_cap)
-        resize!(rd.inv_permutation, new_cap)
-        resize!(rd.new_permutation_buffer, new_cap)
-        resize!(rd.seen_buffer, new_cap)
+        resize!(rd.permutation, ceil(Int, req_capacity * 1.25))
     end
     return nothing
 end

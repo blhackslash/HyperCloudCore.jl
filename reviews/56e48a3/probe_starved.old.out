@@ -1,0 +1,6 @@
+MUSCL3 R=1.6dx NoLimiter n=24: nb count min/max (5, 9), starved(<basis) 0; CFL dt/dx 0.003; orders after step [0, 0, 576]; t = 0.0112, smooth L2 err 0.0004337; box extrema (-0.07728, 1.098)
+MUSCL3 R=1.6dx VenkatakrishnanLimiter n=24: nb count min/max (5, 9), starved(<basis) 0; CFL dt/dx 0.003; orders after step [0, 0, 576]; t = 0.0112, smooth L2 err 0.0007932; box extrema (-0.01949, 1.039)
+MUSCL4 R=1.6dx NoLimiter n=24: nb count min/max (5, 9), starved(<basis) 568; CFL dt/dx 0.003; orders after step [568, 0, 0, 8]; t = 0.0112, smooth L2 err 0.01574; box extrema (-0.0008894, 1.053)
+MUSCL4 R=1.6dx VenkatakrishnanLimiter n=24: nb count min/max (5, 9), starved(<basis) 568; CFL dt/dx 0.003; orders after step [568, 0, 0, 8]; t = 0.0112, smooth L2 err 0.01242; box extrema (-1.36e-6, 1.001)
+MUSCL4 R=2.0dx NoLimiter n=24: nb count min/max (8, 15), starved(<basis) 7; CFL dt/dx 0.000607; orders after step [7, 0, 0, 569]; t = 0.00227, smooth L2 err 0.009033; box extrema (-1.869, 1.416)
+MUSCL4 R=2.0dx VenkatakrishnanLimiter n=24: nb count min/max (8, 15), starved(<basis) 7; CFL dt/dx 0.000607; orders after step [7, 0, 0, 569]; t = 0.00227, smooth L2 err 0.004744; box extrema (-0.05052, 1.024)

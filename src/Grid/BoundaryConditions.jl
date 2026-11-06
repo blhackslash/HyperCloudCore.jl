@@ -8,7 +8,8 @@ A strict, unchanging boundary condition strategy.
 
 # Callable / Functor
 
-Enforces a static Dirichlet condition upon boundary particles. Iterates over the grid and resets the state of any boundary particle matching the specified `tag` back to its initial original state stored in `pg.rhos`.
+Enforces a static Dirichlet condition upon boundary particles. Iterates over the grid and resets the state of any boundary particle matching the specified `tag` to the state stored in `pg.rhos` at the start of the step. Nothing else writes the state of a boundary
+particle (the stage predictor keeps it), so that is its initial state unless the user changes `pg.rhos`.
 """
 struct FixedDirichlet <: AbstractBoundaryCondition end
 
@@ -23,7 +24,7 @@ A zero-gradient, transmissive boundary condition strategy.
 Enforces a zero-gradient outflow utilizing a multi-pass nearest-donor algorithm. 
 - Initiates all active interior particles as valid state donors.
 - Executes up to 5 symmetrical passes outward, dynamically locating the nearest resolved neighbor using squared distances and copying its state to the target particle.
-- Safely falls back to the original initial state for any completely orphaned boundary particles that fail to resolve a donor.
+- Safely falls back to the state in `pg.rhos` at the start of the step for any completely orphaned boundary particles that fail to resolve a donor.
 """
 struct OutflowBC <: AbstractBoundaryCondition end
 
@@ -55,7 +56,8 @@ end
     (::FixedDirichlet)(pg::ParticleGrid, rhos_buffer, tag::Int, ts, eq, t)
 
 Enforces a static Dirichlet condition upon boundary particles. 
-- Iterates over the grid and resets the state of any particle matching the specified boundary tag back to its initial original state stored in `pg.rhos`.
+- Iterates over the grid and resets the state of any particle matching the specified boundary tag to the state stored in `pg.rhos` at the start of the step. Nothing else writes the state of a boundary
+particle (the stage predictor keeps it), so that is its initial state unless the user changes `pg.rhos`.
 """
 function (::FixedDirichlet)(pg::ParticleGrid{D, M, T}, rhos_buffer::AbstractVector{State{M, T}}, tag::Int, ts, eq::HyperbolicPDE, t::Real) where {D, M, T}
     foreach_particle(_dirichlet_body!, get_backend(), pg.meta.N, (rhos_buffer, pg.rhos, pg.core.tags, pg.core.is_boundary, tag))
@@ -75,7 +77,7 @@ end
 Enforces a zero-gradient outflow boundary condition using a multi-pass nearest-donor algorithm.
 - Initiates all active interior particles as valid state donors, and marks boundary particles matching the specific tag as requiring resolution.
 - Executes up to 5 symmetrical passes outward, dynamically locating the nearest resolved neighbor using squared distances and copying its state to the target particle.
-- Safely falls back to the original initial state for any completely orphaned boundary particles that failed to resolve a donor.
+- Safely falls back to the state in `pg.rhos` at the start of the step for any completely orphaned boundary particles that failed to resolve a donor.
 """
 function (::OutflowBC)(pg::ParticleGrid{D, M, T}, rhos_buffer::AbstractVector{State{M, T}}, tag::Int, ts, eq::HyperbolicPDE, t::Real) where {D, M, T}
     N       = pg.meta.N

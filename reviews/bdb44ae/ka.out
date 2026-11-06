@@ -1,0 +1,31 @@
+1-D MUSCL3 R2.5 jit                        Float64 state 0.00e+00  dt 3.97e-16  dweights 2.85e-16  inv_moment 2.00e-17  (Polyester 14.8s, KA 8.9s)
+Test Summary:                                | Pass  Total   Time
+KA vs Polyester: 1-D MUSCL3 R2.5 jit Float64 |    2      2  24.0s
+1-D MUSCL3 R2.5 jit                        Float32 state 0.00e+00  dt 0.00e+00  dweights 9.06e-08  inv_moment 1.10e-07  (Polyester 5.4s, KA 3.9s)
+Test Summary:                                | Pass  Total  Time
+KA vs Polyester: 1-D MUSCL3 R2.5 jit Float32 |    2      2  9.7s
+1-D MUSCL5 R2.5 aligned streamed walls     Float64 state 2.22e-16  dt 0.00e+00  dweights 0.00e+00  inv_moment 7.77e-18  (Polyester 5.6s, KA 4.1s)
+Test Summary:                                                   | Pass  Total  Time
+KA vs Polyester: 1-D MUSCL5 R2.5 aligned streamed walls Float64 |    2      2  9.8s
+1-D MUSCL5 R2.5 aligned streamed walls     Float32 state 1.79e-07  dt 0.00e+00  dweights 2.40e-07  inv_moment 5.00e-08  (Polyester 2.5s, KA 3.8s)
+Test Summary:                                                   | Pass  Total  Time
+KA vs Polyester: 1-D MUSCL5 R2.5 aligned streamed walls Float32 |    2      2  6.4s
+2-D MUSCL3 R2.0 jit aligned                Float64 state 2.35e-16  dt 2.24e-16  dweights 3.43e-16  inv_moment 7.28e-16  (Polyester 10.1s, KA 8.0s)
+Test Summary:                                        | Pass  Total   Time
+KA vs Polyester: 2-D MUSCL3 R2.0 jit aligned Float64 |    2      2  18.3s
+2-D MUSCL3 R2.0 jit aligned                Float32 state 6.27e-08  dt 0.00e+00  dweights 2.10e-07  inv_moment 2.39e-07  (Polyester 7.4s, KA 7.7s)
+Test Summary:                                        | Pass  Total   Time
+KA vs Polyester: 2-D MUSCL3 R2.0 jit aligned Float32 |    2      2  15.2s
+2-D MUSCL5 R2.5 jit streamed               Float64 state 1.85e-15  dt 1.07e-15  dweights 3.11e-14  inv_moment 1.05e-13  (Polyester 32.9s, KA 72.8s)
+Test Summary:                                         | Pass  Total     Time
+KA vs Polyester: 2-D MUSCL5 R2.5 jit streamed Float64 |    2      2  1m46.0s
+2-D MUSCL5 R2.5 jit streamed               Float32 state 6.87e-07  dt 2.10e-06  dweights 1.24e-05  inv_moment 3.15e-05  (Polyester 42.4s, KA 78.1s)
+Test Summary:                                         | Pass  Total     Time
+KA vs Polyester: 2-D MUSCL5 R2.5 jit streamed Float32 |    2      2  2m00.7s
+3-D MUSCL3 R1.8 jit                        Float64 state 2.04e-16  dt 0.00e+00  dweights 2.59e-16  inv_moment 5.31e-16  (Polyester 23.6s, KA 38.6s)
+Test Summary:                                | Pass  Total     Time
+KA vs Polyester: 3-D MUSCL3 R1.8 jit Float64 |    2      2  1m02.5s
+3-D MUSCL3 R1.8 jit                        Float32 state 1.10e-07  dt 0.00e+00  dweights 1.76e-07  inv_moment 4.09e-07  (Polyester 30.7s, KA 41.2s)
+Test Summary:                                | Pass  Total     Time
+KA vs Polyester: 3-D MUSCL3 R1.8 jit Float32 |    2      2  1m12.1s
+exit=0

@@ -1,0 +1,11 @@
+Float32 c=10       L=1    Ns=100000 ulp/dx=0.095 n=100003 (exp 100001) onlo=1 onhi=1 minspacing=0.000 dx xmax=11
+Float32 c=10       L=0.3  Ns=30000  ulp/dx=0.095 n=30002 (exp 30001) onlo=1 onhi=1 minspacing=0.000 dx xmax=10.3000002
+Float32 c=-10      L=1    Ns=100000 ulp/dx=0.095 n=100003 (exp 100001) onlo=1 onhi=1 minspacing=0.000 dx xmax=-9
+Float32 c=-10      L=0.3  Ns=30000  ulp/dx=0.095 n=30002 (exp 30001) onlo=1 onhi=1 minspacing=0.000 dx xmax=-9.69999981
+Float32 c=1000     L=2    Ns=3000   ulp/dx=0.092 n=3003 (exp 3001) onlo=1 onhi=1 minspacing=0.000 dx xmax=1002
+Float32 c=1000     L=0.3  Ns=333    ulp/dx=0.068 n=336 (exp 334) onlo=1 onhi=1 minspacing=0.000 dx xmax=1000.29999
+Float32 c=1000     L=7    Ns=10000  ulp/dx=0.087 n=10003 (exp 10001) onlo=1 onhi=1 minspacing=0.000 dx xmax=1007
+Float32 c=-1000    L=2    Ns=3000   ulp/dx=0.092 n=3003 (exp 3001) onlo=1 onhi=1 minspacing=0.000 dx xmax=-998
+Float32 c=-1000    L=0.3  Ns=333    ulp/dx=0.068 n=336 (exp 334) onlo=1 onhi=1 minspacing=0.000 dx xmax=-999.700012
+Float32 c=-1000    L=7    Ns=10000  ulp/dx=0.087 n=10003 (exp 10001) onlo=1 onhi=1 minspacing=0.000 dx xmax=-993
+offset sweep: 10 / 632 resolvable configurations with a lost/duplicated/off wall point
