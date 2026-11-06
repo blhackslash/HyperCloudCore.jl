@@ -158,10 +158,13 @@ function ComputationalDomain(
     # of `interp_range_factor` spacings (mixed periodicity used to drop all ghost layers).
     # `interp_range_factor` is R / max(dx): an axis with a smaller spacing needs more layers to be R thick
     # (it used to get the same number, i.e. a band thinner than R on the finer axis of an anisotropic grid).
+    # The product is formed in `T` and pulled down by a few ulps of `T`, so an exact ratio (e.g. 2.5 · 2 = 5)
+    # does not get an extra layer from round-off.
     max_dx  = maximum(dxs_f)
+    range_f = T(interp_range_factor)
     N_ghost = ntuple(Val(D)) do d
         dxs_f[d] == max_dx ? ceil(Int, interp_range_factor) :
-                             ceil(Int, interp_range_factor * (max_dx / dxs_f[d]) * (1 - 4 * eps(Float64)))
+                             ceil(Int, range_f * (max_dx / dxs_f[d]) * (1 - 4 * eps(T)))
     end
 
     canvas_mins = Space{D, T}(ntuple(d -> is_per_svec[d] ? geom.mins[d] : geom.mins[d] - N_ghost[d] * dxs_f[d], Val(D)))
@@ -180,6 +183,19 @@ end
 # =========================================================================
 # 3. UNIVERSAL NARROW-BAND POINT GENERATOR
 # =========================================================================
+# Lattice index `j` (point `canvas_min + j dx`) of the wall at `w`, or -1 if the wall falls between two lattice
+# points (the extent is not a multiple of `dx`). The tolerance is the round-off of the ratio only: the rounding of
+# `w` and of `canvas_min` (half an ulp each, in units of `dx`; `canvas_min` may lie in the next binade, e.g. below
+# a wall at -1 in Float32), of their difference and of the division. An extent that is not a multiple of `dx`
+# by more than that is not snapped, however close (as before 0.7.9). A quarter spacing caps the tolerance, so a
+# wall is never assigned to a point that is not its own.
+function _wall_index(w::T, canvas_min::T, dx::T) where {T}
+    r   = (w - canvas_min) / dx
+    k   = round(Int, r)
+    tol = (2 * (eps(abs(w)) + eps(abs(canvas_min))) + eps(T) * abs(w - canvas_min)) / dx + 4 * eps(T) * abs(r)
+    return abs(r - k) <= min(T(0.25), tol) ? k : -1
+end
+
 """
     get_points(cd::ComputationalDomain, geom::GeometricDomain; nominal_dx, interp_range_factor, randomness, rng)
 
@@ -214,20 +230,17 @@ function get_points(
     inner_points = Space{D, T}[]
     ghost_candidates = Space{D, T}[]
     
-    # Lattice points within round-off of a non-periodic wall are put on the wall: `canvas_mins + (I - 1) dx`
-    # misses `maxs` by a few ulps for many spacings (e.g. [-1, 1] with dx = 2/30), and the closed-interval
-    # classification then made that wall point a ghost while the one on `mins` stayed interior.
-    # The tolerance covers the round-off of the lattice coordinate itself, which grows with |x| and the number of
-    # spacings from canvas_mins (in Float32 sqrt(eps)·dx alone missed walls from about 4000 points per axis).
-    snap = Space{D, T}(ntuple(d -> sqrt(eps(T)) * dxs_f[d] +
-                                   8 * eps(T) * (abs(cd.canvas_mins[d]) + abs(cd.canvas_maxs[d] - cd.canvas_mins[d])), Val(D)))
+    # The lattice points of a non-periodic wall are put exactly on the wall: `canvas_mins + (I - 1) dx` misses
+    # `maxs` by a few ulps for many spacings (e.g. [-1, 1] with dx = 2/30), and the closed-interval classification
+    # then made that wall point a ghost while the one on `mins` stayed interior. The wall point is chosen by its
+    # index (`_wall_index`), so exactly one lattice point per wall moves and no neighbour of it can land on the
+    # wall as well (a tolerance on the distance did that at very fine Float32 resolutions).
+    wall_lo = ntuple(d -> cd.is_periodic[d] ? -1 : _wall_index(geom.mins[d], cd.canvas_mins[d], dxs_f[d]), Val(D))
+    wall_hi = ntuple(d -> cd.is_periodic[d] ? -1 : _wall_index(geom.maxs[d], cd.canvas_mins[d], dxs_f[d]), Val(D))
     for I in CartesianIndices(Ns_total)
         pos_tuple = ntuple(Val(D)) do d
-            x = cd.canvas_mins[d] + (I[d] - 1) * dxs_f[d]
-            if !cd.is_periodic[d]
-                abs(x - geom.maxs[d]) <= snap[d] && (x = geom.maxs[d])
-                abs(x - geom.mins[d]) <= snap[d] && (x = geom.mins[d])
-            end
+            j = I[d] - 1
+            x = j == wall_lo[d] ? geom.mins[d] : j == wall_hi[d] ? geom.maxs[d] : cd.canvas_mins[d] + j * dxs_f[d]
             x += rand_f[d] * (rand(rng, T) * 2 - 1)
             # A jittered point that left a periodic axis belongs to the other end: classifying it
             # before wrapping made it a (frozen) boundary particle at the seam.
@@ -268,6 +281,7 @@ end
 # when a non-empty `bc_map` and the tags of the boundary particles do not match. An empty map (no conditions,
 # every boundary particle frozen) is taken as intended. Each mismatch is reported once per session.
 const _WARNED_BC_TAGS = Set{Tuple{Vector{Int}, Vector{Int}}}()
+const _WARNED_BC_TAGS_LOCK = ReentrantLock()          # grids may be built from several tasks
 function _check_bc_tags(geom::GeometricDomain, tags::AbstractVector{Int}, is_boundary::AbstractVector{Bool})
     isempty(geom.bc_map) && return nothing
     carried = sort!(unique(tags[i] for i in eachindex(tags) if is_boundary[i]))
@@ -275,8 +289,10 @@ function _check_bc_tags(geom::GeometricDomain, tags::AbstractVector{Int}, is_bou
     unused, uncovered = setdiff(mapped, carried), setdiff(carried, mapped)
     (isempty(unused) && isempty(uncovered)) && return nothing
     key = (mapped, carried)
-    key in _WARNED_BC_TAGS && return nothing
-    push!(_WARNED_BC_TAGS, key)
+    first_time = lock(_WARNED_BC_TAGS_LOCK) do
+        key in _WARNED_BC_TAGS ? false : (push!(_WARNED_BC_TAGS, key); true)
+    end
+    first_time || return nothing
     @warn "bc_map and boundary tags do not match: " *
           (isempty(unused) ? "" : "no boundary particle carries tag(s) $(unused), so their condition is never applied; ") *
           (isempty(uncovered) ? "" : "boundary particles with tag(s) $(uncovered) have no condition and keep their state; ") *

@@ -1,0 +1,2 @@
+D=2 N=40000 reduced=3982: _detect_events median 9.0 ms
+D=3 N=32768 reduced=3072: _detect_events median 214.6 ms

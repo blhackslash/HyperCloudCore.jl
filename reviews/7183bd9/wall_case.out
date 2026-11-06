@@ -1,0 +1,4 @@
+[-1, -0.7] Ns=100000 dx=3e-06 ulp(lo)/dx=0.040  r_lo=2.98023 (idx -1)  r_hi=100002.98438 (idx 100003)  tolerance lo 0.0100 hi 0.1054
+[-1, -0.7] Ns=99999 dx=3.00003e-06 ulp(lo)/dx=0.040  r_lo=2.98020 (idx -1)  r_hi=100001.97656 (idx 100002)  tolerance lo 0.0100 hi 0.1054
+[1, 1.3] Ns=100000 dx=3e-06 ulp(lo)/dx=0.040  r_lo=3.00010 (idx 3)  r_hi=100003.00000 (idx 100003)  tolerance lo 0.0100 hi 0.1054
+[-1, 0] Ns=100000 dx=1e-05 ulp(lo)/dx=0.012  r_lo=3.00407 (idx 3)  r_hi=100003.00781 (idx 100003)  tolerance lo 0.0100 hi 0.1054

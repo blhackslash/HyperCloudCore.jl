@@ -1,4 +1,4 @@
-export VolumeEstimator, ShepardVolumes, MLSVolumes, update_volumes!, domain_volume, total_mass
+export VolumeEstimator, ShepardVolumes, MLSVolumes, update_volumes!, interior_mass, domain_volume, total_mass
 
 # =========================================================================
 # PARTICLE VOLUMES — a partition-of-unity quadrature on the point cloud
@@ -104,6 +104,16 @@ function total_mass(pg::ParticleGrid{D, M, T}) where {D, M, T}
     N = pg.meta.N
     N == 0 && return zero(State{M, T})
     return mapreduce((v, u) -> v * u, +, view(pg.core.volumes, 1:N), view(pg.rhos, 1:N); init = zero(State{M, T}))
+end
+
+# `Σ V_i U_i` over the interior particles (boundary/ghost particles excluded): the content of the domain, which the
+# adaptivity keeps exact. A reduction like `total_mass`, so it works on device grids as well.
+function interior_mass(pg::ParticleGrid{D, M, T}) where {D, M, T}
+    N = pg.meta.N
+    N == 0 && return zero(State{M, T})
+    z = zero(State{M, T})
+    return mapreduce((b, v, u) -> b ? z : v * u, +, view(pg.core.is_boundary, 1:N), view(pg.core.volumes, 1:N),
+                     view(pg.rhos, 1:N); init = z)
 end
 
 # -------------------------------------------------------------------------

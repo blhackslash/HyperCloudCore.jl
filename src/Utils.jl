@@ -37,7 +37,7 @@ end
 @inline param2svec(v::Flux{D, M, T}) where {D, M, T} = v
 
 @inline param2uvec(v::T) where {T <: Real} = SVector{1, T}(v)
-@inline param2uvec(v::Tuple) = SVector{length(v), eltype(v)}(v)
+@inline param2uvec(v::Tuple) = SVector{length(v)}(promote(v...))   # (1, 2.0) → SVector{2, Float64}, not Real
 @inline param2uvec(v::SVector) = v 
 @inline param2uvec(v::AbstractVector) = SVector{length(v), eltype(v)}(v)
 

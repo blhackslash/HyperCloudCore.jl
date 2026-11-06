@@ -1,0 +1,8 @@
+T=Float64 D=2 jitter=0.0 N=4096 order hash=bde35237cd61a015
+T=Float64 D=2 jitter=0.3 N=4096 order hash=52dbded3a38a1e5
+T=Float64 D=3 jitter=0.0 N=4096 order hash=100c3f4a4f061ab8
+T=Float64 D=3 jitter=0.3 N=4096 order hash=dc44a2be6431a491
+T=Float32 D=2 jitter=0.0 N=4096 order hash=bde35237cd61a015
+T=Float32 D=2 jitter=0.3 N=4096 order hash=d6b695960e5c7a45
+T=Float32 D=3 jitter=0.0 N=4096 order hash=100c3f4a4f061ab8
+T=Float32 D=3 jitter=0.3 N=4096 order hash=3f0ab41a3ee10e66

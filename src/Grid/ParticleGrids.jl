@@ -105,9 +105,6 @@ NeighborData{D, T, WF}(wf::WF, ranges, indices, weights, distances, counts::VI, 
 # ---------------------------------------------------------
 struct ReorderData{D}
     permutation::Vector{Int}
-    inv_permutation::Vector{Int}
-    new_permutation_buffer::Vector{Int}
-    seen_buffer::Vector{Bool}
 end
 
 # Counting-sort cell list; see `GlobalBins(...)` in NeighborLogic.jl for the layout.
@@ -260,7 +257,7 @@ function ParticleGrid(
 
     shared = SharedBuffers{D, M, T}(Growable(zeros(State{M, T}, N)), Growable(similar(positions)), Growable(zeros(T, N)),
                                     Growable(zeros(T, N)), Growable(zeros(Bool, N)), Growable(zeros(Int, N)))
-    reorder = ReorderData{D}(collect(1:N), collect(1:N), zeros(Int, N), zeros(Bool, N))
+    reorder = ReorderData{D}(collect(1:N))
 
     bins = GlobalBins(T, comp_domain.canvas_mins, comp_domain.canvas_maxs, R, N, comp_domain.is_periodic)
     neighbors = NeighborData{D, T, typeof(weight_func)}(
@@ -276,8 +273,18 @@ function ParticleGrid(
     pg.reorder(pg)
     pg.neighbor(pg)
     update_volumes!(pg, volume_estimator)
+    _check_starved(pg)
 
     return pg
+end
+
+# An interior particle with fewer than D + 1 neighbours cannot carry even a linear fit: the schemes give it a zero
+# divergence (it is frozen) or a lower order. Usually the support radius is too small for the jitter; warn once.
+function _check_starved(pg::ParticleGrid{D}) where {D}
+    n = count(i -> !pg.core.is_boundary[i] && length(pg.neighbor.ranges[i]) < D + 1, 1:pg.meta.N)
+    n > 0 && @warn "$n interior particle(s) have fewer than $(D + 1) neighbours and cannot carry a linear fit " *
+                   "(frozen or first order); increase the support radius (R = $(pg.meta.R)) or reduce the jitter."
+    return nothing
 end
 
 # =========================================================================
@@ -440,12 +447,7 @@ end
 """
 @inline function ensure_capacity!(rd::ReorderData{D}, req_capacity::Int) where {D}
     if length(rd.permutation) < req_capacity
-        new_cap = ceil(Int, req_capacity * 1.25)
-        
-        resize!(rd.permutation, new_cap)
-        resize!(rd.inv_permutation, new_cap)
-        resize!(rd.new_permutation_buffer, new_cap)
-        resize!(rd.seen_buffer, new_cap)
+        resize!(rd.permutation, ceil(Int, req_capacity * 1.25))
     end
     return nothing
 end
