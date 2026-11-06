@@ -1,0 +1,8 @@
+Float32 random: 3000 configurations, lost 0, duplicated 7, wall not on a point 0
+c=61.6 L=0.24 Ns=5000 ulp/dx=0.079 n=5003 onlo=1 onhi=1 md=0.000
+c=-54.181 L=0.39 Ns=10000 ulp/dx=0.098 n=10003 onlo=1 onhi=1 md=0.000
+c=57.492 L=0.49 Ns=10000 ulp/dx=0.078 n=10003 onlo=1 onhi=1 md=0.000
+c=-54.001 L=0.2 Ns=5000 ulp/dx=0.095 n=5003 onlo=1 onhi=1 md=0.000
+c=-91.239 L=0.82 Ns=10000 ulp/dx=0.093 n=10003 onlo=1 onhi=1 md=0.000
+c=-88.167 L=0.78 Ns=10000 ulp/dx=0.098 n=10003 onlo=1 onhi=1 md=0.000
+c=92.167 L=0.84 Ns=10000 ulp/dx=0.091 n=10003 onlo=1 onhi=1 md=0.000

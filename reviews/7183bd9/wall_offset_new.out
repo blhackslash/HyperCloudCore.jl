@@ -1,0 +1,2 @@
+Float32 c=-1       L=0.3  Ns=100000 ulp/dx=0.040 n=100001 (exp 100001) onlo=0 onhi=1 minspacing=0.974 dx xmax=-0.699999988
+offset sweep: 1 / 632 resolvable configurations with a lost/duplicated/off wall point
