@@ -57,6 +57,7 @@ end
     @test param2uvec(SVector(6.0, 7.0)) == SVector(6.0, 7.0)
     @test param2uvec((1, 2.0)) isa SVector{2, Float64}              # mixed tuples are promoted (was SVector{2, Real})
     @test ExponentialWeightFunction(1.0, 0.25f0) isa ExponentialWeightFunction{Float64}   # mixed types promoted
+    @test ExponentialWeightFunction(1, 2) isa ExponentialWeightFunction{Float64} && InverseWeightFunction(1, 2)(1.0) ≈ 1   # integers: Float64
     @test InverseWeightFunction(1, 0.5) isa InverseWeightFunction{Float64}
 
     @test param2xvec(-1.5) == SVector(-1.5)
@@ -160,8 +161,10 @@ end
             @test length(xs) == Ns + 1 && minimum(xs) == lo && maximum(xs) == hi
         end
         # Wall points are chosen by index: far from the origin in Float32 a distance tolerance grew to almost dx
-        # (0.96 dx on [100, 101], Ns = 1e4) and could put the wall point's neighbour on the wall as well
-        for (lo, hi, Ns) in ((100, 101, 10_000), (1000, 1001, 1000))
+        # and could put the wall point's neighbour on the wall as well (old code: 5003 and 10003 interior points, a
+        # duplicated wall point). A wall at -1 in Float32 has its canvas minimum in the next binade: the index
+        # tolerance needs that rounding (a fixed share of dx left the wall without a point).
+        for (lo, hi, Ns) in ((61.6f0, 61.6f0 + 0.24f0, 5000), (-54.181f0, -54.181f0 + 0.39f0, 10_000), (-1f0, -0.7f0, 100_000))
             dx   = (Float32(hi) - Float32(lo)) / Ns
             geom = get_rectangular_domain(Float32, (lo,), (hi,))
             cd   = HyperCloudCore.ComputationalDomain(geom, (dx,), 2.5f0)
@@ -170,12 +173,15 @@ end
             @test length(xs) == Ns + 1 && xs[1] == lo && xs[end] == hi
             @test minimum(diff(xs)) > dx / 2                        # no duplicated wall point
         end
-        # A wall between two lattice points (extent not a multiple of dx) is not snapped to: the points stay on the lattice
-        geom = get_rectangular_domain(Float64, (0.0,), (1.0,))
-        cd   = HyperCloudCore.ComputationalDomain(geom, (0.3,), 2.5)
-        pos, isb, _, _, _ = HyperCloudCore.get_points(cd, geom; nominal_dx = (0.3,), interp_range_factor = 2.5)
-        xs   = sort([p[1] for (p, b) in zip(pos, isb) if !b])
-        @test xs[1] == 0 && maximum(abs.(xs ./ 0.3 .- round.(xs ./ 0.3))) < 1e-12 && xs[end] < 1
+        # A wall between two lattice points (extent not a multiple of dx) is not snapped to, also within 1 % of a
+        # multiple (only round-off is): the points stay on the lattice
+        for dxv in (0.3, 1 / 30.009, 1 / 29.991)
+            geom = get_rectangular_domain(Float64, (0.0,), (1.0,))
+            cd   = HyperCloudCore.ComputationalDomain(geom, (dxv,), 2.5)
+            pos, isb, _, _, _ = HyperCloudCore.get_points(cd, geom; nominal_dx = (dxv,), interp_range_factor = 2.5)
+            xs   = sort([p[1] for (p, b) in zip(pos, isb) if !b])
+            @test xs[1] == 0 && maximum(abs.(xs ./ dxv .- round.(xs ./ dxv))) < 1e-12 && xs[end] < 1
+        end
         dx = 2 / 30                                                   # 2-D: no wall row or column lost
         pg = ParticleGrid(get_rectangular_domain(Float64, (-1.0, -1.0), (1.0, 1.0)), (dx, dx), ExponentialWeightFunction(1.0, 2.5dx), 1)
         @test pg.meta.N_interior == 31^2
@@ -218,12 +224,11 @@ end
             nref = lattice_count(dx, R)
             @test all(i -> pg.core.is_boundary[i] || length(pg.neighbor.ranges[i]) == nref, 1:pg.meta.N)
         end
-        # Float32: the layer count of the finer axis is ⌈R/dx_d⌉, not one more from round-off (the guard was a Float64
-        # factor that cannot pull a Float32 product back: 22 layers instead of 21 here)
-        dxm  = 1.0f0 / 197
-        dx32 = (dxm, dxm / 6)
-        cd   = HyperCloudCore.ComputationalDomain(get_rectangular_domain(Float32, (0.0, 0.0), (1.0, 1.0)), dx32, 3.5f0)
-        @test round(Int, -cd.canvas_mins[2] / dx32[2]) == ceil(Int, 3.5 * Float64(dxm) / Float64(dx32[2]) - 1e-6)
+        # Float32: the layer count of the finer axis is ⌈R/dx_d⌉ = 6, not one more from round-off (the guard was a
+        # Float64 factor that cannot pull a Float32 product back: 7 layers here). The spacings are given in Float64, so
+        # their Float32 ratio is inexact.
+        cd = HyperCloudCore.ComputationalDomain(get_rectangular_domain(Float32, (0.0, 0.0), (1.0, 1.0)), (1 / 53, 1 / 159), 2.0)
+        @test round(Int, -cd.canvas_mins[2] * 159) == 6 && round(Int, -cd.canvas_mins[1] * 53) == 2
     end
 
     @testset "Boundary tags: periodic edges ignored, bc_map mismatches warned" begin

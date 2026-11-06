@@ -910,6 +910,47 @@ end
         HyperCloudCore._dmp_repair!(U, V, lo, hi)
         @test all(u -> 0.5 - 1e-12 <= u[1] <= 1.0 + 1e-12, U)
         @test sum(V .* getindex.(U, 1)) ≈ m0
+        # Float32 with small volumes: the excess (1e-7) was below the absolute threshold eps(T) and dropped, 3 % of
+        # the set's content; the threshold is relative to the content now
+        U32 = [State{1, Float32}(1.1f0), State{1, Float32}(0.6f0), State{1, Float32}(0.8f0)]
+        V32 = Float32[1f-6, 1f-6, 2f-6]
+        m32 = sum(V32 .* getindex.(U32, 1))
+        HyperCloudCore._dmp_repair!(U32, V32, fill(State{1, Float32}(0.5f0), 3), fill(State{1, Float32}(1f0), 3))
+        @test all(u -> 0.5f0 - 1f-6 <= u[1] <= 1f0 + 1f-6, U32)
+        @test isapprox(sum(V32 .* getindex.(U32, 1)), m32; rtol = 1f-5)
+    end
+
+    @testset "2-D: no event whose local set reaches a reduced-order particle" begin
+        # A reduced-order particle A and a close pair next to it. The former 4R band let an event start 3.8 R from A
+        # whose centre (4.01 R) lay inside the reach of its remap (R(1 + 2√2) + dx = 4.23 R): A's state changed by
+        # 2.4e-6. The band is that reach plus R/2 now.
+        n = 40; dx = 2 / n
+        L(pg) = (pg.domain.L_wrap, pg.domain.invL_wrap)
+        for dist_R in (3.8, 4.3)
+            pg = ParticleGrid(get_rectangular_domain(Float64, (-1.0, -1.0), (1.0, 1.0); is_periodic = true), (dx, dx),
+                              ExponentialWeightFunction(1.0, 2.5dx), 1; randomness = (0.05dx, 0.05dx), rng = MersenneTwister(3))
+            R, N = pg.meta.R, pg.meta.N
+            Lw, Li = L(pg)
+            d(i, x) = sqrt(sum(abs2, HyperCloudCore._wrapped_diff(pg.core.positions[i], x, Lw, Li)))
+            A  = argmin(i -> d(i, Space{2, Float64}(0.0, 0.0)), 1:N)
+            xA = pg.core.positions[A]
+            q  = argmin(i -> d(i, xA + Space{2, Float64}(dist_R * R, 0.0)), 1:N)
+            p  = argmin(i -> i == q ? Inf : (pg.core.positions[i][1] < pg.core.positions[q][1] - 0.5dx ? Inf : d(i, pg.core.positions[q])), 1:N)
+            pg.core.positions[p] = HyperCloudCore._wrap_point(pg, pg.core.positions[q] + Space{2, Float64}(0.0, 0.2dx))
+            pg.neighbor(pg)
+            for i in 1:N
+                x = pg.core.positions[i]; pg.rhos[i] = State{1, Float64}(1 + 0.5sinpi(x[1]) * cospi(x[2]) + 0.3x[1])
+            end
+            update_volumes!(pg, ShepardVolumes())
+            fill!(view(pg.core.particle_orders, 1:N), 3); pg.core.particle_orders[A] = 1
+            UA  = pg.rhos[A]
+            ad2 = ParticleAdaptivity(Float64)
+            reach = R * (1 + 2sqrt(2)) + dx
+            @test all(ev -> d(A, ev.center) > reach, HyperCloudCore._detect_events(pg, ad2, 3))
+            adapt_particles!(pg, ad2, 3)
+            A2 = findfirst(i -> pg.core.positions[i] == xA, 1:pg.meta.N)
+            @test pg.rhos[A2] == UA
+        end
     end
 
     # 2-D cloud with close pairs about 4.2 R apart: the old 4R spacing accepted them in one call although
