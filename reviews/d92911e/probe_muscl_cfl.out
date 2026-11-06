@@ -1,0 +1,7 @@
+MUSCL3 R=2.5Δx: CFL degree 3 Σ|c|Δx = 1.5; degree in use 2 Σ|c|Δx = 0.644; ratio 2.33; get_time_step·Σ|c_use|/Δx = 0.429
+MUSCL5 R=3.5Δx: CFL degree 5 Σ|c|Δx = 1.833; degree in use 4 Σ|c|Δx = 1.167; ratio 1.57; get_time_step·Σ|c_use|/Δx = 1.0
+MUSCL5 R=2.5Δx: CFL degree 5 Σ|c|Δx = 1.475; degree in use 3 Σ|c|Δx = 1.5; ratio 0.98; get_time_step·Σ|c_use|/Δx = 1.0
+cached path (after one step):
+MUSCL3 R=2.5Δx: Σ|c|Δx implied by the cached dt = 1.5, by the uncached dt = 1.5, fit in use 0.644
+MUSCL5 R=3.5Δx: Σ|c|Δx implied by the cached dt = 1.833, by the uncached dt = 1.167, fit in use 1.167
+MUSCL5 R=2.5Δx: Σ|c|Δx implied by the cached dt = 1.475, by the uncached dt = 1.5, fit in use 1.5

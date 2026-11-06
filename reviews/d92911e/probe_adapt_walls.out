@@ -1,0 +1,58 @@
+D=1 Float64 dirichlet seed=1: (events = 2, nwall = 2, ins = 2, rem = 2, ghosts_same = true, ghost_states_same = true, d_in = 0.0, d_gh = 0.0, mres = -1.464911383943423e-16, viol = 0.0)
+D=1 Float64 dirichlet seed=2: (events = 0, nwall = 0, ins = 0, rem = 0, ghosts_same = true, ghost_states_same = true, d_in = 0.0, d_gh = 0.0, mres = 0.0, viol = 0.0)
+D=1 Float64 dirichlet seed=3: (events = 2, nwall = 2, ins = 2, rem = 2, ghosts_same = true, ghost_states_same = true, d_in = 0.0, d_gh = 0.0, mres = 0.0, viol = 0.0)
+D=1 Float64 dirichlet seed=4: (events = 2, nwall = 2, ins = 2, rem = 4, ghosts_same = true, ghost_states_same = true, d_in = 2.8965662805842573e-16, d_gh = 0.0, mres = 2.8965662805842573e-16, viol = 0.0)
+D=1 Float64 dirichlet seed=5: (events = 1, nwall = 1, ins = 1, rem = 0, ghosts_same = true, ghost_states_same = true, d_in = 0.0, d_gh = 0.0, mres = 1.4852371282662797e-16, viol = 0.0)
+D=1 Float64 dirichlet seed=6: (events = 2, nwall = 2, ins = 2, rem = 2, ghosts_same = true, ghost_states_same = true, d_in = -2.9740975537107566e-16, d_gh = 0.0, mres = -1.4870487768553783e-16, viol = 0.0)
+Test Summary:               | Pass  Total  Time
+walls D=1 Float64 dirichlet |   19     19  6.5s
+D=1 Float64 outflow seed=1: (events = 2, nwall = 2, ins = 2, rem = 2, ghosts_same = true, ghost_states_same = true, d_in = 0.0, d_gh = 0.0, mres = -1.464911383943423e-16, viol = 0.0)
+D=1 Float64 outflow seed=2: (events = 0, nwall = 0, ins = 0, rem = 0, ghosts_same = true, ghost_states_same = true, d_in = 0.0, d_gh = 0.0, mres = 0.0, viol = 0.0)
+D=1 Float64 outflow seed=3: (events = 2, nwall = 2, ins = 2, rem = 2, ghosts_same = true, ghost_states_same = true, d_in = 0.0, d_gh = 0.0, mres = 0.0, viol = 0.0)
+D=1 Float64 outflow seed=4: (events = 2, nwall = 2, ins = 2, rem = 4, ghosts_same = true, ghost_states_same = true, d_in = 2.8965662805842573e-16, d_gh = 0.0, mres = 2.8965662805842573e-16, viol = 0.0)
+D=1 Float64 outflow seed=5: (events = 1, nwall = 1, ins = 1, rem = 0, ghosts_same = true, ghost_states_same = true, d_in = 0.0, d_gh = 0.0, mres = 1.4852371282662797e-16, viol = 0.0)
+D=1 Float64 outflow seed=6: (events = 2, nwall = 2, ins = 2, rem = 2, ghosts_same = true, ghost_states_same = true, d_in = -2.9740975537107566e-16, d_gh = 0.0, mres = -1.4870487768553783e-16, viol = 0.0)
+Test Summary:             | Pass  Total  Time
+walls D=1 Float64 outflow |   19     19  0.0s
+D=1 Float32 dirichlet seed=1: (events = 1, nwall = 1, ins = 1, rem = 2, ghosts_same = true, ghost_states_same = true, d_in = -1.2721547742040346e-8, d_gh = 0.0, mres = 0.0, viol = 0.0)
+D=1 Float32 dirichlet seed=2: (events = 2, nwall = 2, ins = 2, rem = 2, ghosts_same = true, ghost_states_same = true, d_in = -6.704544909713703e-9, d_gh = 0.0, mres = 0.0, viol = 0.0)
+D=1 Float32 dirichlet seed=3: (events = 1, nwall = 1, ins = 1, rem = 2, ghosts_same = true, ghost_states_same = true, d_in = 5.313306631743728e-8, d_gh = 0.0, mres = 8.113301769529365e-8, viol = 0.0)
+D=1 Float32 dirichlet seed=4: (events = 1, nwall = 1, ins = 1, rem = 2, ghosts_same = true, ghost_states_same = true, d_in = 2.7560422689865046e-8, d_gh = 0.0, mres = -1.5597587911261147e-7, viol = 0.0)
+D=1 Float32 dirichlet seed=5: (events = 2, nwall = 2, ins = 2, rem = 2, ghosts_same = true, ghost_states_same = true, d_in = -2.157163180411375e-9, d_gh = 0.0, mres = 0.0, viol = 0.0)
+D=1 Float32 dirichlet seed=6: (events = 2, nwall = 2, ins = 2, rem = 4, ghosts_same = true, ghost_states_same = true, d_in = 3.4649592031630306e-8, d_gh = 0.0, mres = 8.058745413974312e-8, viol = 0.0)
+Test Summary:               | Pass  Total  Time
+walls D=1 Float32 dirichlet |   19     19  3.4s
+D=1 Float32 outflow seed=1: (events = 1, nwall = 1, ins = 1, rem = 2, ghosts_same = true, ghost_states_same = true, d_in = -1.2721547742040346e-8, d_gh = 0.0, mres = 0.0, viol = 0.0)
+D=1 Float32 outflow seed=2: (events = 2, nwall = 2, ins = 2, rem = 2, ghosts_same = true, ghost_states_same = true, d_in = -6.704544909713703e-9, d_gh = 0.0, mres = 0.0, viol = 0.0)
+D=1 Float32 outflow seed=3: (events = 1, nwall = 1, ins = 1, rem = 2, ghosts_same = true, ghost_states_same = true, d_in = 5.313306631743728e-8, d_gh = 0.0, mres = 8.113301769529365e-8, viol = 0.0)
+D=1 Float32 outflow seed=4: (events = 1, nwall = 1, ins = 1, rem = 2, ghosts_same = true, ghost_states_same = true, d_in = 2.7560422689865046e-8, d_gh = 0.0, mres = -1.5597587911261147e-7, viol = 0.0)
+D=1 Float32 outflow seed=5: (events = 2, nwall = 2, ins = 2, rem = 2, ghosts_same = true, ghost_states_same = true, d_in = -2.157163180411375e-9, d_gh = 0.0, mres = 0.0, viol = 0.0)
+D=1 Float32 outflow seed=6: (events = 2, nwall = 2, ins = 2, rem = 4, ghosts_same = true, ghost_states_same = true, d_in = 3.4649592031630306e-8, d_gh = 0.0, mres = 8.058745413974312e-8, viol = 0.0)
+Test Summary:             | Pass  Total  Time
+walls D=1 Float32 outflow |   19     19  0.0s
+D=2 Float64 dirichlet seed=1: (events = 4, nwall = 4, ins = 4, rem = 2, ghosts_same = true, ghost_states_same = true, d_in = 3.333558261790626e-16, d_gh = 0.0, mres = -3.333558261790626e-16, viol = 0.0)
+D=2 Float64 dirichlet seed=2: (events = 4, nwall = 4, ins = 4, rem = 0, ghosts_same = true, ghost_states_same = true, d_in = 3.3038867353849044e-16, d_gh = 0.0, mres = -2.2025911569232695e-16, viol = 0.0)
+D=2 Float64 dirichlet seed=3: (events = 4, nwall = 4, ins = 4, rem = 2, ghosts_same = true, ghost_states_same = true, d_in = -2.2222424236780675e-16, d_gh = 0.0, mres = 1.1111212118390337e-16, viol = 0.0)
+Test Summary:               | Pass  Total  Time
+walls D=2 Float64 dirichlet |   10     10  2.4s
+D=2 Float64 outflow seed=1: (events = 4, nwall = 4, ins = 4, rem = 2, ghosts_same = true, ghost_states_same = true, d_in = 3.333558261790626e-16, d_gh = 0.0, mres = -3.333558261790626e-16, viol = 0.0)
+D=2 Float64 outflow seed=2: (events = 4, nwall = 4, ins = 4, rem = 0, ghosts_same = true, ghost_states_same = true, d_in = 3.3038867353849044e-16, d_gh = 0.0, mres = -2.2025911569232695e-16, viol = 0.0)
+D=2 Float64 outflow seed=3: (events = 4, nwall = 4, ins = 4, rem = 2, ghosts_same = true, ghost_states_same = true, d_in = -2.2222424236780675e-16, d_gh = 0.0, mres = 1.1111212118390337e-16, viol = 0.0)
+Test Summary:             | Pass  Total  Time
+walls D=2 Float64 outflow |   10     10  0.0s
+D=2 Float32 dirichlet seed=1: (events = 4, nwall = 4, ins = 4, rem = 0, ghosts_same = true, ghost_states_same = true, d_in = 7.963979388059458e-8, d_gh = 0.0, mres = 0.0, viol = 0.0)
+D=2 Float32 dirichlet seed=2: (events = 4, nwall = 4, ins = 4, rem = 2, ghosts_same = true, ghost_states_same = true, d_in = 1.0419629483879372e-7, d_gh = 0.0, mres = -3.5613275190684504e-7, viol = 0.0)
+D=2 Float32 dirichlet seed=3: (events = 4, nwall = 4, ins = 4, rem = 2, ghosts_same = true, ghost_states_same = true, d_in = 5.2716856972348145e-8, d_gh = 0.0, mres = 1.7898648201544047e-7, viol = 0.0)
+Test Summary:               | Pass  Total  Time
+walls D=2 Float32 dirichlet |   10     10  2.2s
+D=2 Float32 outflow seed=1: (events = 4, nwall = 4, ins = 4, rem = 0, ghosts_same = true, ghost_states_same = true, d_in = 7.963979388059458e-8, d_gh = 0.0, mres = 0.0, viol = 0.0)
+D=2 Float32 outflow seed=2: (events = 4, nwall = 4, ins = 4, rem = 2, ghosts_same = true, ghost_states_same = true, d_in = 1.0419629483879372e-7, d_gh = 0.0, mres = -3.5613275190684504e-7, viol = 0.0)
+D=2 Float32 outflow seed=3: (events = 4, nwall = 4, ins = 4, rem = 2, ghosts_same = true, ghost_states_same = true, d_in = 5.2716856972348145e-8, d_gh = 0.0, mres = 1.7898648201544047e-7, viol = 0.0)
+Test Summary:             | Pass  Total  Time
+walls D=2 Float32 outflow |   10     10  0.0s
+volume_estimator D=1 Float64 seed=1: d_in=0.000653567199546492 d_gh=-0.0006535671995464187 mass_residual=-1.464911383943423e-16 ghosts_same=false ghost_states_same=true nwall=2
+volume_estimator D=1 Float64 seed=2: d_in=0.0 d_gh=0.0 mass_residual=0.0 ghosts_same=true ghost_states_same=true nwall=0
+volume_estimator D=1 Float64 seed=3: d_in=-0.0026207195316463997 d_gh=0.0026207195316467363 mass_residual=1.4955452110910563e-16 ghosts_same=false ghost_states_same=true nwall=2
+volume_estimator D=2 Float64 seed=1: d_in=0.0009456185790068932 d_gh=-0.0009456185790065043 mass_residual=-1.111186087263542e-16 ghosts_same=false ghost_states_same=true nwall=4
+volume_estimator D=2 Float64 seed=2: d_in=0.0010625335766673526 d_gh=-0.0010625335766678483 mass_residual=4.405182313846539e-16 ghosts_same=false ghost_states_same=true nwall=4
+volume_estimator D=2 Float64 seed=3: d_in=0.0004661385683976691 d_gh=-0.0004661385683992802 mass_residual=2.2222424236780675e-16 ghosts_same=false ghost_states_same=true nwall=4

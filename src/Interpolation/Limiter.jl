@@ -34,9 +34,14 @@ struct NoLimiter <: AbstractSlopeLimiter end
 
 @inline limiter_phi(::BarthJespersenLimiter, r::T) where {T} = math_min(one(T), r)
 
+# (r² + 2r) / (r² + r + 2), divided by r² for r > 1: r² overflows Float32 from r ≈ 1.8e19 (Inf/Inf = NaN, which
+# `min` then spreads over the whole limited gradient).
 @inline function limiter_phi(::VenkatakrishnanLimiter, r::T) where {T}
-    r_pos = math_max(zero(T), r) 
-    return (r_pos^2 + T(2.0) * r_pos) / (r_pos^2 + r_pos + T(2.0))
+    r_pos = math_max(zero(T), r)
+    s     = one(T) / math_max(one(T), r_pos)
+    small = (r_pos^2 + T(2) * r_pos) / (r_pos^2 + r_pos + T(2))
+    large = (one(T) + T(2) * s) / (one(T) + s + T(2) * s^2)
+    return ifelse(r_pos > one(T), large, small)
 end
 
 @inline function limiter_phi(::SuperbeeLimiter, r::T) where {T}

@@ -58,10 +58,17 @@ Adapt.adapt_structure(to, bt::IMEXButcherTableau) = static_tableau(bt, Val(num_s
 """
     device_grid(ArrayType, pg::ParticleGrid) -> ParticleGrid
 
-A copy of `pg` whose component arrays are `ArrayType`s (e.g. `CuArray`), with its own mutable metadata.
-The geometry (host closures and the boundary-condition map) and the reordering state are kept as they
-are: time steps, neighbour searches and boundary conditions then run on the device; reordering and
-adaptivity still need the host grid (see docs/src/gpu_roadmap.md).
+A grid with the content of `pg` whose component arrays are `ArrayType`s (e.g. `CuArray`), with its own
+mutable metadata. The geometry (host closures and the boundary-condition map) and the reordering state are
+kept as they are: time steps, neighbour searches and boundary conditions then run on the device; reordering
+and adaptivity still need the host grid (see docs/src/gpu_roadmap.md).
+
+Arrays that already have the requested type are **shared, not copied**: `device_grid(Array, host_grid)`
+returns a grid whose arrays are those of `host_grid` (the neighbour structure, geometry and reordering
+state are the same objects); only the metadata (`N`, `max_nb`, …) and the `Growable` wrappers of the particle
+arrays are new. The arrays stay shared even after growth (host buffers grow in place with `resize!`), so
+writes through either grid are seen by both while their metadata can diverge. Use `deepcopy` for an independent host copy. Converting a device grid to `Array`
+(as the adaptivity does) or a host grid to a device array type copies.
 """
 function device_grid(::Type{AT}, pg::ParticleGrid{D, M, T}) where {AT <: AbstractArray, D, M, T}
     m  = pg.meta

@@ -14,7 +14,7 @@ Weighted Essentially Non-Oscillatory (WENO) divergence interpolator for evaluati
 - `T`: The numeric type (e.g., `Float64`).
 - `dimension`: Spatial dimension.
 - `M`: Number of state components.
-- `order`: Maximum interpolation order, which must be `≥ 2` to support the second derivatives required for evaluating smoothness indicators.
+- `order`: Maximum interpolation order (degree of the fits), which must be `≥ 2`.
 - `div_order`: Target order (defaults to `0`, dynamically bound to the available particle order).
 
 # Callable / Functor
@@ -24,7 +24,7 @@ Weighted Essentially Non-Oscillatory (WENO) divergence interpolator for evaluati
 Computes the divergence of the flux at particle `i`. The execution follows these steps:
 - Evaluates a full central stencil using all available neighbors within the interaction buffer.
 - Evaluates directional one-sided stencils for each spatial dimension, selecting neighbors based on the sign of the local advection velocity.
-- Computes smoothness indicators for both the central and directional stencils using locally scaled spatial derivatives.
+- Computes smoothness indicators for both the central and directional stencils from the first derivatives of their fits, `IS = Σ_d (∂_d u)² Δx²` (the higher-degree coefficients do not enter).
 - Calculates non-linear weights to heavily penalize stencils crossing discontinuities.
 - Blends the central and directional interpolations using these weights to form the final stable divergence computation.
 - Scalar equations only (`M == 1`); the advection speed is taken per direction from `velocity(eq, U, d)`.
@@ -95,6 +95,8 @@ function (weno::WENO{D, M, T, MAX_ORDER, DIV_ORDER, INTERPS})(
     )
     resC = SVector{D, State{M, T}}(ntuple(d -> resC_raw[d], Val(D)))
 
+    # Smoothness indicator from the D first derivatives only: `resC` holds just those, so `k <= D` always and the
+    # Δx⁴ weight of higher-order coefficients is never used (see docs/src/spatial/weno.md)
     smoothC = zero(State{M, T})
     @inbounds for k in 1:length(resC)
         weight = k <= D ? dx2 : dx4 

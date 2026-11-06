@@ -266,9 +266,12 @@ end
 @testset "Implicit stage: RHS from the solve" begin
     # One implicit source: K_I of a diagonal stage is (U_out - U_in) / (dt a_ii), which equals S(U_out) for an
     # exact solve. Constant state, so the explicit RHS is zero and the step is the ARS222 solution of u' = -λu.
-    struct DecaySource <: AbstractImplicitSourceTerm; λ::Float64; end
-    HyperCloudCore.evaluate_source(s::DecaySource, U, i::Int, pg, t::Real) = -s.λ * U
-    HyperCloudCore.implicit_solve(s::DecaySource, U_in, γ::Real, i::Int, pg, t::Real) = U_in / (1 + γ * s.λ)
+    # Decay rate λ (1 + κ sin(π x_i)); κ ≠ 0 makes it vary in space, so it does not commute with the advection
+    struct DecaySource <: AbstractImplicitSourceTerm; λ::Float64; κ::Float64; end
+    DecaySource(λ) = DecaySource(λ, 0.0)
+    decay_rate(s::DecaySource, i, pg) = s.λ * (1 + s.κ * sinpi(pg.core.positions[i][1]))
+    HyperCloudCore.evaluate_source(s::DecaySource, U, i::Int, pg, t::Real) = -decay_rate(s, i, pg) * U
+    HyperCloudCore.implicit_solve(s::DecaySource, U_in, γ::Real, i::Int, pg, t::Real) = U_in / (1 + γ * decay_rate(s, i, pg))
     eq  = make_advection_1d()
     pg  = set_ic!(make_pg_1d(40), x -> 1.0)
     src = DecaySource(3.0)
@@ -285,6 +288,78 @@ end
     end
     @test checked >= 1
     @test all(j -> abs(pg.rhos[j][1] - exp(-src.λ * dt)) < 5e-3, interior_indices(pg))     # second-order IMEX step
+end
+
+@testset "IMEX tableaus: observed order through the stepper" begin
+    # Advection (explicit) coupled with a decay (implicit) on a fixed periodic lattice: the error against a fine-Δt
+    # run of the same spatial scheme is the temporal error. All four tableaus have three stages, so they share the
+    # stepper type of the test above (one compilation). The old two-stage ARS222 and the inconsistent PRSSP3 had
+    # EOC 1.05 / 1.07 here. The decay rate varies in space: with a constant rate the two operators commute and only
+    # the sum b̃·c + b·c̃ of the coupling conditions enters (a pair with b̃·c = 0.7, b·c̃ = 0.3 passed at EOC 2.02;
+    # with κ = 0.8 it gives 1.07).
+    eq  = make_advection_1d()
+    src = DecaySource(3.0, 0.8)
+    function imex_run(bt, n; tend = 0.4)
+        pg = set_ic!(make_pg_1d(20), x -> sin(π * x))
+        ts = GeneralRKTimeStepper(eq, MUSCL(Float64, 1, 1, 2, NoLimiter(), RusanovFlux()), MOOD(), (), (src,), bt)
+        dt = tend / n
+        for k in 0:(n - 1); ts(eq, pg, k * dt, dt); end
+        return [pg.rhos[i][1] for i in interior_indices(pg)]
+    end
+    for (make, order) in ((IMEX_ARS222_Tableau, 2), (IMEX_ARS233_Tableau, 3), (IMEX_PRSSP3_Tableau, 2), (IMEX_SSP2332_Tableau, 2))
+        bt  = make(Float64)
+        ref = imex_run(bt, 640)
+        e1, e2 = maximum(abs, imex_run(bt, 20) - ref), maximum(abs, imex_run(bt, 40) - ref)
+        @test log2(e1 / e2) > order - 0.2
+    end
+end
+
+@testset "Implicit sources with an explicit tableau are applied explicitly" begin
+    # Used to be dropped (b = 0): one RK3 step of u' = -λu from u = 1 is the cubic Taylor polynomial of exp(-λΔt)
+    eq  = make_advection_1d()
+    pg  = set_ic!(make_pg_1d(20), x -> 1.0)
+    src = DecaySource(3.0)
+    ts  = @test_logs (:warn, r"applied explicitly") GeneralRKTimeStepper(eq, MUSCL(Float64, 1, 1, 2, NoLimiter(), RusanovFlux()),
+                                                                          MOOD(), (), (src,), RK3_SSP_Tableau(Float64))
+    @test ts.substep_ratio ≈ 1 atol = 1e-9                          # still the SSP coefficient of RK3
+    # Only a tableau without an implicit part (a = 0 and b = 0) is converted: a hand-made a = 0, b ≠ 0 keeps its b
+    own = IMEXButcherTableau(zeros(2, 2), [0.0 0.0; 1.0 0.0], [0.0, 1.0], [0.0, 1.0], [0.25, 0.75], [0.5, 0.5])
+    ts2 = @test_logs GeneralRKTimeStepper(eq, MUSCL(Float64, 1, 1, 2, NoLimiter(), RusanovFlux()), MOOD(), (), (src,), own)
+    @test ts2.tableau.b == [0.25, 0.75] && iszero(ts2.tableau.a)
+    dt = 0.1; z = -src.λ * dt
+    ts(eq, pg, 0.0, dt)
+    @test all(j -> isapprox(pg.rhos[j][1], 1 + z + z^2 / 2 + z^3 / 6; rtol = 1e-13), interior_indices(pg))
+    # The Euler substep MOOD would check includes the source (not sized here: no MOOD criterion)
+    HyperCloudCore.ensure_capacity!(ts.rho_sub, pg.meta.N)
+    W = HyperCloudCore.form_substep!(ts, pg, 2, dt)
+    Y, KE, KI = ts.Y_stages[1], ts.K_E_stages[1], ts.K_I_stages[1]
+    @test all(j -> W[j] ≈ Y[j] + dt * (KE[j] + KI[j]) && KI[j][1] ≈ -src.λ * Y[j][1], interior_indices(pg))
+end
+
+@testset "Central/Upwind: the neighbour-count safeguard counts the intercept" begin
+    # The divergence fit has basis_count(D, q) + 1 unknowns. On a jittered 1-D cloud with R = 2.5Δx, particles with
+    # exactly 4 neighbours used to fit degree 4 through the Tikhonov retry: div(x) off by up to 8e-3 (and Central4
+    # did not converge, errors 4.5e-3, 5.7e-3, 3.8e-3 for N = 40, 80, 160). Now they fit degree 3: exact for F = x.
+    geom = get_rectangular_domain(Float64, (-1.0,), (1.0,); is_periodic = true)
+    dx   = 2 / 40
+    pg   = ParticleGrid(geom, (dx,), ExponentialWeightFunction(1.0, 2.5dx), 1; randomness = (0.2dx,), rng = MersenneTwister(1))
+    N    = pg.meta.N
+    eq   = make_advection_1d()
+    for i in 1:N; pg.rhos[i] = State{1, Float64}(pg.core.positions[i][1]); end    # F = u = x: div F = 1
+    ib   = HyperCloudCore.InteractionBuffer{1, 1, Float64}()
+    update_size!(ib, length(pg.neighbor.indices))
+    central = CentralDivergence(Float64, 1, 1, 4)
+    fill!(view(pg.core.particle_orders, 1:N), 4)
+    inner = [i for i in 1:N if abs(pg.core.positions[i][1]) < 0.7]               # away from the periodic seam of x
+    @test any(i -> length(pg.neighbor.ranges[i]) == HyperCloudCore.basis_count(1, 4), inner)
+    err = maximum(i -> abs(central(eq, i, pg.rhos[i], pg.neighbor.ranges[i], pg, pg.rhos, ib, EPD1())[1] - 1), inner)
+    @test err < 1e-10
+    # Upwind (degree 1, D + 1 = 2 unknowns): a single neighbour is not enough
+    upwind = UpwindDivergence(Float64, 1, 1, 1, :Classic, RusanovFlux())
+    fill!(view(pg.core.particle_orders, 1:N), 1)
+    i  = inner[1]
+    sl = first(pg.neighbor.ranges[i]):first(pg.neighbor.ranges[i])
+    @test upwind(eq, i, pg.rhos[i], sl, pg, pg.rhos, ib, EPD1()) == zero(State{1, Float64})
 end
 
 @testset "Streamed divergence" begin
@@ -703,6 +778,91 @@ end
         @test pg.meta.N == N0 - 1
         @test maximum(abs.(rep.mass_residual)) < 1e-12
         @test all(r -> 0.5 - 1e-12 <= r[1] <= 1.5 + 1e-12, view(pg.rhos, 1:pg.meta.N))
+    end
+
+    @testset "No insertion between an interior particle and a ghost" begin
+        # The interior compresses towards 0, the ghosts stay: a gap opens at the right wall. The insertion used to
+        # put an interior-flagged particle at x = 1.001, outside the domain.
+        dx   = 0.01
+        geom = get_rectangular_domain(Float64, (0.0,), (1.0,))
+        pg   = ParticleGrid(geom, (dx,), ExponentialWeightFunction(1.0, 2.5dx), 1)
+        for i in 1:pg.meta.N
+            pg.rhos[i] = State{1, Float64}(1.0)
+            pg.core.is_boundary[i] || (pg.core.positions[i] = 0.992 * pg.core.positions[i])
+        end
+        pg.neighbor(pg)
+        update_volumes!(pg, ShepardVolumes())
+        adapt_particles!(pg, ad, kmax)
+        @test all(i -> pg.core.is_boundary[i] || geom.is_interior(pg.core.positions[i]), 1:pg.meta.N)
+        @test HyperCloudCore._has_adapt_candidates(pg, ad) == false       # the kernel pre-check agrees
+    end
+
+    @testset "A CapacityError leaves the grid untouched" begin
+        pg = set_ic!(make_pg_1d(40), ic)
+        punch_hole!(pg, 10)
+        N  = pg.meta.N
+        reserve!(pg; limit = memory_estimate(pg).bytes + 1, tolerance = 0)   # exactly N particles
+        U0, V0, m0 = copy(view(pg.rhos, 1:N)), copy(view(pg.core.volumes, 1:N)), total_mass(pg)
+        @test_throws CapacityError adapt_particles!(pg, ad, kmax)
+        @test pg.meta.N == N && view(pg.rhos, 1:N) == U0 && view(pg.core.volumes, 1:N) == V0 && total_mass(pg) == m0
+    end
+
+    @testset "A CapacityError of the neighbour slots also leaves the grid untouched" begin
+        # One gap of 1.7Δx; room for 51 particles but only for the current slots per particle (200 slots): the
+        # insertion needs 204, which used to throw in the neighbour search after the topology change.
+        function gap_grid()
+            geom = get_rectangular_domain(Float64, (0.0,), (1.0,); is_periodic = true)
+            dx   = 0.02
+            g    = ParticleGrid(geom, (dx,), ExponentialWeightFunction(1.0, 2.5dx), 1)   # not `pg`: the closure
+            n    = g.meta.N                                                               # would assign the outer one
+            for i in 1:n; g.rhos[i] = State{1, Float64}(sin(2π * g.core.positions[i][1])); end
+            order = sortperm([g.core.positions[i][1] for i in 1:n])
+            s = (1 - 1.7dx) / (n - 1)
+            for (k, i) in enumerate(order); g.core.positions[i] = Space{1, Float64}(0.001 + (k - 1) * s); end
+            g.neighbor(g); update_volumes!(g, ShepardVolumes())
+            return g
+        end
+        pg  = gap_grid()
+        N   = pg.meta.N
+        # the slot count of the new topology is predicted exactly (here, without a reservation)
+        evs = HyperCloudCore._detect_events(pg, ad, kmax)
+        tot, mx = HyperCloudCore._slots_after_events(pg, evs)
+        pg2 = gap_grid()
+        adapt_particles!(pg2, ad, kmax)
+        @test pg2.meta.N == N + 1
+        @test tot == sum(i -> length(pg2.neighbor.ranges[i]), 1:pg2.meta.N) && mx == pg2.meta.max_nb
+        spp = slots_per_particle(pg)
+        est = memory_estimate(pg; particles = 0, slots = 0)
+        reserve!(pg; limit = est.fixed + ceil(Int, (N + 1.5) * (est.per_particle + spp * est.per_slot)), tolerance = 0,
+                 slots_per_particle = spp)
+        U0, V0, X0 = copy(view(pg.rhos, 1:N)), copy(view(pg.core.volumes, 1:N)), copy(view(pg.core.positions, 1:N))
+        @test_throws CapacityError adapt_particles!(pg, ad, kmax)
+        @test pg.meta.N == N && view(pg.rhos, 1:N) == U0 && view(pg.core.volumes, 1:N) == V0 && view(pg.core.positions, 1:N) == X0
+        @test maximum(i -> last(pg.neighbor.ranges[i]), 1:N) <= length(pg.neighbor.indices)
+    end
+
+    @testset "Events next to a wall leave the boundary particles alone" begin
+        # A merge with the wall particle of a FixedDirichlet box: the remap used to write the ghosts too (0.95 →
+        # 0.9529 at x = -0.05), which changed the Dirichlet data for good. Ghost states and volumes stay now, and
+        # Σ V U over the interior is exact.
+        bc   = Dict{Int, AbstractBoundaryCondition}(1 => FixedDirichlet())
+        geom = get_rectangular_domain(Float64, (0.0,), (1.0,); bc_map = bc)
+        dx   = 0.05
+        pg   = ParticleGrid(geom, (dx,), ExponentialWeightFunction(1.0, 2.5dx), 1)
+        N    = pg.meta.N
+        for i in 1:N; pg.rhos[i] = State{1, Float64}(1 + pg.core.positions[i][1]); end
+        i5 = argmin(i -> abs(pg.core.positions[i][1] - 0.05), 1:N)
+        pg.core.positions[i5] = Space{1, Float64}(0.015); pg.rhos[i5] = State{1, Float64}(1.015)
+        pg.neighbor(pg); update_volumes!(pg, ShepardVolumes())
+        ghost(i) = pg.core.is_boundary[i]
+        g0 = Dict(pg.core.positions[i] => (pg.rhos[i], pg.core.volumes[i]) for i in 1:N if ghost(i))
+        content(g) = sum(i -> pg.core.volumes[i] * pg.rhos[i][1], filter(i -> ghost(i) == g, 1:pg.meta.N))
+        c_in, c_gh = content(false), content(true)
+        rep = adapt_particles!(pg, ad, kmax)
+        @test rep.removed == 2 && rep.inserted == 1
+        @test Dict(pg.core.positions[i] => (pg.rhos[i], pg.core.volumes[i]) for i in 1:pg.meta.N if ghost(i)) == g0
+        @test abs(content(false) - c_in) < 1e-14 && content(true) == c_gh
+        @test all(i -> ghost(i) || 1 - 1e-12 <= pg.rhos[i][1] <= 2 + 1e-12, 1:pg.meta.N)
     end
 
     @testset "No events inside the shock band" begin

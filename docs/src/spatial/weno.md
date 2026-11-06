@@ -9,17 +9,17 @@ Grid-based WENO combines several candidate stencils with non-linear weights that
 - **Central stencil $C$:** all neighbours.
 - **Directional stencil $S_d$:** for each direction $d$, only the neighbours on the upwind side, i.e. $x_{ij,d} < 0$ if $v_d > 0$ and $x_{ij,d} \ge 0$ otherwise.
 
-Each stencil gets an MLS fit of the state differences, and the derivatives of that fit serve as smoothness indicators.
+Each stencil gets an MLS fit of the state differences, and the first derivatives of that fit serve as smoothness indicators.
 
 ## Formulation
 
-For a stencil with fitted derivatives $D^\beta u$ (basis index $\beta$), the smoothness indicator is
+For a stencil whose fit (of degree up to `order`) has the first derivatives $\partial_d u$, the smoothness indicator is
 
 ```math
-IS = \sum_{\beta \le D} \big(D^\beta u\big)^2 \Delta x^2 + \sum_{\beta > D} \big(D^\beta u\big)^2 \Delta x^4 ,
+IS = \sum_{d=1}^{D} \big(\partial_d u\big)^2 \Delta x^2 ,
 ```
 
-so first derivatives are weighted by $\Delta x^2$ and all higher-order coefficients by $\Delta x^4$, with $\Delta x = \min_d \Delta x_d$. The weights are
+with $\Delta x = \min_d \Delta x_d$. Only the first derivatives enter: the fit's higher-degree coefficients are computed (they make the first derivatives more accurate) but not used in $IS$, so a smooth extremum and a kink with the same gradient magnitude get the same weights. (The code contains a $\Delta x^4$ weight for higher-order coefficients, but the indicator loop only sees the $D$ first derivatives, so that branch is never taken.) The weights are
 
 ```math
 \beta = \frac{1/2}{(IS + \epsilon)^2}, \qquad
@@ -41,7 +41,7 @@ This is the advective form $v\cdot\nabla u$ with the speed frozen at $U_i$. It i
 WENO(T, D, M, order; div_order = 0)
 ```
 
-- `order ≥ 2` is required, because the smoothness indicators need second-order coefficients.
+- `order ≥ 2` is required (asserted). It sets the degree of the fits, i.e. the accuracy of the gradients; the smoothness indicators use only their first derivatives.
 - `M == 1` is asserted. The upwind side of a stencil needs a single wave speed per direction; systems would need a characteristic decomposition first.
 - `div_order > 0` caps the fit degree at `min(div_order, current order)`.
 

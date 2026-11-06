@@ -246,6 +246,7 @@ function ParticleGrid(
         randomness = randomness,
         rng = rng
     )
+    _check_bc_tags(geom, tags, is_boundary)
     
     N = length(positions)
     N_interior = count(!, is_boundary)

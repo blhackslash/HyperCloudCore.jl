@@ -122,6 +122,12 @@ Before a `KABackend` launch, `check_resident` walks the arguments and throws if 
 that backend. Without it AMDGPU.jl would copy a host array to the device for the launch and silently drop
 the kernel's writes to it.
 
+A `KABackend` launches with work-groups of its `workgroupsize` (default 256). A kernel that allows fewer
+work-items per group (private memory or registers grow with the state size: on PoCL the flux kernel of a
+2-D state with 36 components allows 231) is relaunched with a size KernelAbstractions picks within the
+kernel's limit, and keeps that choice; the limit is checked before anything runs, so the first launch has
+no side effects.
+
 ## Rules for kernel bodies
 
 - Only `args` as input; no closures over the enclosing method's variables or static parameters.

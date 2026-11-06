@@ -1,0 +1,17 @@
+(a) Float32 resolutions losing a wall point: 0 of 400
+Test Summary:                                          | Pass  Total  Time
+(a) Float32 sweep [0,1] and [-1,1], Ns = 100:100:20000 |    1      1  1.3s
+(b) fine / offset grids: tolerance in units of dx and the smallest spacing
+  Float32 [0, 1] Ns=100000                 interior 100001 (want 100001), walls true/true, tol = 0.0957 dx, min spacing 0.9894 dx
+  Float32 [0, 1] Ns=300000                 interior 300001 (want 300001), walls true/true, tol = 0.286 dx, min spacing 0.9835 dx
+  Float32 [0, 1] Ns=600000                 interior 600001 (want 600001), walls true/true, tol = 0.573 dx, min spacing 0.9656 dx
+  Float32 [0, 1] Ns=1000000                interior 1000001 (want 1000001), walls true/true, tol = 0.954 dx, min spacing 0.0 dx
+  Float32 [10, 11] Ns=1000                 interior 1001 (want 1001), walls true/true, tol = 0.0108 dx, min spacing 0.9995 dx
+  Float32 [10, 11] Ns=10000                interior 10001 (want 10001), walls true/true, tol = 0.105 dx, min spacing 0.9918 dx
+  Float32 [100, 101] Ns=1000               interior 1001 (want 1001), walls true/true, tol = 0.0967 dx, min spacing 0.9995 dx
+  Float32 [100, 101] Ns=10000              interior 10001 (want 10001), walls true/true, tol = 0.964 dx, min spacing 0.9918 dx
+  Float32 [1000, 1001] Ns=1000             interior 1001 (want 1001), walls true/true, tol = 0.955 dx, min spacing 0.9766 dx
+  Float64 [0, 1] Ns=1000000                interior 1000001 (want 1000001), walls true/true, tol = 1.67e-8 dx, min spacing 1.0 dx
+  Float64 [1.0e6, 1.000001e6] Ns=1000      interior 1001 (want 1001), walls true/true, tol = 1.79e-6 dx, min spacing 1.0 dx
+Test Summary:                                        | Pass  Total  Time
+(d) jittered: no duplicates, walls not snapped twice |   18     18  0.0s

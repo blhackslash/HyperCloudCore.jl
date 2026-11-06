@@ -42,6 +42,12 @@ struct ThreadsBackend <: ExecutionBackend end
 Runs every per-particle loop as a KernelAbstractions kernel on `backend`: `CPU()` for testing the
 kernels on the host, or a device backend from CUDA.jl / AMDGPU.jl / Metal.jl / oneAPI.jl. All
 arrays reached by the kernels must live on that device (see docs/src/gpu_roadmap.md).
+
+Kernels are launched with work-groups of `workgroupsize` items. A kernel whose own limit is smaller
+(its private memory or registers grow with the state size: on PoCL the 2-D flux kernel of a
+36-component state allows 231 items) is launched with a work-group size KernelAbstractions chooses
+within that limit instead; the launch is checked before anything runs, and the choice is kept for
+that kernel (body and argument types) from then on.
 """
 struct KABackend{B <: KA.Backend} <: ExecutionBackend
     backend::B
@@ -115,11 +121,31 @@ function foreach_particle(body::F, b::KABackend, N::Int, args::Tuple) where {F}
     N == 0 && return nothing
     kargs = kernel_view(args)
     check_resident(b.backend, kargs)
-    kernel = _foreach_kernel(b.backend, b.workgroupsize)
-    kernel(body, kargs; ndrange = N)
+    key = (b.backend, b.workgroupsize, typeof(body), typeof(kargs))
+    if _needs_tuned_workgroup(key)
+        _foreach_kernel(b.backend)(body, kargs; ndrange = N)
+    else
+        try
+            _foreach_kernel(b.backend, b.workgroupsize)(body, kargs; ndrange = N)
+        catch err
+            _is_workgroup_size_error(err) || rethrow()
+            # The kernel allows fewer work-items per group than `b.workgroupsize`. The launch was checked
+            # before anything ran, so relaunch with a size KernelAbstractions picks within the kernel's limit.
+            _remember_tuned_workgroup!(key)
+            _foreach_kernel(b.backend)(body, kargs; ndrange = N)
+        end
+    end
     KA.synchronize(b.backend)
     return nothing
 end
+
+# Kernels (backend, configured size, body and argument types) whose limit is below the configured work-group size
+const _TUNED_WORKGROUP = Set{Any}()
+const _TUNED_WORKGROUP_LOCK = ReentrantLock()
+_needs_tuned_workgroup(key) = !isempty(_TUNED_WORKGROUP) && lock(() -> key in _TUNED_WORKGROUP, _TUNED_WORKGROUP_LOCK)
+_remember_tuned_workgroup!(key) = lock(() -> push!(_TUNED_WORKGROUP, key), _TUNED_WORKGROUP_LOCK)
+# KernelInterface's check of a launch against the kernel's limits (thrown before the launch)
+_is_workgroup_size_error(err) = err isa ArgumentError && occursin("Work-group size", err.msg)
 
 """
     check_resident(backend::KernelAbstractions.Backend, x)

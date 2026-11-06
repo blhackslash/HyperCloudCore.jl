@@ -1,0 +1,40 @@
+Central4 1-D jitter Float64      max rel diff KA vs Polyester = 2.2282363628262855e-16, finite: true
+Test Summary:                                | Pass  Total   Time
+KA vs Polyester: Central4 1-D jitter Float64 |    2      2  21.0s
+Central4 1-D jitter Float32      max rel diff KA vs Polyester = 1.1947051e-7, finite: true
+Test Summary:                                | Pass  Total  Time
+KA vs Polyester: Central4 1-D jitter Float32 |    2      2  9.4s
+Central3 2-D jitter Float64      max rel diff KA vs Polyester = 5.622811139648512e-16, finite: true
+Test Summary:                                | Pass  Total  Time
+KA vs Polyester: Central3 2-D jitter Float64 |    2      2  7.7s
+Central3 2-D jitter Float32      max rel diff KA vs Polyester = 2.7678846e-7, finite: true
+Test Summary:                                | Pass  Total  Time
+KA vs Polyester: Central3 2-D jitter Float32 |    2      2  7.7s
+Upwind Classic 1-D Float64       max rel diff KA vs Polyester = 5.643193677496643e-17, finite: true
+Test Summary:                               | Pass  Total  Time
+KA vs Polyester: Upwind Classic 1-D Float64 |    2      2  3.7s
+Upwind Classic 1-D Float32       max rel diff KA vs Polyester = 3.0256455e-8, finite: true
+Test Summary:                               | Pass  Total  Time
+KA vs Polyester: Upwind Classic 1-D Float32 |    2      2  3.8s
+MUSCL3 VK 2-D box Float64        max rel diff KA vs Polyester = 8.117339634615566e-16, finite: true
+Test Summary:                              | Pass  Total  Time
+KA vs Polyester: MUSCL3 VK 2-D box Float64 |    2      2  7.8s
+MUSCL3 VK 2-D box Float32        max rel diff KA vs Polyester = 3.891312e-7, finite: true
+Test Summary:                              | Pass  Total  Time
+KA vs Polyester: MUSCL3 VK 2-D box Float32 |    2      2  7.5s
+MUSCL2 VK 1-D box Float64        max rel diff KA vs Polyester = 9.313225746154785e-17, finite: true
+Test Summary:                              | Pass  Total  Time
+KA vs Polyester: MUSCL2 VK 1-D box Float64 |    2      2  5.7s
+MUSCL2 VK 1-D box Float32        max rel diff KA vs Polyester = 2.5e-8, finite: true
+Test Summary:                              | Pass  Total  Time
+KA vs Polyester: MUSCL2 VK 1-D box Float32 |    2      2  5.7s
+Test Summary:                           | Pass  Total  Time
+KA adaptivity pre-check, walls, Float64 |    1      1  0.4s
+Test Summary:                           | Pass  Total  Time
+KA adaptivity pre-check, walls, Float32 |    1      1  0.4s
+VK Float64: max rel error vs BigFloat = 4.4408781616460224e-16 (= 1.99999372339868 eps), φ ≤ r: true, max φ = 1.0938360712434878, around r = 1: (0.75, 0.75, 0.7500000000000001)
+Test Summary:                                  | Pass  Total  Time
+VK φ: accuracy and the bound property, Float64 |    3      3  0.2s
+VK Float32: max rel error vs BigFloat = 1.8561885529665698e-7 (= 1.557083814492379 eps), φ ≤ r: true, max φ = 1.093836, around r = 1: (0.75f0, 0.75f0, 0.75000006f0)
+Test Summary:                                  | Pass  Total  Time
+VK φ: accuracy and the bound property, Float32 |    3      3  0.3s

@@ -79,6 +79,27 @@ end
     @test math_max(-2.0, 3.0) == 3.0  && math_min(-2.0, 3.0) == -2.0
     @test math_max([1.0, 5.0], [2.0, 4.0]) == [2.0, 5.0]
     @test math_min([1.0, 5.0], [2.0, 4.0]) == [1.0, 4.0]
+    # Exact for infinite arguments and wide magnitudes (the former 0.5 (a + b ± |a - b|) gave NaN, 0, Inf, ...)
+    @test math_min(1.0, Inf) == 1.0 && math_max(-Inf, 1.0) == 1.0 && math_max(1.0, Inf) == Inf
+    @test math_min(1.0, 1e-17) == 1e-17 && math_min(1e20, 1.0) == 1.0 && math_max(-1e20, -1.0) == -1.0
+    @test math_min(1.0f0, 1.0f8) == 1.0f0 && math_min(1f3, 1f-3) == 1f-3 && math_max(3.0f38, 3.0f38) == 3.0f38
+    @test math_min(0.1, 0.3) == 0.1 && math_max(0.1, 0.3) == 0.3
+    @test isnan(math_min(NaN, 1.0)) && isnan(math_max(1.0, NaN))
+    @test math_min(SVector(1.0, 1f8), SVector(1e-17, 1.0)) == SVector(1e-17, 1.0)
+    # ... so the limiters do not switch off at a large ratio r (unlimited: φ = 1, superbee 2)
+    for (T, r) in ((Float64, 1e17), (Float32, 1.0f8))
+        @test HyperCloudCore.limiter_phi(BarthJespersenLimiter(:hard), r) == one(T)
+        @test HyperCloudCore.limiter_phi(MinmodLimiter(:hard), r) == one(T)
+        @test HyperCloudCore.limiter_phi(SuperbeeLimiter(:hard), r) == T(2)
+    end
+    # a tiny increment inside wide bounds is not limited (Float32: φ was 0)
+    f32(x) = State{1, Float32}(x)
+    @test HyperCloudCore._update_phi(BarthJespersenLimiter(:hard), ones(State{1, Float32}), f32(1f-8), f32(0), f32(1), f32(-1))[1] == 1f0
+    # Venkatakrishnan: r² overflowed Float32 from r ≈ 1.8e19 (NaN); the same values as the textbook form otherwise
+    vk(r) = HyperCloudCore.limiter_phi(VenkatakrishnanLimiter(:hard), r)
+    @test all(r -> isapprox(vk(r), (r^2 + 2r) / (r^2 + r + 2); rtol = 4eps()), (0.0, 1e-3, 0.5, 1.0, 1.5, 7.0, 1e3, 1e7))
+    @test vk(-2.0) == 0 && vk(1f20) ≈ 1f0 && vk(Inf32) == 1f0 && vk(1f20) ≈ Float32(vk(1e20))
+    @test !isnan(HyperCloudCore._update_phi(VenkatakrishnanLimiter(:hard), ones(State{1, Float32}), f32(1f-11), f32(0), f32(1f9), f32(-1f9))[1])
 end
 
 @testset "Grid capacity management" begin
@@ -114,6 +135,88 @@ end
         @test pg.domain.canvas_mins[2] < 0.0 && pg.domain.canvas_maxs[2] > 1.0          # ghost band in y
         @test any(i -> pg.core.is_boundary[i] && pg.core.positions[i][2] < 0, 1:pg.meta.N)
         @test count(i -> pg.core.positions[i][1] ≈ 1.0, 1:pg.meta.N) == 0               # no duplicated seam
+    end
+
+    @testset "Wall lattice points are interior on both sides" begin
+        # canvas_mins + (I - 1) dx missed `maxs` by an ulp for many spacings: the right wall point became a ghost
+        for T in (Float64, Float32), (lo, hi, Ns) in ((-1, 1, 20), (-1, 1, 22), (-1, 1, 25), (-1, 1, 30), (-1, 1, 46), (0, 0.7, 10))
+            dx   = (T(hi) - T(lo)) / Ns
+            pg   = ParticleGrid(get_rectangular_domain(T, (lo,), (hi,)), (dx,), ExponentialWeightFunction(one(T), T(2.5) * dx), 1)
+            xs   = sort([pg.core.positions[i][1] for i in 1:pg.meta.N if !pg.core.is_boundary[i]])
+            @test length(xs) == Ns + 1 && xs[1] == T(lo) && xs[end] == T(hi)
+            ghosts = [pg.core.positions[i][1] for i in 1:pg.meta.N if pg.core.is_boundary[i]]
+            @test count(<(T(lo)), ghosts) == count(>(T(hi)), ghosts)
+        end
+        # Float32 at fine resolutions: the round-off of the lattice coordinate grows with |x|/dx (lost from Ns ≈ 3900)
+        for (lo, hi, Ns) in ((0, 1, 3900), (0, 1, 5900), (-1, 1, 3900), (-1, 1, 6500), (0, 1, 20000))
+            dx   = (Float32(hi) - Float32(lo)) / Ns
+            geom = get_rectangular_domain(Float32, (lo,), (hi,))
+            cd   = HyperCloudCore.ComputationalDomain(geom, (dx,), 2.5f0)
+            pos, isb, _, _, _ = HyperCloudCore.get_points(cd, geom; nominal_dx = (dx,), interp_range_factor = 2.5f0)
+            xs   = [p[1] for (p, b) in zip(pos, isb) if !b]
+            @test length(xs) == Ns + 1 && minimum(xs) == lo && maximum(xs) == hi
+        end
+        dx = 2 / 30                                                   # 2-D: no wall row or column lost
+        pg = ParticleGrid(get_rectangular_domain(Float64, (-1.0, -1.0), (1.0, 1.0)), (dx, dx), ExponentialWeightFunction(1.0, 2.5dx), 1)
+        @test pg.meta.N_interior == 31^2
+    end
+
+    @testset "Anisotropic spacing: the ghost band is R thick on every axis" begin
+        # Every axis used to get ceil(R / max dx) layers: on the finer axis the band was thinner than R (it reached
+        # y = -0.03 for R = 0.05 with dx = (0.02, 0.01)), and wall particles there had truncated stencils.
+        geom = get_rectangular_domain(Float64, (0.0, 0.0), (2.0, 1.0))
+        for dx in ((0.02, 0.01), (0.1, 0.05))
+            R  = 2.5 * maximum(dx)
+            pg = ParticleGrid(geom, dx, ExponentialWeightFunction(1.0, R), 1)
+            ghosts = [pg.core.positions[i] for i in 1:pg.meta.N if pg.core.is_boundary[i]]
+            @test minimum(p -> p[2], ghosts) <= -R + 1e-12 && minimum(p -> p[1], ghosts) <= -R + 1e-12
+            pos = pg.core.positions
+            near(x) = argmin(i -> pg.core.is_boundary[i] ? Inf : sum(abs2, pos[i] - Space{2, Float64}(x)), 1:pg.meta.N)
+            dx == (0.1, 0.05) && @test length(pg.neighbor.ranges[near((1.0, 0.0))]) == length(pg.neighbor.ranges[near((1.0, 0.5))])
+        end
+        # isotropic grids keep their layers
+        pg = ParticleGrid(get_rectangular_domain(Float64, (0.0, 0.0), (1.0, 1.0)), (0.1, 0.1), ExponentialWeightFunction(1.0, 0.3), 1)
+        @test pg.domain.canvas_mins ≈ Space{2, Float64}(-0.3, -0.3)
+    end
+
+    @testset "Boundary tags: periodic edges ignored, bc_map mismatches warned" begin
+        bc   = Dict{Int, AbstractBoundaryCondition}(3 => OutflowBC(), 4 => OutflowBC())
+        geom = get_rectangular_domain(Float64, (0.0, 0.0), (1.0, 1.0); is_periodic = (true, false), bc_map = bc)
+        pg   = @test_logs ParticleGrid(geom, (0.05, 0.05), ExponentialWeightFunction(1.0, 0.125), 1)   # no warning
+        ghosts = [i for i in 1:pg.meta.N if pg.core.is_boundary[i]]
+        @test !isempty(ghosts)
+        @test all(i -> pg.core.tags[i] == (pg.core.positions[i][2] < 0 ? 3 : 4), ghosts)   # 29 of 120 were 1 or 2
+        # 1-D: both walls carry tag 1, so a tag-2 entry is dead (documented, warned)
+        bc1 = Dict{Int, AbstractBoundaryCondition}(1 => FixedDirichlet(), 2 => OutflowBC())
+        geom1 = get_rectangular_domain(Float64, (0.0,), (1.0,); bc_map = bc1)
+        @test_logs (:warn, r"no boundary particle carries tag\(s\) \[2\]") ParticleGrid(geom1, (0.1,), ExponentialWeightFunction(1.0, 0.25), 1)
+        @test_logs ParticleGrid(geom1, (0.1,), ExponentialWeightFunction(1.0, 0.25), 1)       # once per session
+        # 2-D box with only the left/right walls mapped: the bottom/top particles keep their state
+        geom2 = get_rectangular_domain(Float64, (0.0, 0.0), (1.0, 1.0);
+                                       bc_map = Dict{Int, AbstractBoundaryCondition}(1 => OutflowBC(), 2 => OutflowBC()))
+        @test_logs (:warn, r"tag\(s\) \[3, 4\] have no condition") ParticleGrid(geom2, (0.1, 0.1), ExponentialWeightFunction(1.0, 0.25), 1)
+    end
+
+    @testset "Reordering after buffer growth" begin
+        # permute! needed buffers of length N: after any growth (adaptivity) it threw a BoundsError
+        geom = get_rectangular_domain(Float64, (0.0, 0.0), (1.0, 1.0); is_periodic = true)
+        pg   = ParticleGrid(geom, (0.1, 0.1), ExponentialWeightFunction(1.0, 0.25), 1)
+        N    = pg.meta.N
+        pos0 = pg.core.positions[1:N]                         # the reordered layout of the constructor
+        f(x) = State{1, Float64}(x[1] + 10x[2])
+        HyperCloudCore.ensure_capacity!(pg, N + 5)
+        perm = shuffle(MersenneTwister(1), 1:N)
+        for i in 1:N
+            pg.core.positions[i] = pos0[perm[i]]; pg.rhos[i] = f(pos0[perm[i]]); pg.core.tags[i] = perm[i]
+        end
+        v0 = pg.meta.geometry_version
+        pg.reorder(pg)
+        @test pg.core.positions[1:N] == pos0
+        @test all(i -> pg.rhos[i] == f(pg.core.positions[i]) && pos0[pg.core.tags[i]] == pg.core.positions[i], 1:N)
+        @test pg.meta.geometry_version > v0
+        fill!(view(pg.core.tags, 1:N), 0)
+        pg.neighbor(pg)
+        @test all(i -> length(pg.neighbor.ranges[i]) > 0, 1:N)
     end
 
     @testset "Jittered periodic grids have no boundary particles at the seam" begin
@@ -428,6 +531,29 @@ end
     for make in imex
         @test sum(make(Float64).b) ≈ 1.0
     end
+    # Order conditions of the IMEX pairs (partitioned RK conditions: every combination of the explicit and
+    # implicit weights, nodes and matrices), up to the claimed order, and the nodes are the row sums
+    function imex_residuals(bt)
+        A, At = Matrix(bt.a), Matrix(bt.a_t)
+        bs, cs, As = (Vector(bt.b_t), Vector(bt.b)), (Vector(bt.c_t), Vector(bt.c)), (At, A)
+        o1 = [sum(b) - 1 for b in bs]
+        o2 = [b' * c - 1/2 for b in bs for c in cs]
+        o3 = vcat([b' * (c .* c2) - 1/3 for b in bs for c in cs for c2 in cs],
+                  [b' * (Am * c) - 1/6 for b in bs for Am in As for c in cs])
+        nodes = max(maximum(abs, vec(sum(A; dims = 2)) - cs[2]), maximum(abs, vec(sum(At; dims = 2)) - cs[1]))
+        return maximum(abs, o1), maximum(abs, o2), maximum(abs, o3), nodes
+    end
+    for (make, order) in ((IMEX_Euler_Tableau, 1), (IMEX_ARS222_Tableau, 2), (IMEX_ARS233_Tableau, 3),
+                          (IMEX_PRSSP3_Tableau, 2), (IMEX_SSP2332_Tableau, 2)), T in (Float64, Float32)
+        r1, r2, r3, nodes = imex_residuals(make(T))
+        tol = 10eps(T)
+        @test nodes < tol
+        @test r1 < tol
+        order >= 2 && @test r2 < tol
+        order >= 3 && @test r3 < tol
+        order == 2 && @test r3 > 1e-3                       # the claimed order is the actual one
+    end
+    @test num_stages(IMEX_ARS222_Tableau(Float64)) == 3 && iszero(IMEX_ARS222_Tableau(Float64).a[1, 1])
     @test_throws AssertionError IMEXButcherTableau([1.0 1.0; 0.0 1.0], zeros(2, 2), [1.0, 1.0], [0.0, 1.0], [0.5, 0.5], [0.5, 0.5])
     @test_throws AssertionError IMEXButcherTableau(zeros(2, 2), [0.0 1.0; 0.0 0.0], [0.0, 1.0], [0.0, 1.0], [0.5, 0.5], [0.5, 0.5])
 end
@@ -632,6 +758,19 @@ end
         cand = State{2, Float64}(hi + 1e-3, 0.0)
         @test flags(MOODu2(δ), p, cand) == true
         @test flags(MOODu2(δ; ratio = 0), p, cand) == false    # without it a 1-D box rings by 10 %
+    end
+
+    @testset "Float32: no Float64 arithmetic in the curvature test" begin
+        pg32 = make_pg_1d(20; T = Float32)
+        g32  = MUSCL(Float32, 1, 1, 3, NoLimiter(), RusanovFlux())
+        c32  = MOODu2(1f-4)
+        U32  = pg32.rhos
+        rng  = HyperCloudCore._global_range(c32, U32, pg32.meta.N)
+        argt = (typeof(c32), typeof(g32), Int, eltype(U32), typeof(pg32.neighbor.ranges[1]), eltype(U32), typeof(pg32),
+                typeof(U32), typeof(rng))
+        ci, rt = only(code_typed(HyperCloudCore._u2_fails, argt))
+        @test rt === Bool
+        @test !any(t -> Core.Compiler.widenconst(t) === Float64, ci.ssavaluetypes)   # was (1.5 h)², a Float64
     end
 
     @testset "Public functor and builder" begin

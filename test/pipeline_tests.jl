@@ -54,8 +54,10 @@ check_runs(sim) = (@test sim isa LSimData; @test isfinite(final_stat(sim, :l1err
             coarse, fine = sim(key; Grid_Ns = (200,)), sim(key; Grid_Ns = (400,))
             check_runs(coarse)
             @test length(coarse.stats[:l1error]) == length(coarse.t)
+            # Uniform periodic lattice: the antisymmetric weights conserve to round-off (measured ≤ 5e-16); WENO's
+            # nonlinear weights do not (measured 5.6e-3 at N = 200, 7.0e-5 at N = 400)
             m0 = fine.stats[:mass][1][1]
-            @test all(m -> isapprox(m[1], m0; rtol = 1e-2), fine.stats[:mass])
+            @test all(m -> isapprox(m[1], m0; rtol = key == :weno ? 5e-4 : 1e-12), fine.stats[:mass])
             @test final_stat(fine, :l1error) < final_stat(coarse, :l1error)
         end
     end
@@ -211,8 +213,11 @@ end
         s0, s1 = sim(:moving), sim(:moving_adapt)
         check_runs(s0); check_runs(s1)
         @test scalar(s1.stats[:final_particle_count]) != scalar(s0.stats[:final_particle_count])
+        # Σ V U of a collocation scheme on a moving grid drifts (mass ≈ 0.177; measured e0 = 3.3e-4, e1 = 5.4e-3
+        # with 14 net insertions); the bound used to be e1 < 2, i.e. vacuous
         e0, e1 = scalar(s0.stats[:discrete_mass_error]), scalar(s1.stats[:discrete_mass_error])
-        @test e1 < max(2e0, 1e-6)
+        @test e0 < 1e-3
+        @test e1 < 1e-2
         @test final_stat(s1, :l1error) < 2 * final_stat(s0, :l1error) + 1e-3
     end
 

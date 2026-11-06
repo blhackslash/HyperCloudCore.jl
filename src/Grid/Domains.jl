@@ -32,7 +32,11 @@ end
 
 Generates a rectangular `GeometricDomain` instance. 
 - Constructs an interior evaluation function enforcing strict Cartesian bounding box constraints.
-- Automatically handles edge tagging in 2D by assigning 1 to Left, 2 to Right, 3 to Bottom, and 4 to Top based on nearest-distance evaluations.
+- Automatically handles edge tagging in 2D by assigning 1 to Left, 2 to Right, 3 to Bottom, and 4 to Top based on nearest-distance evaluations
+  (the edges of a periodic axis are ignored, so a channel periodic in x has only the tags 3 and 4).
+- In 1-D and 3-D every boundary point has tag 1 (both walls of a 1-D interval, all faces of a box). The
+  `ParticleGrid` constructor warns when `bc_map` names a tag no boundary particle carries, or when boundary
+  particles carry a tag `bc_map` does not cover (they then keep their state, like a Dirichlet condition).
 """
 function get_rectangular_domain(
     ::Type{T}, 
@@ -60,10 +64,12 @@ function get_rectangular_domain(
         if is_interior_func(pos); return 0; end
         
         if D == 2
-            d_left   = abs(pos[1] - mins_f[1])
-            d_right  = abs(pos[1] - maxs_f[1])
-            d_bottom = abs(pos[2] - mins_f[2])
-            d_top    = abs(pos[2] - maxs_f[2])
+            # The edges of a periodic axis are no boundary: ignore them (a channel periodic in x used to tag the
+            # ghosts near the seam 1/2, which no bc_map entry covered)
+            d_left   = is_per_svec[1] ? T(Inf) : abs(pos[1] - mins_f[1])
+            d_right  = is_per_svec[1] ? T(Inf) : abs(pos[1] - maxs_f[1])
+            d_bottom = is_per_svec[2] ? T(Inf) : abs(pos[2] - mins_f[2])
+            d_top    = is_per_svec[2] ? T(Inf) : abs(pos[2] - maxs_f[2])
             
             min_d = min(d_left, d_right, d_bottom, d_top)
             
@@ -150,10 +156,16 @@ function ComputationalDomain(
     dxs_f = Space{D, T}(nominal_dx...)
     # Ghost layers are decided per axis: a periodic axis needs none, every other axis needs a band
     # of `interp_range_factor` spacings (mixed periodicity used to drop all ghost layers).
-    N_ghost = ceil(Int, interp_range_factor)
+    # `interp_range_factor` is R / max(dx): an axis with a smaller spacing needs more layers to be R thick
+    # (it used to get the same number, i.e. a band thinner than R on the finer axis of an anisotropic grid).
+    max_dx  = maximum(dxs_f)
+    N_ghost = ntuple(Val(D)) do d
+        dxs_f[d] == max_dx ? ceil(Int, interp_range_factor) :
+                             ceil(Int, interp_range_factor * (max_dx / dxs_f[d]) * (1 - 4 * eps(Float64)))
+    end
 
-    canvas_mins = Space{D, T}(ntuple(d -> is_per_svec[d] ? geom.mins[d] : geom.mins[d] - N_ghost * dxs_f[d], Val(D)))
-    canvas_maxs = Space{D, T}(ntuple(d -> is_per_svec[d] ? geom.maxs[d] : geom.maxs[d] + N_ghost * dxs_f[d], Val(D)))
+    canvas_mins = Space{D, T}(ntuple(d -> is_per_svec[d] ? geom.mins[d] : geom.mins[d] - N_ghost[d] * dxs_f[d], Val(D)))
+    canvas_maxs = Space{D, T}(ntuple(d -> is_per_svec[d] ? geom.maxs[d] : geom.maxs[d] + N_ghost[d] * dxs_f[d], Val(D)))
     
     L_physical = geom.maxs - geom.mins
     L_wrap = Space{D, T}(ntuple(d -> is_per_svec[d] ? L_physical[d] : zero(T), Val(D)))
@@ -202,9 +214,21 @@ function get_points(
     inner_points = Space{D, T}[]
     ghost_candidates = Space{D, T}[]
     
+    # Lattice points within round-off of a non-periodic wall are put on the wall: `canvas_mins + (I - 1) dx`
+    # misses `maxs` by a few ulps for many spacings (e.g. [-1, 1] with dx = 2/30), and the closed-interval
+    # classification then made that wall point a ghost while the one on `mins` stayed interior.
+    # The tolerance covers the round-off of the lattice coordinate itself, which grows with |x| and the number of
+    # spacings from canvas_mins (in Float32 sqrt(eps)·dx alone missed walls from about 4000 points per axis).
+    snap = Space{D, T}(ntuple(d -> sqrt(eps(T)) * dxs_f[d] +
+                                   8 * eps(T) * (abs(cd.canvas_mins[d]) + abs(cd.canvas_maxs[d] - cd.canvas_mins[d])), Val(D)))
     for I in CartesianIndices(Ns_total)
         pos_tuple = ntuple(Val(D)) do d
-            x = cd.canvas_mins[d] + (I[d] - 1) * dxs_f[d] + rand_f[d] * (rand(rng, T) * 2 - 1)
+            x = cd.canvas_mins[d] + (I[d] - 1) * dxs_f[d]
+            if !cd.is_periodic[d]
+                abs(x - geom.maxs[d]) <= snap[d] && (x = geom.maxs[d])
+                abs(x - geom.mins[d]) <= snap[d] && (x = geom.mins[d])
+            end
+            x += rand_f[d] * (rand(rng, T) * 2 - 1)
             # A jittered point that left a periodic axis belongs to the other end: classifying it
             # before wrapping made it a (frozen) boundary particle at the seam.
             cd.is_periodic[d] ? _wrap_periodic(x, geom.mins[d], cd.L_wrap[d]) : x
@@ -237,6 +261,27 @@ function get_points(
     end
     
     return positions, is_boundary, tags, volumes, Tuple(dxs_f)
+end
+
+# Boundary particles whose tag has no condition keep their state (the stage predictor copies `pg.rhos`), and a
+# condition whose tag no particle carries does nothing: both are silent, so warn (host side, at grid set-up)
+# when a non-empty `bc_map` and the tags of the boundary particles do not match. An empty map (no conditions,
+# every boundary particle frozen) is taken as intended. Each mismatch is reported once per session.
+const _WARNED_BC_TAGS = Set{Tuple{Vector{Int}, Vector{Int}}}()
+function _check_bc_tags(geom::GeometricDomain, tags::AbstractVector{Int}, is_boundary::AbstractVector{Bool})
+    isempty(geom.bc_map) && return nothing
+    carried = sort!(unique(tags[i] for i in eachindex(tags) if is_boundary[i]))
+    mapped  = sort!(collect(keys(geom.bc_map)))
+    unused, uncovered = setdiff(mapped, carried), setdiff(carried, mapped)
+    (isempty(unused) && isempty(uncovered)) && return nothing
+    key = (mapped, carried)
+    key in _WARNED_BC_TAGS && return nothing
+    push!(_WARNED_BC_TAGS, key)
+    @warn "bc_map and boundary tags do not match: " *
+          (isempty(unused) ? "" : "no boundary particle carries tag(s) $(unused), so their condition is never applied; ") *
+          (isempty(uncovered) ? "" : "boundary particles with tag(s) $(uncovered) have no condition and keep their state; ") *
+          "the boundary particles carry tag(s) $(carried) (1-D and 3-D boxes tag every boundary particle 1, see get_rectangular_domain)."
+    return nothing
 end
 
 @inline _wrap_periodic(x::T, lo, L) where {T} = (y = T(lo) + mod(x - T(lo), T(L)); y >= T(lo) + T(L) ? T(lo) : y)
