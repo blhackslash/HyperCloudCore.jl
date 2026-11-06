@@ -57,3 +57,13 @@ AI-Review = "A2"
 Assisted-by = ["Claude (Anthropic), claude-opus-5-5"]
 AI-Reviewed-by = ["Claude Opus 5.5 (Anthropic), new sessions without the generating conversation (reviews/)"]
 Reviewed-by = ["blhackslash <dev@blackslash.win>"]
+
+# Further files changed by Claude agents for the A2 reviews (claude/review-numerics), reviewed again in reviews/.
+[[annotations]]
+path = ["docs/src/time_integration/mood.md", "src/API.jl", "src/Interpolation/Interpolators.jl", "src/Interpolation/MUSCL_hooks.jl", "src/Types.jl", "test/kinetic_source.jl"]
+AI-Generation = "G3"
+Human-Review = "H0"
+AI-Review = "A2"
+Assisted-by = ["Claude (Anthropic), claude-opus-5-5"]
+AI-Reviewed-by = ["Claude Opus 5.5 (Anthropic), new sessions without the generating conversation (reviews/)"]
+Reviewed-by = ["blhackslash <dev@blackslash.win>"]

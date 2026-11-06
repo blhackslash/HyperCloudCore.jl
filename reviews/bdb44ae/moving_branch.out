@@ -1,0 +1,7 @@
+D1 MUSCL3 R2.5 full_search=false finite=true dt·n (CFL 0.6) = [0.82363, 0.7986, 0.77465, 0.42546, 0.41843]  cache current after step: false
+D1 MUSCL3 R2.5 full_search=true  finite=true dt·n (CFL 0.6) = [0.82363, 0.7986, 0.77465, 0.42546, 0.41843]  cache current after step: false
+D2 MUSCL3 R2.0 full_search=false finite=true dt·n (CFL 0.6) = [0.07323, 0.07354, 0.07326, 0.07298, 0.0727]  cache current after step: false
+D2 MUSCL3 R2.0 full_search=true  finite=true dt·n (CFL 0.6) = [0.07323, 0.07354, 0.07326, 0.07298, 0.0727]  cache current after step: false
+D2 MUSCL5 R2.5 full_search=false finite=true dt·n (CFL 0.6) = [0.01434, 0.01435, 0.01436, 0.01436, 0.01437]  cache current after step: false
+D2 MUSCL5 R2.5 full_search=true  finite=true dt·n (CFL 0.6) = [0.01434, 0.01435, 0.01436, 0.01436, 0.01437]  cache current after step: false
+exit=0

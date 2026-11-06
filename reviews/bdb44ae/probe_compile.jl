@@ -1,0 +1,15 @@
+# Compile time of the first prepare_geometry! (and the first get_time_step + step) per scheme type, fresh process.
+include(joinpath(@__DIR__, "header.jl"))
+const CASE = parse(Int, ARGS[3])
+include(joinpath(ROOT, "test/PDEs/_main.jl"))
+cases = ((1, 5, 3.5, 40), (2, 3, 2.5, 12), (2, 5, 2.5, 12), (3, 3, 2.0, 6), (3, 4, 2.5, 6))
+D, o, R, n = cases[CASE]
+geom = get_rectangular_domain(Float64, ntuple(_ -> 0.0, D), ntuple(_ -> 1.0, D); is_periodic = true)
+pg = ParticleGrid(geom, ntuple(_ -> 1.0 / n, D), ExponentialWeightFunction(1.0, R / n), 1; randomness = ntuple(_ -> 0.2 / n, D), rng = MersenneTwister(1))
+m = MUSCL(Float64, D, 1, o, NoLimiter(), RusanovFlux())
+t1 = @elapsed HC.prepare_geometry!(m, pg)
+eq = LinearAdvection(ntuple(d -> (1.0,), D), Float64)
+t2 = @elapsed (dt = get_time_step(pg, eq, m))
+ts = GeneralRKTimeStepper(eq, m, MOOD(), RK3_SSP_Tableau(Float64))
+t3 = @elapsed ts(eq, pg, 0.0, dt)
+@printf("%-7s D=%d MUSCL%d R=%.1f: first prepare_geometry! %.1f s, first get_time_step %.1f s, first step %.1f s, total %.1f s\n", ARGS[2], D, o, R, t1, t2, t3, t1 + t2 + t3)

@@ -75,16 +75,17 @@ is estimated from the degree-4 stencil and slightly too large; and the radius mu
 neighbours for the reconstruction, $B(D, o - 1)$, or particles drop to first order (see the pre-gather pass
 below).
 
-**Known limitation (cached weights and CFL degree vs the neighbour-count safeguard).** The cached divergence
-weights (`div_weights`, `dweights`) and the degree the CFL estimate uses (`_divergence_degree`) are those of the
-*full* divergence degree, even where `_divergence_index` lowers the degree because the stencil has too few
-neighbours. There the cache is never hit (every RHS assembles and factorises the fit of the lower degree, and the
-aligned/streamed paths take the dynamic per-slot weights), and the time step comes from weights the scheme does not
-use: in 1-D MUSCL3 with $R = 2.5\Delta x$ (every particle fits degree 2) $\sum |c_{ij}|\,\Delta x$ is 1.500 for the
-CFL estimate against 0.644 for the fit in use, i.e. the step is 2.3 times smaller than the CFL number implies;
-MUSCL5 with $R = 3.5\Delta x$: 1.6 times smaller; MUSCL5 with $R = 2.5\Delta x$: slightly *larger* (1.475 vs 1.500,
-the cached degree-5 fit is under-determined there). Changing it would change the time step of default
-configurations, so it is left as is for now.
+**Cached weights and the neighbour-count safeguard.** `_divergence_index` lowers the divergence degree where the
+stencil has too few neighbours (1-D MUSCL3 with $R = 2.5\Delta x$: 4 neighbours, degree 2 instead of 3). The divergence
+cache (`div_weights`, and with it `dweights`) holds every particle's fit at full order *of the degree its stencil
+carries*: the inverse moment matrix of that degree, zero-padded to the full size (the basis is graded, so this is exactly
+the lower-degree fit). Such particles therefore hit the cache, and the CFL estimate sums the weights of the fit in use.
+Up to 0.7.9 the cache was built for the full degree only: it was never hit there (every RHS assembled and factorised
+the lower-degree fit), and the time step came from weights the scheme does not use, $\sum |c_{ij}|\,\Delta x$ = 1.500
+against 0.644 for the fit in use, i.e. a step 2.3 times smaller than the CFL number implies (MUSCL5 with
+$R = 3.5\Delta x$: 1.6 times smaller). Measured on 1-D MUSCL3, $R = 2.5\Delta x$, $N = 2\cdot 10^5$, 8 threads: 16.0 → 12.1 ms
+per step, plus the 2.3 times larger step; errors and EOC of the 1-D convergence runs are unchanged (relative $L^2$
+errors agree to $4\cdot 10^{-4}$ of their value).
 
 ## The two passes
 
@@ -115,9 +116,9 @@ $\sum \lvert c\rvert$ mass sits on (pair, axis) entries with same-sign weights (
 degree 3 with $R = 3.5\Delta x$), where the two sides use opposite dissipation signs, a pair defect on top of the
 face-vector mismatch. The local-extremum-diminishing property of each particle's own update needs only its own weights
 and is unaffected. The signs are those of the weights the particle
-multiplies the slot's flux difference with: `dweights` on the cached full-degree fit, and the weights of the dynamic fit
-for a particle off the cached path (a degree lowered by the neighbour-count safeguard, e.g. in 1-D with `R = 2.5Δx` and
-`div_order = 3`, a lower particle order with `div_order = 0`, or no cached factorisation). With the aligned flux such a
+multiplies the slot's flux difference with: `dweights` on the cached fit (the full order, of the degree the stencil
+carries), and the weights of the dynamic fit for a particle off the cached path (a lower particle order with
+`div_order = 0` whose divergence degree differs from the cached one, or no cached factorisation). With the aligned flux such a
 particle always takes the per-slot path of the streamed divergence below, also with `streamed = false`, so each slot's
 weight is solved once and used for both the sorting and the divergence. The coefficient becomes
 `½ Σ_d s_d |c_ij,d| ≥ ½ |c_ij·f'|`, so the first-order update is local-extremum-diminishing for any zero-sum
@@ -184,7 +185,7 @@ reduced order). Per neighbour that costs $B \cdot D \cdot M$ flops for the right
 $D \cdot M$ numbers of buffer traffic, where $B$ is the number of fit terms (21 for degree 5 in 2-D): for
 systems with many components (kinetic models) the fit dominates the step and the buffer the memory.
 
-With `streamed = true` the scheme keeps the derivative weights $c_{ij}$ of the full-degree fit per slot
+With `streamed = true` the scheme keeps the derivative weights $c_{ij}$ of the cached full-order fit per slot (of the degree each stencil carries)
 (`dweights`, $D$ numbers, computed with the divergence cache at $D\cdot B$ flops per slot, once per geometry)
 and the flux pass accumulates $\sum_j c_{ij}\cdot\Delta F_{ij}$ directly: $D\cdot M$ flops per neighbour, no
 buffer, no static $B\times D M$ matrices. A particle whose fit is not the cached one (a MOOD drop, or no
@@ -223,7 +224,7 @@ The end of `MUSCL.jl` defines the hooks that tell the time stepper and MOOD abou
 
 ```julia
 _order_reach(::MUSCL, ::MOODStrategy) = 1     # 2 for EPD2
-_divergence_degree(::MUSCL)                     # degree of the full-order divergence fit, for the CFL estimate
+_divergence_degree(::MUSCL)                     # full divergence degree, for the assembled CFL estimate (`cached_weights = false`)
 has_cached_gradients(::MUSCL) = true          # enables MOODu2's curvature test
 cached_gradients(m::MUSCL) = m.gradients
 ```

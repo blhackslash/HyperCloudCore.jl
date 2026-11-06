@@ -1,0 +1,2 @@
+1-D R=2.5 (4 neighbours): dt·n Central3 0.6667, Central4 0.6667 (Central4 runs at degree 3 here)
+1-D R=3.5 (6 neighbours): dt·n Central3 0.8571, Central4 0.8571 (Central4 runs at degree 4 here)

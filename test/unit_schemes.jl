@@ -426,6 +426,39 @@ end
     fill!(view(pg.core.particle_orders, 1:N), 0)
 end
 
+@testset "MUSCL: the divergence cache holds the degree each particle uses" begin
+    # The neighbour-count safeguard lowers the divergence degree on small stencils (1-D MUSCL3, R = 2.5Δx: degree 2
+    # for every particle); the cache and its per-slot weights were built for the full degree (3) regardless, so the
+    # cache was never hit and the CFL estimate summed weights the scheme does not use (1.500 vs 0.644). Now the
+    # per-slot weights are those of the fit in use.
+    for (o, R, used_expected) in ((3, 2.5, 2), (5, 2.5, 3), (5, 3.5, 4), (3, 3.5, 3))
+        pg = make_pg_1d(40; range = R); nb = pg.neighbor
+        m  = MUSCL(Float64, 1, 1, o, NoLimiter(), RusanovFlux())
+        used = HyperCloudCore._divergence_index(Val(0), Val(1), o, length(nb.ranges[1])) - 1
+        @test used == used_expected
+        HyperCloudCore.prepare_geometry!(m, pg)
+        S = zeros(Space{1, Float64}, length(nb.indices))
+        HyperCloudCore._face_vectors!(S, nb.ranges[1], nb.distances, nb.weights, 1 / pg.meta.dx[1], 1.0, used, Val(1))
+        @test all(k -> isapprox(m.dweights[k][1], S[k][1]; rtol = 1e-10, atol = 1e-10 / pg.meta.dx[1]), nb.ranges[1])
+    end
+    # Particles with different degrees in one cloud: 2-D MUSCL3 (divergence degree 3) on a jittered cloud with
+    # R = 2Δx, where the safeguard lowers the particles with fewer than 9 neighbours to degree 2
+    dx2 = 1 / 16
+    pg2 = ParticleGrid(get_rectangular_domain(Float64, (0.0, 0.0), (1.0, 1.0); is_periodic = true), (dx2, dx2),
+                       ExponentialWeightFunction(1.0, 2.0dx2), 1; randomness = (0.25dx2, 0.25dx2), rng = MersenneTwister(5))
+    m2  = MUSCL(Float64, 2, 1, 3, NoLimiter(), AlignedRusanovFlux())
+    HyperCloudCore.prepare_geometry!(m2, pg2)
+    nb2 = pg2.neighbor
+    deg(i) = HyperCloudCore._divergence_index(Val(0), Val(2), 3, length(nb2.ranges[i])) - 1
+    @test any(i -> deg(i) == 2, 1:pg2.meta.N) && any(i -> deg(i) == 3, 1:pg2.meta.N)
+    S2 = zeros(Space{2, Float64}, length(nb2.indices))
+    ok = map(1:pg2.meta.N) do i
+        HyperCloudCore._face_vectors!(S2, nb2.ranges[i], nb2.distances, nb2.weights, 1 / dx2, 1.0, deg(i), Val(2))
+        all(k -> isapprox(m2.dweights[k], S2[k]; rtol = 1e-8, atol = 1e-8 / dx2), nb2.ranges[i])
+    end
+    @test all(ok)
+end
+
 @testset "CFL estimate: pair speeds, boundary states, cached weights" begin
     # A state-dependent wave speed 1 + 9u: a fast state on a boundary particle used to be invisible (boundary
     # particles are skipped), now it limits the step of its interior neighbours through the pair speed.
@@ -438,25 +471,24 @@ end
     eqc = FastWhereHigh()
     interp = MUSCL(Float64, 1, 1, 3, NoLimiter(), RusanovFlux())
     fill!(view(pgc.rhos, 1:pgc.meta.N), zero(State{1, Float64}))
-    dt_slow = get_time_step(pgc, eqc, interp)
+    tstep(pg, eq) = get_time_step(pg, eq, interp; cached_weights = false)    # the assembled fit (no geometry caches)
+    dt_slow = tstep(pgc, eqc)
     # the boundary particle next to the interior (the outermost ones are beyond the cutoff of every interior particle)
     b = findlast(i -> pgc.core.is_boundary[i] && pgc.core.positions[i][1] < 0, 1:pgc.meta.N)
     pgc.rhos[b] = State{1, Float64}(1.0)
-    dt_b = get_time_step(pgc, eqc, interp)
+    dt_b = tstep(pgc, eqc)
     @test dt_b < 0.6 * dt_slow && dt_b >= 0.99 * dt_slow / 10
     pgc.rhos[b] = zero(State{1, Float64})
     i_fast = findfirst(i -> !pgc.core.is_boundary[i] && abs(pgc.core.positions[i][1]) < dxc, 1:pgc.meta.N)
     pgc.rhos[i_fast] = State{1, Float64}(1.0)
-    dt_i = get_time_step(pgc, eqc, interp)
+    dt_i = tstep(pgc, eqc)
     @test 0.99 * dt_slow / 10 <= dt_i <= dt_slow
-    # With a current divergence cache the cached per-slot weights are used (no factorisation): the kernel
-    # equals the host sum over the weights, and lies within a factor 2 of the assembled fit (intercept fit
-    # vs Taylor fit of the same degree)
+    # With the divergence cache the cached per-slot weights are used (no factorisation): `get_time_step` refreshes
+    # the cache itself, the kernel equals the host sum over the weights
     @test HyperCloudCore._cfl_slot_weights(interp, pgc) === nothing
-    HyperCloudCore.prepare_geometry!(interp, pgc)
+    dt_c = get_time_step(pgc, eqc, interp)
     dw = HyperCloudCore._cfl_slot_weights(interp, pgc)
     @test dw !== nothing
-    dt_c = get_time_step(pgc, eqc, interp)
     nbc = pgc.neighbor
     dt_host = minimum(begin
             lam_i = 1 + 9 * pgc.rhos[i][1]
@@ -464,7 +496,12 @@ end
             s > floatmin() ? 1 / s : Inf
         end for i in 1:pgc.meta.N if !pgc.core.is_boundary[i])
     @test isapprox(dt_c, dt_host; rtol = 1e-12)
-    @test 0.5 * dt_i <= dt_c <= 2 * dt_i
+    # They are the weights of the fit in use: with R = 2.5Δx (4 neighbours) the safeguard lowers MUSCL3's divergence
+    # to degree 2 (Σ|c|Δx = 0.644 instead of 1.500 for degree 3, a 2.3× longer step); the assembled fit of the opt-out
+    # takes the same degree per particle (`_cfl_degree_of`), so the two agree (Taylor fit vs fit with intercept)
+    @test isapprox(dt_c, dt_i; rtol = 0.05)
+    @test get_time_step(pgc, eqc, interp; cached_weights = false) == dt_i
+    @test 2 * HyperCloudCore.get_time_step(pgc, eqc, CentralDivergence(Float64, 1, 1, 3); cached_weights = false) < dt_c
     @test get_time_step(pgc, eqc, interp; cached_weights = false) == dt_i     # the opt-out assembles the fit as before
     @test (@allocated get_time_step(pgc, eqc, interp)) < 8192
     # No particle restricts the step (zero wave speeds): Inf, without a warning (a field at rest; drivers decide);

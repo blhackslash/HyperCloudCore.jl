@@ -1,0 +1,39 @@
+┌ Warning: bc_map and boundary tags do not match: no boundary particle carries tag(s) [2], so their condition is never applied; the boundary particles carry tag(s) [1] (1-D and 3-D boxes tag every boundary particle 1, see get_rectangular_domain).
+└ @ HyperCloudCore /tmp/review_pr3/parent/src/Grid/Domains.jl:280
+1D MUSCL2 R2.5 jit0.0                    lowered=   0  finite=true  max|u|=0.9996  t=2.90s
+1D MUSCL2 R2.5 jit0.25                   lowered=   0  finite=true  max|u|=0.9976  t=0.00s
+1D MUSCL2 R3.5 jit0.0                    lowered=   0  finite=true  max|u|=0.9988  t=0.00s
+1D MUSCL2 R3.5 jit0.25                   lowered=   0  finite=true  max|u|=0.9963  t=0.00s
+1D MUSCL3 R2.5 jit0.0                    lowered=  40  finite=true  max|u|=0.9998  t=1.51s
+1D MUSCL3 R2.5 jit0.25                   lowered=  40  finite=true  max|u|=0.9995  t=0.00s
+1D MUSCL3 R3.5 jit0.0                    lowered=   0  finite=true  max|u|=0.9996  t=0.00s
+1D MUSCL3 R3.5 jit0.25                   lowered=   0  finite=true  max|u|=0.9993  t=0.00s
+1D MUSCL4 R2.5 jit0.0                    lowered=   0  finite=true  max|u|=1.0000  t=0.96s
+1D MUSCL4 R2.5 jit0.25                   lowered=   0  finite=true  max|u|=0.9996  t=0.00s
+1D MUSCL4 R3.5 jit0.0                    lowered=   0  finite=true  max|u|=1.0000  t=0.00s
+1D MUSCL4 R3.5 jit0.25                   lowered=   0  finite=true  max|u|=0.9996  t=0.00s
+1D MUSCL5 R2.5 jit0.0                    lowered=  40  finite=true  max|u|=1.0000  t=1.72s
+1D MUSCL5 R2.5 jit0.25                   lowered=  40  finite=true  max|u|=0.9997  t=0.00s
+1D MUSCL5 R3.5 jit0.0                    lowered=  40  finite=true  max|u|=1.0000  t=0.00s
+1D MUSCL5 R3.5 jit0.25                   lowered=  40  finite=true  max|u|=0.9997  t=0.00s
+1D MUSCL3 R2.5 streamed                  lowered=  40  finite=true  max|u|=0.9995  t=1.09s
+1D MUSCL3 R2.5 aligned                   lowered=  40  finite=true  max|u|=0.9995  t=0.97s
+1D MUSCL5 R2.5 aligned streamed          lowered=  40  finite=true  max|u|=0.9997  t=1.33s
+1D MUSCL5 R3.5 div_order3                lowered=  40  finite=true  max|u|=0.9997  t=0.75s
+1D MUSCL1 moment aligned                 lowered=   0  finite=true  max|u|=0.9749  t=0.98s
+1D MUSCL3 VK MOODu1 box                  lowered=  40  finite=true  max|u|=1.0000  t=1.51s
+1D MUSCL5 VK MOODu1 box EPD0             lowered=  40  finite=true  max|u|=1.0000  t=0.99s
+1D MUSCL3 walls                          lowered=  40  finite=true  max|u|=0.9996  t=0.03s
+1D MUSCL3 R2.5 F32                       lowered=  40  finite=true  max|u|=0.9998  t=2.37s
+1D MUSCL3 R2.5 Lagrangian                lowered=  40  finite=true  max|u|=0.9998  t=1.08s
+1D MUSCL1 R1.2 starved                   lowered=   0  finite=true  max|u|=0.9979  t=0.00s
+2D MUSCL3 R2.5 jit0.3                    lowered=   0  finite=true  max|u|=0.9771  t=3.04s
+2D MUSCL3 R2.0 jit0.3                    lowered= 253  finite=true  max|u|=0.9870  t=0.00s
+2D MUSCL5 R2.5 jit0.2                    lowered= 256  finite=true  max|u|=0.9906  t=18.99s
+2D MUSCL5 R2.5 walls aligned streamed    lowered= 256  finite=true  max|u|=1.1068  t=17.28s
+2D MUSCL3 R2.0 VK MOODu1 box             lowered= 253  finite=true  max|u|=0.9988  t=1.11s
+2D MUSCL3 R2.0 F32 aligned               lowered= 255  finite=true  max|u|=0.9838  t=3.84s
+2D MUSCL3 R2.0 Lagrangian                lowered= 253  finite=true  max|u|=0.9974  t=1.06s
+3D MUSCL3 R1.8 jit0.2                    lowered= 512  finite=true  max|u|=1.1138  t=16.05s
+3D MUSCL4 R2.0 jit0.2 streamed           lowered=   0  finite=true  max|u|=1.2358  t=16.75s
+exit=0

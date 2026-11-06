@@ -1,0 +1,43 @@
+1D adv sin MUSCL3 R2.5             cfl=0.40 dt0·n=0.66667 dt1·n=0.66667 steps=  375 finite=true  err=3.2987e-03  min=-0.9995 max=0.9995 minρ=Inf minp=Inf  2.5s
+1D adv sin MUSCL3 R2.5 jit0.2      cfl=0.40 dt0·n=0.58104 dt1·n=0.58396 steps=  429 finite=true  err=3.2878e-03  min=-0.9995 max=0.9995 minρ=Inf minp=Inf  0.0s
+1D adv sq MUSCL3 VK u1             cfl=0.40 dt0·n=0.66667 dt1·n=0.66667 steps=  375 finite=true  err=1.9055e-01  min=-0.0000 max=1.0000 minρ=Inf minp=Inf  1.4s
+1D adv sq MUSCL3 VK noMOOD         cfl=0.40 dt0·n=0.66667 dt1·n=0.66667 steps=  375 finite=true  err=1.9055e-01  min=-0.0000 max=1.0000 minρ=Inf minp=Inf  0.5s
+1D Sod MUSCL3 R2.5 VK PAD          cfl=0.40 dt0·n=0.56344 dt1·n=0.46799 steps=  327 finite=true  err=5.9634e-03  min=0.1250 max=1.0000 minρ=0.1250 minp=0.1000  2.3s
+1D Sod MUSCL3 R2.5 VK u1           cfl=0.40 dt0·n=0.56344 dt1·n=0.47507 steps=  323 finite=true  err=1.0563e-02  min=0.1250 max=1.0000 minρ=0.1250 minp=0.1000  0.5s
+1D Sod MUSCL3 R2.5 jit VK PAD      cfl=0.40 dt0·n=0.49107 dt1·n=0.45198 steps=  355 finite=true  err=7.0161e-03  min=0.1250 max=1.0000 minρ=0.1250 minp=0.1000  0.0s
+1D Sod MUSCL5 R3.5 VK PAD          cfl=0.40 dt0·n=0.72442 dt1·n=0.35506 steps=  400 finite=true  err=4.9564e-03  min=0.1219 max=1.0001 minρ=0.1138 minp=0.0884  2.0s
+1D adv sin MUSCL5 R3.5 RK4         cfl=0.40 dt0·n=0.85714 dt1·n=0.54545 steps=  458 finite=true  err=1.4464e-06  min=-1.0000 max=1.0000 minρ=Inf minp=Inf  1.2s
+1D adv sin MUSCL3 R2.5             cfl=0.60 dt0·n=0.66667 dt1·n=0.66667 steps=  250 finite=true  err=3.2991e-03  min=-0.9995 max=0.9995 minρ=Inf minp=Inf  0.0s
+1D adv sin MUSCL3 R2.5 jit0.2      cfl=0.60 dt0·n=0.58104 dt1·n=0.58396 steps=  286 finite=true  err=3.2880e-03  min=-0.9995 max=0.9995 minρ=Inf minp=Inf  0.0s
+1D adv sq MUSCL3 VK u1             cfl=0.60 dt0·n=0.66667 dt1·n=0.66667 steps=  250 finite=true  err=1.8985e-01  min=-0.0000 max=1.0000 minρ=Inf minp=Inf  0.0s
+1D adv sq MUSCL3 VK noMOOD         cfl=0.60 dt0·n=0.66667 dt1·n=0.66667 steps=  250 finite=true  err=1.8985e-01  min=-0.0000 max=1.0000 minρ=Inf minp=Inf  0.0s
+1D Sod MUSCL3 R2.5 VK PAD          cfl=0.60 dt0·n=0.56344 dt1·n=0.43899 steps=  218 finite=true  err=5.9539e-03  min=0.1250 max=1.0000 minρ=0.1250 minp=0.1000  0.0s
+1D Sod MUSCL3 R2.5 VK u1           cfl=0.60 dt0·n=0.56344 dt1·n=0.45142 steps=  215 finite=true  err=1.0795e-02  min=0.1250 max=1.0000 minρ=0.1250 minp=0.1000  0.0s
+1D Sod MUSCL3 R2.5 jit VK PAD      cfl=0.60 dt0·n=0.49107 dt1·n=0.42367 steps=  236 finite=true  err=7.0172e-03  min=0.1250 max=1.0000 minρ=0.1250 minp=0.1000  0.0s
+1D Sod MUSCL5 R3.5 VK PAD          cfl=0.60 dt0·n=0.72442 dt1·n=0.33504 steps=  266 finite=true  err=4.9538e-03  min=0.1219 max=1.0001 minρ=0.1152 minp=0.0908  0.0s
+1D adv sin MUSCL5 R3.5 RK4         cfl=0.60 dt0·n=0.85714 dt1·n=0.54545 steps=  305 finite=true  err=1.4530e-06  min=-1.0000 max=1.0000 minρ=Inf minp=Inf  0.0s
+1D adv sin MUSCL3 R2.5             cfl=0.80 dt0·n=0.66667 dt1·n=0.66667 steps=  188 finite=true  err=3.2998e-03  min=-0.9995 max=0.9995 minρ=Inf minp=Inf  0.0s
+1D adv sin MUSCL3 R2.5 jit0.2      cfl=0.80 dt0·n=0.58104 dt1·n=0.58396 steps=  215 finite=true  err=3.2885e-03  min=-0.9995 max=0.9995 minρ=Inf minp=Inf  0.0s
+1D adv sq MUSCL3 VK u1             cfl=0.80 dt0·n=0.66667 dt1·n=0.66667 steps=  188 finite=true  err=1.9074e-01  min=-0.0000 max=1.0000 minρ=Inf minp=Inf  0.0s
+1D adv sq MUSCL3 VK noMOOD         cfl=0.80 dt0·n=0.66667 dt1·n=0.66667 steps=  188 finite=true  err=1.9064e-01  min=-0.0000 max=1.0000 minρ=Inf minp=Inf  0.0s
+1D Sod MUSCL3 R2.5 VK PAD          cfl=0.80 dt0·n=0.56344 dt1·n=0.42032 steps=  164 finite=true  err=5.9607e-03  min=0.1250 max=1.0000 minρ=0.1250 minp=0.1000  0.0s
+1D Sod MUSCL3 R2.5 VK u1           cfl=0.80 dt0·n=0.56344 dt1·n=0.43707 steps=  161 finite=true  err=1.0920e-02  min=0.1250 max=1.0000 minρ=0.1250 minp=0.1000  0.0s
+1D Sod MUSCL3 R2.5 jit VK PAD      cfl=0.80 dt0·n=0.49107 dt1·n=0.40467 steps=  177 finite=true  err=7.0188e-03  min=0.1250 max=1.0000 minρ=0.1250 minp=0.1000  0.0s
+1D Sod MUSCL5 R3.5 VK PAD          cfl=0.80 dt0·n=0.72442 dt1·n=0.32197 steps=  200 finite=true  err=4.9741e-03  min=0.1218 max=1.0001 minρ=0.1193 minp=0.0937  0.0s
+1D adv sin MUSCL5 R3.5 RK4         cfl=0.80 dt0·n=0.85714 dt1·n=0.54545 steps=  229 finite=true  err=1.4708e-06  min=-1.0000 max=1.0000 minρ=Inf minp=Inf  0.0s
+1D adv sin MUSCL3 R2.5             cfl=1.00 dt0·n=0.66667 dt1·n=0.66667 steps=  150 finite=true  err=3.3009e-03  min=-0.9995 max=0.9995 minρ=Inf minp=Inf  0.0s
+1D adv sin MUSCL3 R2.5 jit0.2      cfl=1.00 dt0·n=0.58104 dt1·n=0.58396 steps=  172 finite=true  err=3.2893e-03  min=-0.9995 max=0.9995 minρ=Inf minp=Inf  0.0s
+1D adv sq MUSCL3 VK u1             cfl=1.00 dt0·n=0.66667 dt1·n=0.66667 steps=  150 finite=true  err=1.9046e-01  min=-0.0000 max=1.0000 minρ=Inf minp=Inf  0.0s
+1D adv sq MUSCL3 VK noMOOD         cfl=1.00 dt0·n=0.66667 dt1·n=0.66667 steps=  150 finite=true  err=1.9008e-01  min=-0.0000 max=1.0000 minρ=Inf minp=Inf  0.0s
+1D Sod MUSCL3 R2.5 VK PAD          cfl=1.00 dt0·n=0.56344 dt1·n=0.40783 steps=  131 finite=true  err=5.9531e-03  min=0.1250 max=1.0000 minρ=0.1250 minp=0.1000  0.0s
+1D Sod MUSCL3 R2.5 VK u1           cfl=1.00 dt0·n=0.56344 dt1·n=0.42741 steps=  129 finite=true  err=1.1076e-02  min=0.1250 max=1.0000 minρ=0.1250 minp=0.1000  0.0s
+1D Sod MUSCL3 R2.5 jit VK PAD      cfl=1.00 dt0·n=0.49107 dt1·n=0.39128 steps=  142 finite=true  err=7.0196e-03  min=0.1250 max=1.0000 minρ=0.1250 minp=0.1000  0.0s
+1D Sod MUSCL5 R3.5 VK PAD          cfl=1.00 dt0·n=0.72442 dt1·n=0.31460 steps=  159 finite=true  err=4.9782e-03  min=0.1218 max=1.0001 minρ=0.1157 minp=0.0898  0.0s
+1D adv sin MUSCL5 R3.5 RK4         cfl=1.00 dt0·n=0.85714 dt1·n=0.54545 steps=  183 finite=true  err=1.5093e-06  min=-1.0000 max=1.0000 minρ=Inf minp=Inf  0.0s
+2D adv sin MUSCL5 R2.5 jit0.2      cfl=0.40 dt0·n=0.13504 dt1·n=0.00018 steps=20001 finite=true  err=2.1378e-05  min=-0.9973 max=0.9951 minρ=Inf minp=Inf  80.5s
+2D blast MUSCL5 R2.5 jit VK PAD    cfl=0.40 dt0·n=0.09203 dt1·n=0.00035 steps=20001 finite=true  err=NaN  min=0.1228 max=1.0049 minρ=0.1044 minp=0.0790  189.3s
+2D blast MUSCL3 R2.5 jit VK PAD    cfl=0.40 dt0·n=0.09761 dt1·n=0.09740 steps=  143 finite=true  err=NaN  min=0.1234 max=0.9832 minρ=0.1066 minp=0.0812  2.5s
+2D adv sin MUSCL5 R2.5 jit0.2      cfl=0.80 dt0·n=0.13504 dt1·n=0.00018 steps=20001 finite=true  err=3.9244e-05  min=-0.9967 max=0.9944 minρ=Inf minp=Inf  62.1s
+2D blast MUSCL5 R2.5 jit VK PAD    cfl=0.80 dt0·n=0.09203 dt1·n=0.00035 steps=14060 finite=true  err=NaN  min=0.1232 max=1.0007 minρ=0.1044 minp=0.0790  128.1s
+2D blast MUSCL3 R2.5 jit VK PAD    cfl=0.80 dt0·n=0.09761 dt1·n=0.09734 steps=   72 finite=true  err=NaN  min=0.1234 max=0.9832 minρ=0.1068 minp=0.0816  0.2s
+exit=0

@@ -1,0 +1,6 @@
+D=1 MUSCL3 R=2.5: _moment_body! alloc with degree_of 0 B, without 0 B; prepare_geometry! alloc 0 B, 0.001 ms/call (N=12)
+D=1 MUSCL5 R=3.5: _moment_body! alloc with degree_of 0 B, without 0 B; prepare_geometry! alloc 0 B, 0.002 ms/call (N=12)
+D=2 MUSCL3 R=2.0: _moment_body! alloc with degree_of 0 B, without 0 B; prepare_geometry! alloc 0 B, 0.02 ms/call (N=144)
+D=2 MUSCL5 R=2.5: _moment_body! alloc with degree_of 0 B, without 0 B; prepare_geometry! alloc 0 B, 0.219 ms/call (N=144)
+D=3 MUSCL3 R=1.8: _moment_body! alloc with degree_of 0 B, without 0 B; prepare_geometry! alloc 0 B, 0.151 ms/call (N=216)
+D=3 MUSCL4 R=2.0: _moment_body! alloc with degree_of 0 B, without 0 B; prepare_geometry! alloc 0 B, 0.683 ms/call (N=216)
